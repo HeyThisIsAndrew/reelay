@@ -1,0 +1,5 @@
+# Runtime dependencies (same as pyproject.toml).
+yt-dlp[default,curl-cffi]>=2026.8.19
+PySide6-Essentials>=6.8
+imageio-ffmpeg>=0.5
+keyring>=25

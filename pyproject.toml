@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "reelay"
+dynamic = ["version"]
+description = "Download, stage and schedule a creator's short-form videos across TikTok, Instagram and YouTube."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "yt-dlp[default,curl-cffi]>=2026.8.19",
+    "PySide6-Essentials>=6.8",
+    "imageio-ffmpeg>=0.5",
+    "keyring>=25",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-qt>=4.4", "pyinstaller>=6.10"]
+
+[project.scripts]
+reelay-cli = "reelay.cli:main"
+
+[project.gui-scripts]
+reelay = "reelay.gui.app:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "reelay.__version__" }
+
+[tool.setuptools.packages.find]
+include = ["reelay*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "gui: drives the Qt interface headlessly",
+    "network: talks to real TikTok/YouTube servers (skipped unless --run-network)",
+]
+qt_api = "pyside6"
