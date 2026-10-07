@@ -20,6 +20,7 @@ from ..store import Change
 from ..text import clock, local_text
 from ..uploads import UploadManager
 from . import theme
+from .bridge import change_bridge
 from .post_panel import PostPanel
 from .table_model import fmt_duration, short_date
 from .thumbnails import ThumbnailCache
@@ -279,7 +280,8 @@ class BoardPage(QWidget):
         self._closed = False
         self._reload_timer = QTimer(self, singleShot=True, interval=30, timeout=self.reload)
         self._build_ui()
-        self._unsubscribe = self.store.subscribe(self._on_store_change)
+        self._bridge = change_bridge(self.store)
+        self._bridge.changed.connect(self._on_store_change)
         uploads.progress.connect(self._on_upload_progress)
         uploads.finished.connect(lambda _row, _ok, message: self._status(message))
         uploads.changed.connect(self._schedule_reload)
@@ -344,7 +346,7 @@ class BoardPage(QWidget):
         self.reload()
 
     def _on_store_change(self, change: Change) -> None:
-        if change.entity in ("video", "post", "account") and self.profile and \
+        if change.entity in ("video", "post", "account", "dispatch") and self.profile and \
                 change.profile_id in (None, self.profile.id):
             self._schedule_reload()
 
@@ -509,7 +511,7 @@ class BoardPage(QWidget):
         self.reload()
 
     def shutdown(self) -> None:
-        self._unsubscribe()
+        self._bridge.changed.disconnect(self._on_store_change)
         self._closed = True
         self._reload_timer.stop()
         if self.sync_worker:

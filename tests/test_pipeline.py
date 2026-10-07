@@ -307,6 +307,7 @@ def test_upload_manager_cancel_queued_job(qtbot):
     from reelay.uploads import CANCELLED, UploadManager
     manager = UploadManager(worker_factory=FakeWorker)
     manager._worker = object.__new__(type("Busy", (), {"row_id": 1, "cancel": lambda self: None}))  # occupy
+    manager._kick.disconnect(manager._start_next)  # keep the fake "busy" worker in place
     finished = []
     manager.finished.connect(lambda row, ok, msg: finished.append((row, ok, msg)))
     manager.enqueue(2, "ok", Path("b.mp4"), {})

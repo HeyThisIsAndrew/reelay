@@ -3,8 +3,11 @@
 OAuth tokens are deliberately NOT stored here; they live in the OS keychain
 (see tokens.py), so copying the database never leaks account access.
 
-The Store is used from the GUI thread only. Background workers send results
-back via signals and the GUI thread writes them.
+Threads: the Store is safe to use from any thread (the GUI, the agent API
+server, the dispatcher). One lock serialises access to the single SQLite
+connection; change notifications are delivered after the lock is released,
+on the thread that made the write. GUI code must hop to the GUI thread
+(see gui/bridge.py).
 
 Change feed: every write announces a `Change` to subscribers after it commits,
 so the desktop UI (and the companion server) can react to edits made
@@ -13,20 +16,22 @@ anywhere. Wrap writes in `with store.origin("remote"):` to tag who made them.
 
 from __future__ import annotations
 
+import functools
 import json
 import logging
 import sqlite3
+import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterable, Iterator
 
-from .models import Account, Post, PostStatus, Profile, Stage, VideoItem, VideoRow
+from .models import Account, Dispatch, DispatchStatus, Post, PostStatus, Profile, Stage, VideoItem, VideoRow
 
 log = logging.getLogger("reelay")
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -92,6 +97,39 @@ _MIGRATIONS: dict[int, str] = {
     );
     CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     """,
+    2: """
+    ALTER TABLE posts ADD COLUMN target_platforms TEXT NOT NULL DEFAULT '["youtube"]';
+    ALTER TABLE posts ADD COLUMN bluesky_text TEXT;
+    ALTER TABLE posts ADD COLUMN threads_text TEXT;
+    ALTER TABLE accounts ADD COLUMN last_verified_at TEXT;
+    CREATE TABLE dispatches (
+        id INTEGER PRIMARY KEY,
+        video_row INTEGER NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
+        platform TEXT NOT NULL,
+        account_id INTEGER REFERENCES accounts(id) ON DELETE SET NULL,
+        status TEXT NOT NULL,
+        due_at TEXT NOT NULL,
+        publish_at TEXT,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        next_attempt_at TEXT,
+        claimed_at TEXT,
+        claimed_by TEXT,
+        remote_id TEXT NOT NULL DEFAULT '',
+        remote_url TEXT NOT NULL DEFAULT '',
+        checkpoint TEXT NOT NULL DEFAULT '',
+        options TEXT NOT NULL DEFAULT '{}',
+        error TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE (video_row, platform)
+    );
+    CREATE INDEX dispatches_due ON dispatches (status, due_at);
+    INSERT INTO dispatches (video_row, platform, account_id, status, due_at, publish_at, remote_id, remote_url,
+                            created_at, updated_at)
+        SELECT video_row, 'youtube', account_id, status, updated_at, publish_at, remote_id, remote_url,
+               updated_at, updated_at
+        FROM posts WHERE status IN ('scheduled', 'published') AND remote_id != '';
+    """,
 }
 
 PROFILE_COLORS = ["#8a8984", "#b5835a", "#7a9a7e", "#7f8fb0", "#a77fa0", "#b07a7a", "#9a9a6a"]
@@ -104,14 +142,21 @@ def utcnow() -> str:
 class Store:
     def __init__(self, path: Path | str):
         self.path = str(path)
-        self.conn = sqlite3.connect(self.path)
+        self._lock = threading.RLock()
+        self._tls = threading.local()
+        self.conn = sqlite3.connect(self.path, check_same_thread=False, timeout=30)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
         if self.path != ":memory:":
             self.conn.execute("PRAGMA journal_mode = WAL")
         self._migrate()
         self._listeners: list[Callable[[Change], None]] = []
-        self._origin = "local"
+
+    def _state(self):
+        st = self._tls
+        if not hasattr(st, "depth"):
+            st.depth, st.pending, st.origin = 0, [], "local"
+        return st
 
     # ================================================================ change feed
     def subscribe(self, listener: Callable[[Change], None]) -> Callable[[], None]:
@@ -121,20 +166,29 @@ class Store:
 
     @contextmanager
     def origin(self, name: str) -> Iterator[None]:
-        """Tag writes made inside the block (e.g. "remote" for the companion app)."""
-        previous, self._origin = self._origin, name
+        """Tag writes made inside the block on this thread (e.g. "api", "remote")."""
+        st = self._state()
+        previous, st.origin = st.origin, name
         try:
             yield
         finally:
-            self._origin = previous
+            st.origin = previous
 
     def _emit(self, entity: str, ids: Iterable = (), profile_id: int | None = None) -> None:
-        change = Change(entity, tuple(ids), profile_id, self._origin)
-        for listener in list(self._listeners):
-            try:
-                listener(change)
-            except Exception:  # noqa: BLE001 — a broken listener must never break a write
-                log.exception("Store listener failed for %s", change)
+        st = self._state()
+        change = Change(entity, tuple(ids), profile_id, st.origin)
+        if st.depth > 0:
+            st.pending.append(change)  # delivered once the outermost call releases the lock
+        else:
+            self._deliver([change])
+
+    def _deliver(self, changes: list[Change]) -> None:
+        for change in changes:
+            for listener in list(self._listeners):
+                try:
+                    listener(change)
+                except Exception:  # noqa: BLE001 — a broken listener must never break a write
+                    log.exception("Store listener failed for %s", change)
 
     def _profile_of_videos(self, row_ids: Iterable[int]) -> int | None:
         ids = list(row_ids)
@@ -263,6 +317,13 @@ class Store:
             c.execute("DELETE FROM accounts WHERE id = ?", (account_id,))
         self._emit("account", (account_id,), account.profile_id if account else None)
 
+    def mark_verified(self, account_id: int, when: str | None = None) -> None:
+        """Record a successful live check (or successful post) for an account."""
+        with self.tx() as c:
+            c.execute("UPDATE accounts SET last_verified_at=? WHERE id=?", (when or utcnow(), account_id))
+        account = self.get_account(account_id)
+        self._emit("account", (account_id,), account.profile_id if account else None)
+
     def account_in_use_elsewhere(self, account: Account) -> bool:
         """Is the same remote account connected in another profile (shares its token)?"""
         row = self.conn.execute("SELECT COUNT(*) FROM accounts WHERE platform=? AND external_id=? AND id != ?",
@@ -273,7 +334,8 @@ class Store:
     def _account(row: sqlite3.Row) -> Account:
         return Account(id=row["id"], profile_id=row["profile_id"], platform=row["platform"],
                        external_id=row["external_id"], display_name=row["display_name"],
-                       handle=row["handle"], avatar_url=row["avatar_url"], connected_at=row["connected_at"])
+                       handle=row["handle"], avatar_url=row["avatar_url"], connected_at=row["connected_at"],
+                       last_verified_at=row["last_verified_at"])
 
     # ================================================================ videos
     def save_videos(self, profile_id: int, items: Iterable[VideoItem]) -> dict[str, int]:
@@ -360,21 +422,28 @@ class Store:
 
     def save_post(self, post: Post) -> Post:
         post.updated_at = utcnow()
-        values = (post.account_id, post.title, post.description, json.dumps(post.tags), post.privacy,
-                  post.publish_at, int(post.made_for_kids), post.status, post.remote_id, post.remote_url,
-                  post.error, post.updated_at)
         with self.tx() as c:
-            c.execute(
-                "INSERT INTO posts (account_id, title, description, tags, privacy, publish_at, made_for_kids, "
-                "status, remote_id, remote_url, error, updated_at, video_row) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) "
-                "ON CONFLICT(video_row) DO UPDATE SET account_id=excluded.account_id, title=excluded.title, "
-                "description=excluded.description, tags=excluded.tags, privacy=excluded.privacy, "
-                "publish_at=excluded.publish_at, made_for_kids=excluded.made_for_kids, status=excluded.status, "
-                "remote_id=excluded.remote_id, remote_url=excluded.remote_url, error=excluded.error, "
-                "updated_at=excluded.updated_at", (*values, post.video_row))
-            post.id = c.execute("SELECT id FROM posts WHERE video_row=?", (post.video_row,)).fetchone()["id"]
+            self._write_post(c, post)
         self._emit("post", (post.video_row,), self._profile_of_videos([post.video_row]))
         return post
+
+    @staticmethod
+    def _write_post(c: sqlite3.Connection, post: Post) -> None:
+        values = (post.account_id, post.title, post.description, json.dumps(post.tags), post.privacy,
+                  post.publish_at, int(post.made_for_kids), post.status, post.remote_id, post.remote_url,
+                  post.error, post.updated_at, json.dumps(post.target_platforms), post.bluesky_text,
+                  post.threads_text)
+        c.execute(
+            "INSERT INTO posts (account_id, title, description, tags, privacy, publish_at, made_for_kids, "
+            "status, remote_id, remote_url, error, updated_at, target_platforms, bluesky_text, threads_text, "
+            "video_row) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+            "ON CONFLICT(video_row) DO UPDATE SET account_id=excluded.account_id, title=excluded.title, "
+            "description=excluded.description, tags=excluded.tags, privacy=excluded.privacy, "
+            "publish_at=excluded.publish_at, made_for_kids=excluded.made_for_kids, status=excluded.status, "
+            "remote_id=excluded.remote_id, remote_url=excluded.remote_url, error=excluded.error, "
+            "updated_at=excluded.updated_at, target_platforms=excluded.target_platforms, "
+            "bluesky_text=excluded.bluesky_text, threads_text=excluded.threads_text", (*values, post.video_row))
+        post.id = c.execute("SELECT id FROM posts WHERE video_row=?", (post.video_row,)).fetchone()["id"]
 
     def reset_interrupted_uploads(self) -> int:
         """Uploads that were running when the app quit go back to draft."""
@@ -391,4 +460,174 @@ class Store:
                     description=row["description"], tags=json.loads(row["tags"] or "[]"),
                     privacy=row["privacy"], publish_at=row["publish_at"],
                     made_for_kids=bool(row["made_for_kids"]), status=row["status"], remote_id=row["remote_id"],
-                    remote_url=row["remote_url"], error=row["error"], updated_at=row["updated_at"])
+                    remote_url=row["remote_url"], error=row["error"], updated_at=row["updated_at"],
+                    target_platforms=json.loads(row["target_platforms"] or '["youtube"]'),
+                    bluesky_text=row["bluesky_text"], threads_text=row["threads_text"])
+
+    # ================================================================ dispatches
+    # Per-platform delivery rows. Claiming is atomic: a row only moves from
+    # pending to dispatching in one UPDATE, so two workers (or a restart) can
+    # never both send it.
+
+    def schedule_post(self, post: Post, dispatches: list[Dispatch], stage: str,
+                      claim: Iterable[str] = (), claimed_by: str = "") -> list[Dispatch]:
+        """Save the post, (re)create its dispatch rows and move the card, in one
+        transaction. Platforms in `claim` are claimed immediately for `claimed_by`."""
+        now = utcnow()
+        post.updated_at = now
+        claim = set(claim)
+        with self.tx() as c:
+            self._write_post(c, post)
+            for d in dispatches:
+                claimed = d.platform in claim
+                c.execute(
+                    "INSERT INTO dispatches (video_row, platform, account_id, status, due_at, publish_at, attempts, "
+                    "next_attempt_at, claimed_at, claimed_by, remote_id, remote_url, checkpoint, options, error, "
+                    "created_at, updated_at) VALUES (?,?,?,?,?,?,0,NULL,?,?,'','','',?,'',?,?) "
+                    "ON CONFLICT(video_row, platform) DO UPDATE SET account_id=excluded.account_id, "
+                    "status=excluded.status, due_at=excluded.due_at, publish_at=excluded.publish_at, attempts=0, "
+                    "next_attempt_at=NULL, claimed_at=excluded.claimed_at, claimed_by=excluded.claimed_by, "
+                    "remote_id='', remote_url='', checkpoint='', options=excluded.options, error='', "
+                    "updated_at=excluded.updated_at",
+                    (d.video_row, d.platform, d.account_id,
+                     DispatchStatus.DISPATCHING if claimed else DispatchStatus.PENDING,
+                     d.due_at, d.publish_at, now if claimed else None, claimed_by if claimed else None,
+                     json.dumps(d.options), now, now))
+            top = c.execute("SELECT COALESCE(MAX(position), 0) FROM videos WHERE stage=? AND profile_id="
+                            "(SELECT profile_id FROM videos WHERE id=?)", (stage, post.video_row)).fetchone()[0]
+            c.execute("UPDATE videos SET stage=?, position=?, updated_at=? WHERE id=? AND stage != ?",
+                      (stage, top + 1, now, post.video_row, stage))
+        profile_id = self._profile_of_videos([post.video_row])
+        self._emit("post", (post.video_row,), profile_id)
+        self._emit("dispatch", (post.video_row,), profile_id)
+        self._emit("video", (post.video_row,), profile_id)
+        return self.dispatches_for(post.video_row)
+
+    def dispatches_for(self, video_row: int) -> list[Dispatch]:
+        rows = self.conn.execute("SELECT * FROM dispatches WHERE video_row=? ORDER BY id", (video_row,)).fetchall()
+        return [self._dispatch(r) for r in rows]
+
+    def get_dispatch(self, dispatch_id: int) -> Dispatch | None:
+        row = self.conn.execute("SELECT * FROM dispatches WHERE id=?", (dispatch_id,)).fetchone()
+        return self._dispatch(row) if row else None
+
+    def claim_due(self, now: str, claimed_by: str, limit: int = 10) -> list[Dispatch]:
+        """Atomically claim pending dispatches that are due (and past any retry wait)."""
+        with self.tx() as c:
+            rows = c.execute(
+                "UPDATE dispatches SET status=?, claimed_at=?, claimed_by=?, updated_at=? WHERE id IN ("
+                "  SELECT id FROM dispatches WHERE status=? AND due_at <= ? "
+                "  AND (next_attempt_at IS NULL OR next_attempt_at <= ?) ORDER BY due_at, id LIMIT ?"
+                ") AND status=? RETURNING *",
+                (DispatchStatus.DISPATCHING, now, claimed_by, now, DispatchStatus.PENDING, now, now, limit,
+                 DispatchStatus.PENDING)).fetchall()
+        claimed = sorted((self._dispatch(r) for r in rows), key=lambda d: (d.due_at, d.id))
+        self._emit_dispatch_rows(claimed)
+        return claimed
+
+    def claim_dispatch(self, dispatch_id: int, claimed_by: str) -> Dispatch | None:
+        """Claim one specific pending dispatch; None if someone else has it."""
+        now = utcnow()
+        with self.tx() as c:
+            row = c.execute("UPDATE dispatches SET status=?, claimed_at=?, claimed_by=?, updated_at=? "
+                            "WHERE id=? AND status=? RETURNING *",
+                            (DispatchStatus.DISPATCHING, now, claimed_by, now, dispatch_id,
+                             DispatchStatus.PENDING)).fetchone()
+        claimed = self._dispatch(row) if row else None
+        self._emit_dispatch_rows([claimed] if claimed else [])
+        return claimed
+
+    def heartbeat(self, dispatch_id: int) -> None:
+        """Refresh a claim during long work (uploads) so it isn't considered stale."""
+        with self.tx() as c:
+            c.execute("UPDATE dispatches SET claimed_at=? WHERE id=? AND status=?",
+                      (utcnow(), dispatch_id, DispatchStatus.DISPATCHING))
+
+    def recover_stale(self, instance_id: str, stale_before: str) -> list[Dispatch]:
+        """Requeue claims left by another (crashed) run, or held too long by this one."""
+        now = utcnow()
+        with self.tx() as c:
+            rows = c.execute(
+                "UPDATE dispatches SET status=?, claimed_at=NULL, claimed_by=NULL, updated_at=? "
+                "WHERE status=? AND (claimed_by IS NULL OR claimed_by != ? OR claimed_at < ?) RETURNING *",
+                (DispatchStatus.PENDING, now, DispatchStatus.DISPATCHING, instance_id, stale_before)).fetchall()
+        recovered = [self._dispatch(r) for r in rows]
+        self._emit_dispatch_rows(recovered)
+        return recovered
+
+    def set_checkpoint(self, dispatch_id: int, checkpoint: str) -> None:
+        """Remember progress (e.g. a created container id) so a retry can resume, not repeat."""
+        with self.tx() as c:
+            c.execute("UPDATE dispatches SET checkpoint=?, updated_at=? WHERE id=?", (checkpoint, utcnow(), dispatch_id))
+
+    def finish_dispatch(self, dispatch_id: int, status: str, remote_id: str = "", remote_url: str = "",
+                        error: str = "") -> Dispatch | None:
+        if status not in (DispatchStatus.SCHEDULED, DispatchStatus.PUBLISHED, DispatchStatus.FAILED):
+            raise ValueError(f"not a final status: {status}")
+        with self.tx() as c:
+            row = c.execute(
+                "UPDATE dispatches SET status=?, remote_id=CASE WHEN ?='' THEN remote_id ELSE ? END, "
+                "remote_url=CASE WHEN ?='' THEN remote_url ELSE ? END, error=?, claimed_at=NULL, claimed_by=NULL, "
+                "next_attempt_at=NULL, updated_at=? WHERE id=? RETURNING *",
+                (status, remote_id, remote_id, remote_url, remote_url, error, utcnow(), dispatch_id)).fetchone()
+        done = self._dispatch(row) if row else None
+        self._emit_dispatch_rows([done] if done else [])
+        return done
+
+    def retry_dispatch(self, dispatch_id: int, error: str, next_attempt_at: str) -> Dispatch | None:
+        """A transient failure: count the attempt and put it back in the queue."""
+        with self.tx() as c:
+            row = c.execute(
+                "UPDATE dispatches SET status=?, attempts=attempts+1, error=?, next_attempt_at=?, claimed_at=NULL, "
+                "claimed_by=NULL, updated_at=? WHERE id=? RETURNING *",
+                (DispatchStatus.PENDING, error, next_attempt_at, utcnow(), dispatch_id)).fetchone()
+        again = self._dispatch(row) if row else None
+        self._emit_dispatch_rows([again] if again else [])
+        return again
+
+    def pending_dispatches(self) -> list[Dispatch]:
+        rows = self.conn.execute("SELECT * FROM dispatches WHERE status IN (?, ?) ORDER BY due_at, id",
+                                 (DispatchStatus.PENDING, DispatchStatus.DISPATCHING)).fetchall()
+        return [self._dispatch(r) for r in rows]
+
+    def _emit_dispatch_rows(self, dispatches: list[Dispatch]) -> None:
+        rows = sorted({d.video_row for d in dispatches})
+        if rows:
+            self._emit("dispatch", rows, self._profile_of_videos(rows))
+
+    @staticmethod
+    def _dispatch(row: sqlite3.Row) -> Dispatch:
+        return Dispatch(id=row["id"], video_row=row["video_row"], platform=row["platform"],
+                        account_id=row["account_id"], status=row["status"], due_at=row["due_at"],
+                        publish_at=row["publish_at"], attempts=row["attempts"],
+                        next_attempt_at=row["next_attempt_at"], claimed_at=row["claimed_at"],
+                        claimed_by=row["claimed_by"], remote_id=row["remote_id"], remote_url=row["remote_url"],
+                        checkpoint=row["checkpoint"], options=json.loads(row["options"] or "{}"),
+                        error=row["error"], created_at=row["created_at"], updated_at=row["updated_at"])
+
+
+def _locked(fn):
+    """Serialise access to the connection; deliver change events after unlocking."""
+    @functools.wraps(fn)
+    def wrapper(self, *args, **kwargs):
+        st = self._state()
+        pending: list[Change] = []
+        try:
+            with self._lock:
+                st.depth += 1
+                try:
+                    return fn(self, *args, **kwargs)
+                finally:
+                    st.depth -= 1
+                    if st.depth == 0:
+                        pending, st.pending = st.pending, []
+        finally:
+            if pending:
+                self._deliver(pending)
+    return wrapper
+
+
+for _name, _attr in list(vars(Store).items()):
+    if callable(_attr) and not _name.startswith("__") and _name not in (
+            "tx", "origin", "subscribe", "_state", "_emit", "_deliver") and not isinstance(_attr, staticmethod):
+        setattr(Store, _name, _locked(_attr))

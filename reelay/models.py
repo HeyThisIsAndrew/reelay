@@ -26,6 +26,30 @@ class PostStatus:
     FAILED = "failed"
 
 
+class Platform:
+    """Publishing destinations."""
+    YOUTUBE = "youtube"
+    BLUESKY = "bluesky"
+    THREADS = "threads"
+    FACEBOOK = "facebook"
+    ALL = (YOUTUBE, BLUESKY, THREADS, FACEBOOK)
+    LABELS = {YOUTUBE: "YouTube", BLUESKY: "Bluesky", THREADS: "Threads", FACEBOOK: "Facebook"}
+    # Platforms that hold a scheduled post on their own servers (Reelay hands the
+    # video over right away). The rest are posted by Reelay at the due time.
+    NATIVE_SCHEDULING = (YOUTUBE, FACEBOOK)
+
+
+class DispatchStatus:
+    """Per-platform delivery state of a scheduled post."""
+    PENDING = "pending"          # waiting for its due time (or a retry)
+    DISPATCHING = "dispatching"  # claimed; platform calls in progress
+    SCHEDULED = "scheduled"      # accepted by the platform; it goes live at the set time
+    PUBLISHED = "published"      # live
+    FAILED = "failed"            # gave up; see error
+    ACTIVE = (PENDING, DISPATCHING, SCHEDULED)
+    ALL = (PENDING, DISPATCHING, SCHEDULED, PUBLISHED, FAILED)
+
+
 class Privacy:
     PUBLIC = "public"
     UNLISTED = "unlisted"
@@ -206,6 +230,7 @@ class Account:
     avatar_url: str = ""
     id: int | None = None
     connected_at: str = ""
+    last_verified_at: str | None = None
 
     @property
     def token_key(self) -> str:
@@ -251,6 +276,32 @@ class Post:
     remote_url: str = ""
     error: str = ""
     id: int | None = None
+    updated_at: str = ""
+    target_platforms: list[str] = field(default_factory=lambda: [Platform.YOUTUBE])
+    bluesky_text: str | None = None   # override for Bluesky (≤300 graphemes)
+    threads_text: str | None = None   # override for Threads (≤500 characters)
+
+
+@dataclass
+class Dispatch:
+    """One platform's delivery of one post."""
+    video_row: int
+    platform: str
+    due_at: str                       # UTC; when Reelay should send it
+    status: str = DispatchStatus.PENDING
+    publish_at: str | None = None     # UTC; when it goes live (None = immediately)
+    account_id: int | None = None
+    attempts: int = 0
+    next_attempt_at: str | None = None
+    claimed_at: str | None = None
+    claimed_by: str | None = None
+    remote_id: str = ""
+    remote_url: str = ""
+    checkpoint: str = ""              # platform-specific resume marker (idempotency)
+    options: dict = field(default_factory=dict)
+    error: str = ""
+    id: int | None = None
+    created_at: str = ""
     updated_at: str = ""
 
 
