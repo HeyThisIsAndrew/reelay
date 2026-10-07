@@ -65,7 +65,7 @@ Limits to know about:
 ## Tests
 
 ```bash
-python -m pytest                              # 57 tests: engine, database, YouTube client, headless GUI
+python -m pytest                              # 74 tests: engine, database, pipeline, YouTube client, headless GUI
 python -m pytest --run-network -m network     # optional live checks against TikTok
 python run_app.py --self-test                 # environment check (also works on packaged builds)
 ```
@@ -86,13 +86,21 @@ PyInstaller can't cross-compile, so each platform builds on its own OS. Pushing 
 ## Project layout
 
 ```
-reelay/            engine: fetcher, downloader, naming, library/manifest, store (SQLite),
+reelay/            engine: fetcher, downloader, naming, library/manifest, store (SQLite + change feed),
+                   pipeline (every board/post/upload/sync rule), uploads (app-wide upload queue),
                    youtube (OAuth + uploads), publishing, accounts, tokens (keychain), cli
 reelay/gui/        PySide6 app: main_window (sidebar + profiles), download_page, board_page,
                    post_panel, accounts_page, settings_page, theme (Light/Dark/Black)
 tests/             pytest + pytest-qt
 packaging/         PyInstaller spec, icon generator, build scripts
 ```
+
+How the parts fit:
+
+- **`Store`** is the only thing that touches SQLite. After every write it announces a `Change` (what changed, which profile, and who made it) to subscribers.
+- **`Pipeline`** holds the rules: which board moves are allowed, drafts, upload validation, starting uploads and syncing. It has no Qt and shows no dialogs; problems come back as `PipelineError`s with a stable `code`. The desktop Board and the planned iPhone companion server both call it.
+- **`UploadManager`** runs YouTube uploads one at a time for the whole app, whatever screen is open.
+- **The screens** collect what you want to do, confirm it with you, then call the pipeline. They redraw from the change feed, so edits made anywhere show up everywhere.
 
 ## Roadmap
 

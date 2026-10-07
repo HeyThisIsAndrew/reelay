@@ -262,3 +262,5 @@ class VideoRow:
     stage: str = Stage.BACKLOG
     position: float = 0.0
     notes: str = ""
+    profile_id: int = 0
+    updated_at: str = ""

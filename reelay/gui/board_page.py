@@ -6,8 +6,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from collections import deque
-from datetime import datetime, timezone
+from datetime import datetime
 
 from PySide6.QtCore import (QAbstractListModel, QMimeData, QModelIndex, QRect, QRectF, QSize, Qt, QTimer,
                             Signal)
@@ -15,17 +14,16 @@ from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath, Q
 from PySide6.QtWidgets import (QAbstractItemView, QFrame, QHBoxLayout, QLabel, QListView, QMessageBox,
                                QPushButton, QSplitter, QStyle, QStyledItemDelegate, QVBoxLayout, QWidget)
 
-from ..accounts import YOUTUBE, AccountService
 from ..models import Post, PostStatus, Profile, Stage
-from ..publishing import build_resource, default_post, reconcile, stage_after_upload, validate_post
-from ..store import Store
-from ..youtube import YouTubeError, watch_url
+from ..pipeline import Card, Pipeline, PipelineError
+from ..store import Change
+from ..text import clock, local_text
+from ..uploads import UploadManager
 from . import theme
-from .post_panel import Card, PostPanel, clock, local_text
+from .post_panel import PostPanel
 from .table_model import fmt_duration, short_date
-from .theme import set_prop
 from .thumbnails import ThumbnailCache
-from .workers import CallWorker, UploadWorker
+from .workers import CallWorker
 
 log = logging.getLogger("reelay")
 
@@ -260,21 +258,31 @@ class BoardColumn(QFrame):
 
 # ====================================================================== page
 class BoardPage(QWidget):
+    """Thin UI over the Pipeline: shows cards, collects intent, confirms with the
+    user, then calls the pipeline. Refreshes from the store's change feed, so
+    edits made anywhere (another page, an upload finishing, the companion app)
+    show up here."""
+
     openAccounts = Signal()
     statusMessage = Signal(str)
 
-    def __init__(self, store: Store, accounts: AccountService, thumbs: ThumbnailCache, parent=None):
+    def __init__(self, pipeline: Pipeline, uploads: UploadManager, thumbs: ThumbnailCache, parent=None):
         super().__init__(parent)
         self.setObjectName("Page")
-        self.store, self.accounts, self.thumbs = store, accounts, thumbs
+        self.pipeline, self.uploads, self.thumbs = pipeline, uploads, thumbs
+        self.store = pipeline.store
         self.profile: Profile | None = None
         self.cards: dict[int, Card] = {}
         self.selected_id: int | None = None
-        self.upload_worker: UploadWorker | None = None
-        self.upload_queue: deque[tuple[int, object, object, dict]] = deque()
         self.sync_worker: CallWorker | None = None
         self._last_sync = 0.0
+        self._closed = False
+        self._reload_timer = QTimer(self, singleShot=True, interval=30, timeout=self.reload)
         self._build_ui()
+        self._unsubscribe = self.store.subscribe(self._on_store_change)
+        uploads.progress.connect(self._on_upload_progress)
+        uploads.finished.connect(lambda _row, _ok, message: self._status(message))
+        uploads.changed.connect(self._schedule_reload)
 
     def _build_ui(self) -> None:
         outer = QVBoxLayout(self)
@@ -315,7 +323,7 @@ class BoardPage(QWidget):
         self.panel = PostPanel(self.thumbs)
         self.panel.saveRequested.connect(self._save_post)
         self.panel.uploadRequested.connect(self._request_upload)
-        self.panel.cancelUploadRequested.connect(self._cancel_upload)
+        self.panel.cancelUploadRequested.connect(self.pipeline.cancel_upload)
         self.panel.connectRequested.connect(self.openAccounts.emit)
         split = QSplitter(Qt.Horizontal)
         split.addWidget(cols)
@@ -335,30 +343,25 @@ class BoardPage(QWidget):
         self._last_sync = 0.0
         self.reload()
 
-    def youtube_accounts(self):
-        return self.store.list_accounts(self.profile.id, YOUTUBE) if self.profile else []
+    def _on_store_change(self, change: Change) -> None:
+        if change.entity in ("video", "post", "account") and self.profile and \
+                change.profile_id in (None, self.profile.id):
+            self._schedule_reload()
+
+    def _schedule_reload(self) -> None:
+        self._reload_timer.start()
 
     def reload(self) -> None:
-        if not self.profile:
+        self._reload_timer.stop()
+        if not self.profile or self._closed:
             return
-        accounts = {a.id: a for a in self.store.list_accounts(self.profile.id)}
-        folder = self.profile.output_folder
-        by_stage: dict[str, list[Card]] = {s: [] for s in Stage.ALL}
-        old = self.cards
-        self.cards = {}
-        for row in self.store.load_videos(self.profile.id):
-            row.item.refresh_download_status(folder)
-            if row.stage == Stage.BACKLOG and not row.item.is_downloaded:
-                continue  # fetched but not downloaded: lives on the Download page only
-            post = self.store.get_post(row.id)
-            card = Card(row=row, post=post, account=accounts.get(post.account_id) if post else None)
-            prev = old.get(row.id)
-            if prev is not None and post and post.status == PostStatus.UPLOADING:
-                card.progress, card.queued = prev.progress, prev.queued
-            self.cards[row.id] = card
-            by_stage[row.stage].append(card)
+        try:
+            columns = self.pipeline.board(self.profile.id)
+        except PipelineError:  # profile was just deleted
+            return
+        self.cards = {card.id: card for cards in columns.values() for card in cards}
         for stage, col in self.columns.items():
-            col.set_cards(by_stage[stage])
+            col.set_cards(columns[stage])
         self._reselect()
 
     def _reselect(self) -> None:
@@ -370,10 +373,11 @@ class BoardPage(QWidget):
         for row, c in enumerate(col.model.cards):
             if c.id == card.id:
                 col.view.setCurrentIndex(col.model.index(row))
-        self.panel.show_card(card, self.youtube_accounts(), self._add_shorts_default())
+        self._show_card(card)
 
-    def _add_shorts_default(self) -> bool:
-        return self.store.get_setting("add_shorts", "1") == "1"
+    def _show_card(self, card: Card) -> None:
+        self.panel.show_card(card, self.pipeline.youtube_accounts(self.profile.id),
+                             self.pipeline.add_shorts_default())
 
     def _on_select(self, column: BoardColumn, index) -> None:
         if not index.isValid():
@@ -385,170 +389,96 @@ class BoardPage(QWidget):
             if other is not column:
                 other.view.clearSelection()
         self.selected_id = card.id
-        self.panel.show_card(card, self.youtube_accounts(), self._add_shorts_default())
+        self._show_card(card)
 
     def _status(self, text: str) -> None:
-        self.statusMessage.emit(text)
-        self.sync_label.setText(text)
+        if text:
+            self.statusMessage.emit(text)
+            self.sync_label.setText(text)
 
     # ---------------------------------------------------------------- moves
-    def _ensure_post(self, card: Card) -> Post:
-        if card.post is None:
-            accounts = self.youtube_accounts()
-            card.post = self.store.save_post(default_post(card.id, card.row.item,
-                                                          accounts[0].id if accounts else None))
-        return card.post
-
     def _on_move(self, ids: list[int], target: str, insert_row: int) -> None:
         for card_id in ids:
             card = self.cards.get(card_id)
             if card is None:
                 continue
-            source = card.row.stage
-            if source == target:
-                order = [c.id for c in self.columns[target].model.cards if c.id != card_id]
-                order.insert(min(insert_row, len(order)), card_id)
-                self.store.reorder(order)
-                continue
-            if source in (Stage.SCHEDULED, Stage.PUBLISHED) or card.uploading:
-                self._status("Scheduled and published videos are managed on YouTube; they can't be moved back.")
-                continue
-            if target in (Stage.BACKLOG, Stage.STAGING):
-                if target == Stage.STAGING:
-                    self._ensure_post(card)
-                self.store.set_stage([card_id], target)
-                self.selected_id = card_id
-            elif target == Stage.SCHEDULED:
-                self._ensure_post(card)
-                if source == Stage.BACKLOG:
-                    self.store.set_stage([card_id], Stage.STAGING)
-                self.selected_id = card_id
-                self.reload()
-                self._request_upload(self.panel.collect() if self.panel.card else card.post,
-                                     self.panel.shorts.isChecked() if self.panel.card else self._add_shorts_default())
-                return
-            elif target == Stage.PUBLISHED:
-                answer = QMessageBox.question(
-                    self, "Mark as Published",
-                    f"Mark “{card.title}” as published?\n\nUse this for videos you've posted yourself "
-                    "outside Reelay. Nothing is uploaded.")
-                if answer == QMessageBox.Yes:
-                    self.store.set_stage([card_id], Stage.PUBLISHED)
+            try:
+                if target == Stage.SCHEDULED and card.row.stage != Stage.SCHEDULED:
+                    self._schedule_card(card)
+                    return
+                if target == Stage.PUBLISHED and card.row.stage != Stage.PUBLISHED:
+                    if card.row.stage in (Stage.BACKLOG, Stage.STAGING) and not card.uploading:
+                        answer = QMessageBox.question(
+                            self, "Mark as Published",
+                            f"Mark “{card.title}” as published?\n\nUse this for videos you've posted yourself "
+                            "outside Reelay. Nothing is uploaded.")
+                        if answer != QMessageBox.Yes:
+                            continue
+                self.pipeline.move(card_id, target, insert_row if card.row.stage == target else None)
+                if card.row.stage != target:
                     self.selected_id = card_id
+            except PipelineError as exc:
+                self._status(str(exc))
         self.reload()
+
+    def _schedule_card(self, card: Card) -> None:
+        """Dropped on Scheduled: get it ready, then upload what's in the editor."""
+        try:
+            self.pipeline.prepare_upload(card.id)
+        except PipelineError as exc:
+            self._status(str(exc))
+            return
+        self.selected_id = card.id
+        self.reload()
+        post = self.panel.collect() if self.panel.card and self.panel.card.id == card.id \
+            else self.store.get_post(card.id)
+        self._request_upload(post, self.panel.shorts.isChecked() if self.panel.card
+                             else self.pipeline.add_shorts_default())
 
     # ---------------------------------------------------------------- posts
     def _save_post(self, post: Post) -> None:
-        card = self.cards.get(post.video_row)
-        if card is None:
+        try:
+            self.pipeline.save_draft(post)
+        except PipelineError as exc:
+            self._status(str(exc))
             return
-        post.status, post.error = PostStatus.DRAFT, ""
-        card.post = self.store.save_post(post)
-        if card.row.stage == Stage.BACKLOG:
-            self.store.set_stage([card.id], Stage.STAGING)
         self._status("Draft saved.")
         self.reload()
 
     def _request_upload(self, post: Post, add_shorts: bool) -> None:
-        card = self.cards.get(post.video_row)
-        if card is None or not self.profile:
+        if post is None or not self.profile:
             return
-        path = card.row.item.path(self.profile.output_folder)
-        errors = validate_post(post, path)
-        if errors:
-            post.status = PostStatus.DRAFT
-            card.post = self.store.save_post(post)
-            self.selected_id = card.id
+        self.selected_id = post.video_row
+        problems = self.pipeline.upload_problems(post)
+        if problems:
+            self.pipeline.save_post(post)  # keep what was typed
             self.reload()
-            self.panel.show_errors(errors)
+            self.panel.show_errors(problems)
             self._status("Fix the highlighted details, then upload again.")
             return
-        account = self.store.get_account(post.account_id)
-        try:
-            client = self.accounts.client_for(account)
-        except YouTubeError as exc:
-            self.panel.show_errors([str(exc)])
-            return
-        when = f"goes live {local_text(post.publish_at)}" if post.publish_at else \
-            f"is published immediately as {post.privacy.capitalize()}"
-        answer = QMessageBox.question(
-            self, "Upload to YouTube",
-            f"Upload “{post.title}” to {account.display_name}?\n\nIt {when}.")
-        if answer != QMessageBox.Yes:
-            card.post = self.store.save_post(post)
+        if QMessageBox.question(self, "Upload to YouTube", self.pipeline.describe_upload(post)) != QMessageBox.Yes:
+            self.pipeline.save_post(post)
             self.reload()
             return
-        post.status, post.error = PostStatus.UPLOADING, ""
-        card.post = self.store.save_post(post)
-        self.store.set_stage([card.id], Stage.SCHEDULED)
-        self.selected_id = card.id
-        self.upload_queue.append((card.id, client, path, build_resource(post, add_shorts)))
-        card.progress, card.queued = 0.0, bool(self.upload_worker)
-        self.reload()
-        self._next_upload()
-
-    def _next_upload(self) -> None:
-        if self.upload_worker is not None or not self.upload_queue:
+        try:
+            self.pipeline.start_upload(post, add_shorts)
+        except PipelineError as exc:
+            self.panel.show_errors(exc.problems)
             return
-        row_id, client, path, resource = self.upload_queue.popleft()
-        if row_id in self.cards:
-            self.cards[row_id].queued = False
-        worker = UploadWorker(row_id, client, path, resource, self)
-        worker.progress.connect(self._on_upload_progress)
-        worker.done.connect(self._on_upload_done)
-        worker.failed.connect(self._on_upload_failed)
-        worker.finished.connect(self._on_upload_finished)
-        self.upload_worker = worker
-        worker.start()
         self._status("Uploading to YouTube…")
+        self.reload()
 
     def _on_upload_progress(self, row_id: int, pct: float) -> None:
         card = self.cards.get(row_id)
         if card is None:
             return
-        card.progress = pct
+        card.progress, card.queued = pct, False
         self.columns[card.row.stage].model.refresh_card(row_id)
         self.panel.set_progress(row_id, pct)
 
-    def _on_upload_done(self, row_id: int, resource: dict) -> None:
-        post = self.store.get_post(row_id)
-        if post is None:
-            return
-        post.remote_id = resource.get("id", "")
-        post.remote_url = watch_url(post.remote_id) if post.remote_id else ""
-        post.status = PostStatus.SCHEDULED if post.publish_at else PostStatus.PUBLISHED
-        post.error = ""
-        self.store.save_post(post)
-        self.store.set_stage([row_id], stage_after_upload(post))
-        self._status(f"Uploaded “{post.title}”." + (f" It goes live {local_text(post.publish_at)}."
-                                                     if post.publish_at else ""))
-        self.reload()
-
-    def _on_upload_failed(self, row_id: int, reason: str) -> None:
-        post = self.store.get_post(row_id)
-        if post is not None:
-            post.status, post.error = PostStatus.FAILED, reason
-            self.store.save_post(post)
-            self.store.set_stage([row_id], Stage.STAGING)
-        self._status(f"Upload failed: {reason}")
-        self.reload()
-
-    def _on_upload_finished(self) -> None:
-        self.upload_worker = None
-        self._next_upload()
-
-    def _cancel_upload(self, row_id: int) -> None:
-        for i, queued in enumerate(self.upload_queue):
-            if queued[0] == row_id:
-                del self.upload_queue[i]
-                self._on_upload_failed(row_id, "Upload cancelled.")
-                return
-        if self.upload_worker is not None and self.upload_worker.row_id == row_id:
-            self.upload_worker.cancel()
-
     @property
     def uploading(self) -> bool:
-        return self.upload_worker is not None or bool(self.upload_queue)
+        return self.uploads.busy
 
     # ---------------------------------------------------------------- sync
     def sync(self, force: bool = False) -> None:
@@ -557,57 +487,30 @@ class BoardPage(QWidget):
             return
         if not force and time.time() - self._last_sync < SYNC_EVERY_SECONDS:
             return
-        posts = [p for p in self.store.posts_with_status(self.profile.id, [PostStatus.SCHEDULED]) if p.remote_id]
-        if not posts:
-            if force:
+        plan = self.pipeline.sync_plan(self.profile.id)
+        for problem in plan.problems:
+            self._status(problem)
+        if not plan.jobs:
+            if force and not plan.problems:
                 self._status("Nothing scheduled to sync.")
             return
-        jobs = []
-        for account_id in {p.account_id for p in posts}:
-            account = self.store.get_account(account_id) if account_id else None
-            if account is None:
-                continue
-            try:
-                client = self.accounts.client_for(account)
-            except YouTubeError as exc:
-                self._status(str(exc))
-                continue
-            jobs.append((client, [p.remote_id for p in posts if p.account_id == account_id]))
-        if not jobs:
-            return
-
-        def fetch():
-            out = {}
-            for client, ids in jobs:
-                statuses = client.video_statuses(ids)
-                out.update({vid: statuses.get(vid) for vid in ids})
-            return out
-
         self._last_sync = time.time()
         self.sync_btn.setEnabled(False)
         self._status("Syncing with YouTube…")
-        self.sync_worker = CallWorker(fetch, parent=self)
-        self.sync_worker.succeeded.connect(lambda result: self._apply_sync(posts, result))
+        self.sync_worker = CallWorker(self.pipeline.fetch_remote, plan, parent=self)
+        self.sync_worker.succeeded.connect(lambda remote: self._apply_sync(plan, remote))
         self.sync_worker.failed.connect(lambda msg: self._status(f"Sync failed: {msg}"))
         self.sync_worker.finished.connect(lambda: self.sync_btn.setEnabled(True))
         self.sync_worker.start()
 
-    def _apply_sync(self, posts: list[Post], remote: dict) -> None:
-        now = datetime.now(timezone.utc)
-        published = 0
-        for post in posts:
-            status, note = reconcile(post, remote.get(post.remote_id), now)
-            if status != post.status or note != post.error:
-                post.status, post.error = status, note
-                self.store.save_post(post)
-            if status == PostStatus.PUBLISHED:
-                self.store.set_stage([post.video_row], Stage.PUBLISHED)
-                published += 1
+    def _apply_sync(self, plan, remote: dict) -> None:
+        published = self.pipeline.apply_sync(plan, remote)
         self._status(f"Synced {clock(datetime.now())}" + (f" · {published} went live" if published else ""))
         self.reload()
 
     def shutdown(self) -> None:
-        self.upload_queue.clear()
-        if self.upload_worker is not None:
-            self.upload_worker.cancel()
-            self.upload_worker.wait(5000)
+        self._unsubscribe()
+        self._closed = True
+        self._reload_timer.stop()
+        if self.sync_worker:
+            self.sync_worker.wait(3000)

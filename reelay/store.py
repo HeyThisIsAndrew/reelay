@@ -5,20 +5,37 @@ OAuth tokens are deliberately NOT stored here; they live in the OS keychain
 
 The Store is used from the GUI thread only. Background workers send results
 back via signals and the GUI thread writes them.
+
+Change feed: every write announces a `Change` to subscribers after it commits,
+so the desktop UI (and the companion server) can react to edits made
+anywhere. Wrap writes in `with store.origin("remote"):` to tag who made them.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, Iterator
+from typing import Callable, Iterable, Iterator
 
 from .models import Account, Post, PostStatus, Profile, Stage, VideoItem, VideoRow
 
+log = logging.getLogger("reelay")
+
 SCHEMA_VERSION = 1
+
+
+@dataclass(frozen=True)
+class Change:
+    """One committed write. `entity` is profile | account | video | post | setting."""
+    entity: str
+    ids: tuple = ()
+    profile_id: int | None = None
+    origin: str = "local"
 
 _MIGRATIONS: dict[int, str] = {
     1: """
@@ -93,6 +110,39 @@ class Store:
         if self.path != ":memory:":
             self.conn.execute("PRAGMA journal_mode = WAL")
         self._migrate()
+        self._listeners: list[Callable[[Change], None]] = []
+        self._origin = "local"
+
+    # ================================================================ change feed
+    def subscribe(self, listener: Callable[[Change], None]) -> Callable[[], None]:
+        """Call `listener(change)` after every write. Returns an unsubscribe function."""
+        self._listeners.append(listener)
+        return lambda: self._listeners.remove(listener) if listener in self._listeners else None
+
+    @contextmanager
+    def origin(self, name: str) -> Iterator[None]:
+        """Tag writes made inside the block (e.g. "remote" for the companion app)."""
+        previous, self._origin = self._origin, name
+        try:
+            yield
+        finally:
+            self._origin = previous
+
+    def _emit(self, entity: str, ids: Iterable = (), profile_id: int | None = None) -> None:
+        change = Change(entity, tuple(ids), profile_id, self._origin)
+        for listener in list(self._listeners):
+            try:
+                listener(change)
+            except Exception:  # noqa: BLE001 — a broken listener must never break a write
+                log.exception("Store listener failed for %s", change)
+
+    def _profile_of_videos(self, row_ids: Iterable[int]) -> int | None:
+        ids = list(row_ids)
+        if not ids:
+            return None
+        rows = self.conn.execute(f"SELECT DISTINCT profile_id FROM videos WHERE id IN ({','.join('?' * len(ids))})",
+                                 ids).fetchall()
+        return rows[0][0] if len(rows) == 1 else None
 
     def close(self) -> None:
         self.conn.close()
@@ -118,6 +168,7 @@ class Store:
         with self.tx() as c:
             c.execute("INSERT INTO settings (key, value) VALUES (?, ?) "
                       "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (key, value))
+        self._emit("setting", (key,))
 
     # ================================================================ profiles
     def list_profiles(self) -> list[Profile]:
@@ -139,6 +190,7 @@ class Store:
                 (profile.name, profile.color, profile.output_folder, profile.template, profile.quality,
                  profile.cookies_browser, profile.last_source, profile.created_at))
         profile.id = cur.lastrowid
+        self._emit("profile", (profile.id,), profile.id)
         return profile
 
     def update_profile(self, profile: Profile) -> None:
@@ -147,10 +199,12 @@ class Store:
                       "cookies_browser=?, last_source=? WHERE id=?",
                       (profile.name, profile.color, profile.output_folder, profile.template,
                        profile.quality, profile.cookies_browser, profile.last_source, profile.id))
+        self._emit("profile", (profile.id,), profile.id)
 
     def delete_profile(self, profile_id: int) -> None:
         with self.tx() as c:
             c.execute("DELETE FROM profiles WHERE id = ?", (profile_id,))
+        self._emit("profile", (profile_id,), profile_id)
         if self.get_setting("active_profile") == str(profile_id):
             self.set_setting("active_profile", "")
 
@@ -200,11 +254,14 @@ class Store:
         row = self.conn.execute("SELECT id FROM accounts WHERE profile_id=? AND platform=? AND external_id=?",
                                 (account.profile_id, account.platform, account.external_id)).fetchone()
         account.id = row["id"]
+        self._emit("account", (account.id,), account.profile_id)
         return account
 
     def delete_account(self, account_id: int) -> None:
+        account = self.get_account(account_id)
         with self.tx() as c:
             c.execute("DELETE FROM accounts WHERE id = ?", (account_id,))
+        self._emit("account", (account_id,), account.profile_id if account else None)
 
     def account_in_use_elsewhere(self, account: Account) -> bool:
         """Is the same remote account connected in another profile (shares its token)?"""
@@ -235,6 +292,8 @@ class Store:
                 row = c.execute("SELECT id FROM videos WHERE profile_id=? AND platform=? AND video_id=?",
                                 (profile_id, item.platform, item.video_id)).fetchone()
                 ids[item.key] = row["id"]
+        if ids:
+            self._emit("video", ids.values(), profile_id)
         return ids
 
     def save_video(self, profile_id: int, item: VideoItem) -> int:
@@ -254,6 +313,7 @@ class Store:
         return self._video_row(row) if row else None
 
     def set_stage(self, row_ids: Iterable[int], stage: str, position: float | None = None) -> None:
+        row_ids = list(row_ids)
         if stage not in Stage.ALL:
             raise ValueError(f"unknown stage {stage!r}")
         now = utcnow()
@@ -267,20 +327,24 @@ class Store:
                 else:
                     pos = position
                 c.execute("UPDATE videos SET stage=?, position=?, updated_at=? WHERE id=?", (stage, pos, now, row_id))
+        self._emit("video", row_ids, self._profile_of_videos(row_ids))
 
     def reorder(self, ordered_row_ids: list[int]) -> None:
         with self.tx() as c:
             for pos, row_id in enumerate(ordered_row_ids, 1):
                 c.execute("UPDATE videos SET position=? WHERE id=?", (float(pos), row_id))
+        self._emit("video", ordered_row_ids, self._profile_of_videos(ordered_row_ids))
 
     def set_notes(self, row_id: int, notes: str) -> None:
         with self.tx() as c:
             c.execute("UPDATE videos SET notes=?, updated_at=? WHERE id=?", (notes, utcnow(), row_id))
+        self._emit("video", (row_id,), self._profile_of_videos([row_id]))
 
     @staticmethod
     def _video_row(row: sqlite3.Row) -> VideoRow:
         item = VideoItem.from_record(json.loads(row["data"]))
-        return VideoRow(id=row["id"], item=item, stage=row["stage"], position=row["position"], notes=row["notes"])
+        return VideoRow(id=row["id"], item=item, stage=row["stage"], position=row["position"], notes=row["notes"],
+                        profile_id=row["profile_id"], updated_at=row["updated_at"])
 
     # ================================================================ posts
     def get_post(self, video_row: int) -> Post | None:
@@ -309,6 +373,7 @@ class Store:
                 "remote_id=excluded.remote_id, remote_url=excluded.remote_url, error=excluded.error, "
                 "updated_at=excluded.updated_at", (*values, post.video_row))
             post.id = c.execute("SELECT id FROM posts WHERE video_row=?", (post.video_row,)).fetchone()["id"]
+        self._emit("post", (post.video_row,), self._profile_of_videos([post.video_row]))
         return post
 
     def reset_interrupted_uploads(self) -> int:
@@ -316,6 +381,8 @@ class Store:
         with self.tx() as c:
             cur = c.execute("UPDATE posts SET status=?, error=? WHERE status=?",
                             (PostStatus.DRAFT, "Upload was interrupted. Try again.", PostStatus.UPLOADING))
+        if cur.rowcount:
+            self._emit("post")
         return cur.rowcount
 
     @staticmethod

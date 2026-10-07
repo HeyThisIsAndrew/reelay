@@ -15,8 +15,10 @@ from .. import APP_NAME, __version__
 from ..accounts import AccountService
 from ..models import Profile
 from ..paths import cache_dir, default_library_root, log_dir
+from ..pipeline import Pipeline
 from ..store import Store
 from ..tokens import TokenStore
+from ..uploads import UploadManager
 from . import theme
 from .accounts_page import AccountsPage
 from .board_page import BoardPage
@@ -58,11 +60,13 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(1100, 680)
         self.store = store
         self.accounts = AccountService(store, tokens)
+        self.uploads = UploadManager(self)
+        self.pipeline = Pipeline(store, self.accounts, self.uploads)
         self.thumbs = ThumbnailCache(cache_dir() / "covers", self)
         self.profile: Profile | None = None
 
         self.download = DownloadPage(store, self.thumbs)
-        self.board = BoardPage(store, self.accounts, self.thumbs)
+        self.board = BoardPage(self.pipeline, self.uploads, self.thumbs)
         self.accounts_page = AccountsPage(store, self.accounts)
         self.settings_page = SettingsPage(store)
         self.pages = {"download": self.download, "board": self.board,
@@ -72,7 +76,6 @@ class MainWindow(QMainWindow):
         self._build_menu()
         self.download.videosChanged.connect(self.board.reload)
         self.download.busyChanged.connect(lambda _b: self._sync_switch_enabled())
-        self.accounts_page.accountsChanged.connect(self.board.reload)
         self.board.openAccounts.connect(lambda: self.go("accounts"))
         self.settings_page.themeChosen.connect(self.set_theme)
 
@@ -182,10 +185,9 @@ class MainWindow(QMainWindow):
 
     # ---------------------------------------------------------------- profiles
     def _busy_reason(self) -> str:
+        # Uploads run app-wide (UploadManager), so they don't block switching.
         if self.download.busy:
             return "Wait for the current download to finish (or stop it) before switching profiles."
-        if self.board.uploading:
-            return "Wait for the current upload to finish before switching profiles."
         return ""
 
     def _sync_switch_enabled(self) -> None:
@@ -273,7 +275,7 @@ class MainWindow(QMainWindow):
         busy = []
         if self.download.busy:
             busy.append("a download")
-        if self.board.uploading:
+        if self.uploads.busy:
             busy.append("a YouTube upload")
         if busy:
             answer = QMessageBox.question(self, APP_NAME, f"{' and '.join(busy).capitalize()} is in progress. "
@@ -282,6 +284,7 @@ class MainWindow(QMainWindow):
                 event.ignore()
                 return
         self.download.shutdown()
+        self.uploads.shutdown()
         self.board.shutdown()
         self.accounts_page.shutdown()
         QSettings().setValue("geometry", self.saveGeometry())

@@ -156,48 +156,7 @@ class DownloadWorker(QThread):
         self.batchDone.emit(ok, failed, self._cancel.is_set())
 
 
-# ====================================================================== YouTube
-class UploadWorker(QThread):
-    progress = Signal(int, float)    # video row id, percent
-    done = Signal(int, dict)         # video row id, created video resource
-    failed = Signal(int, str)        # video row id, reason
-
-    def __init__(self, row_id: int, client, path: Path, resource: dict, parent=None):
-        super().__init__(parent)
-        self.row_id, self.client, self.path, self.resource = row_id, client, Path(path), resource
-        self._cancel = threading.Event()
-        self._last = 0.0
-
-    def cancel(self) -> None:
-        self._cancel.set()
-
-    def _on_progress(self, sent: int, total: int) -> None:
-        now = time.monotonic()
-        if sent >= total or now - self._last > 0.2:
-            self._last = now
-            self.progress.emit(self.row_id, sent / total * 100 if total else 0.0)
-
-    def run(self) -> None:
-        from ..youtube import UploadCancelled, YouTubeError
-        import requests
-        try:
-            result = self.client.upload(self.path, self.resource, on_progress=self._on_progress,
-                                        cancel=self._cancel)
-        except UploadCancelled:
-            self.failed.emit(self.row_id, "Upload cancelled.")
-        except YouTubeError as exc:
-            self.failed.emit(self.row_id, str(exc))
-        except requests.RequestException as exc:
-            self.failed.emit(self.row_id, f"Network problem during upload: {exc}")
-        except OSError as exc:
-            self.failed.emit(self.row_id, f"Couldn't read the video file: {exc}")
-        except Exception as exc:  # noqa: BLE001
-            log.exception("Unexpected upload error")
-            self.failed.emit(self.row_id, f"Unexpected error: {exc}")
-        else:
-            self.done.emit(self.row_id, result)
-
-
+# ====================================================================== generic
 class CallWorker(QThread):
     """Run one blocking call off the GUI thread (sign-in, API reads)."""
 

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from datetime import datetime, timedelta
 
 from PySide6.QtCore import QDateTime, Qt, QUrl, Signal
@@ -13,50 +13,14 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDateTimeEdit, QFrame, QHBo
 
 from ..models import Account, Post, PostStatus, Privacy, Stage, VideoRow
 from ..publishing import TITLE_MAX, default_post, humanize_name, parse_utc, to_utc_iso
-from ..text import short_title
+from ..pipeline import Card
+from ..text import clock, local_text, short_title  # noqa: F401 (re-exported)
 from .detail_panel import CoverView
 from .table_model import fmt_count, fmt_date, fmt_duration
 from .theme import set_prop
 from .thumbnails import ThumbnailCache
 
 PRIVACY_LABELS = {Privacy.PUBLIC: "Public", Privacy.UNLISTED: "Unlisted", Privacy.PRIVATE: "Private"}
-
-
-@dataclass
-class Card:
-    row: VideoRow
-    post: Post | None = None
-    account: Account | None = None
-    progress: float | None = None   # upload percent while uploading
-    queued: bool = False
-
-    @property
-    def id(self) -> int:
-        return self.row.id
-
-    @property
-    def title(self) -> str:
-        if self.post and self.post.title:
-            return self.post.title
-        return humanize_name(self.row.item.custom_name) or short_title(self.row.item.hook, 80)
-
-    @property
-    def uploading(self) -> bool:
-        return bool(self.post and self.post.status == PostStatus.UPLOADING)
-
-
-def clock(dt: datetime) -> str:
-    """'9:05 AM' on every platform (Windows strftime has no %-I)."""
-    return f"{dt.hour % 12 or 12}:{dt:%M} {dt:%p}"
-
-
-def local_text(utc_iso: str | None) -> str:
-    """'Tue Oct 20, 9:00 AM' in the computer's time zone."""
-    when = parse_utc(utc_iso)
-    if not when:
-        return ""
-    local = when.astimezone()
-    return f"{local:%a %b} {local.day}, {clock(local)}"
 
 
 def _section(text: str) -> QLabel:

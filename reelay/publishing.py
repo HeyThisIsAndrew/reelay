@@ -27,6 +27,7 @@ def humanize_name(custom_name: str) -> str:
 def default_post(video_row: int, item: VideoItem, account_id: int | None = None) -> Post:
     """Pre-fill a post from the original video's metadata."""
     title = humanize_name(item.custom_name) or short_title(item.hook, TITLE_MAX)
+    title = re.sub(r"\s*#\w+", "", title).strip() or title  # hashtags belong in tags, not the title
     title = title[:1].upper() + title[1:]
     tags = item.hashtags or [t for t in item.tags if t]
     return Post(video_row=video_row, account_id=account_id, title=clean_text(title)[:TITLE_MAX],

@@ -95,6 +95,7 @@ class DownloadPage(QWidget):
 
         self._build_ui()
         self._connect()
+        self._unsubscribe = store.subscribe(self._on_store_change)
 
     # ================================================================ UI
     def _build_ui(self) -> None:
@@ -326,6 +327,21 @@ class DownloadPage(QWidget):
         self.detail.customNameEdited.connect(self._on_detail_custom)
         self.detail.checkSelected.connect(self._check_selected)
         self.detail.autoNameSelected.connect(lambda: self._auto_name(selected_only=True))
+
+    def _on_store_change(self, change) -> None:
+        """Pick up custom-name edits made outside this page (e.g. the companion
+        app). This page's own writes are "local" and already on screen."""
+        if change.origin == "local" or change.entity != "video" or not self.profile \
+                or change.profile_id != self.profile.id:
+            return
+        for row_id in change.ids:
+            row = self.store.get_video(row_id)
+            item = self.model.find(row.item.key) if row else None
+            if item is not None and item.custom_name != row.item.custom_name:
+                item.custom_name = row.item.custom_name
+                self.model.refresh(item.key)
+        self.model.refresh_all()
+        self._refresh_detail()
 
     # ================================================================ profile
     @property
@@ -783,6 +799,7 @@ class DownloadPage(QWidget):
 
     # ================================================================ shutdown
     def shutdown(self, timeout_ms: int = 8000) -> None:
+        self._unsubscribe()
         if self.busy:
             self.download_worker.cancel()
             self.download_worker.wait(timeout_ms)

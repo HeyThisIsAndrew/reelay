@@ -257,7 +257,7 @@ def test_upload_blocked_with_clear_errors_when_no_channel(app_window, qtbot):
     drop(board, [row], Stage.SCHEDULED)
     assert store.get_video(row).stage == Stage.STAGING  # stays put
     assert "Choose a YouTube channel" in board.panel.errors.text()
-    assert board.upload_worker is None
+    assert not window.uploads.busy
 
 
 def test_failed_upload_returns_to_staging(app_window, qtbot, monkeypatch):
