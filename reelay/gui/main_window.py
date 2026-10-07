@@ -12,13 +12,9 @@ from PySide6.QtWidgets import (QApplication, QButtonGroup, QHBoxLayout, QInputDi
                                QMessageBox, QPushButton, QStackedWidget, QToolButton, QVBoxLayout, QWidget)
 
 from .. import APP_NAME, __version__
-from ..accounts import AccountService
 from ..models import Profile
 from ..paths import cache_dir, default_library_root, log_dir
-from ..pipeline import Pipeline
-from ..store import Store
-from ..tokens import TokenStore
-from ..uploads import UploadManager
+from ..services import Services
 from . import theme
 from .accounts_page import AccountsPage
 from .board_page import BoardPage
@@ -53,22 +49,24 @@ def avatar_icon(profile: Profile, size: int = 26) -> QIcon:
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, store: Store, tokens: TokenStore):
+    def __init__(self, services: Services):
         super().__init__()
+        store = services.store
         self.setWindowTitle(APP_NAME)
         self.resize(1440, 900)
         self.setMinimumSize(1100, 680)
+        self.services = services
         self.store = store
-        self.accounts = AccountService(store, tokens)
-        self.uploads = UploadManager(self)
-        self.pipeline = Pipeline(store, self.accounts, self.uploads)
+        self.accounts = services.accounts
+        self.uploads = services.uploads
+        self.pipeline = services.pipeline
         self.thumbs = ThumbnailCache(cache_dir() / "covers", self)
         self.profile: Profile | None = None
 
         self.download = DownloadPage(store, self.thumbs)
         self.board = BoardPage(self.pipeline, self.uploads, self.thumbs)
         self.accounts_page = AccountsPage(store, self.accounts)
-        self.settings_page = SettingsPage(store)
+        self.settings_page = SettingsPage(store, services)
         self.pages = {"download": self.download, "board": self.board,
                       "accounts": self.accounts_page, "settings": self.settings_page}
 
@@ -284,8 +282,8 @@ class MainWindow(QMainWindow):
                 event.ignore()
                 return
         self.download.shutdown()
-        self.uploads.shutdown()
         self.board.shutdown()
+        self.services.stop()
         self.accounts_page.shutdown()
         QSettings().setValue("geometry", self.saveGeometry())
         super().closeEvent(event)

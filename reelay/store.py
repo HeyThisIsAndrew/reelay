@@ -448,7 +448,9 @@ class Store:
     def reset_interrupted_uploads(self) -> int:
         """Uploads that were running when the app quit go back to draft."""
         with self.tx() as c:
-            cur = c.execute("UPDATE posts SET status=?, error=? WHERE status=?",
+            # Posts with dispatch rows are recovered by the dispatcher instead.
+            cur = c.execute("UPDATE posts SET status=?, error=? WHERE status=? AND "
+                            "video_row NOT IN (SELECT video_row FROM dispatches)",
                             (PostStatus.DRAFT, "Upload was interrupted. Try again.", PostStatus.UPLOADING))
         if cur.rowcount:
             self._emit("post")
@@ -584,6 +586,14 @@ class Store:
         again = self._dispatch(row) if row else None
         self._emit_dispatch_rows([again] if again else [])
         return again
+
+    def dispatches_with_status(self, profile_id: int, platform: str, statuses: Iterable[str]) -> list[Dispatch]:
+        statuses = list(statuses)
+        rows = self.conn.execute(
+            f"SELECT d.* FROM dispatches d JOIN videos v ON v.id = d.video_row WHERE v.profile_id = ? "
+            f"AND d.platform = ? AND d.status IN ({','.join('?' * len(statuses))}) ORDER BY d.id",
+            [profile_id, platform, *statuses]).fetchall()
+        return [self._dispatch(r) for r in rows]
 
     def pending_dispatches(self) -> list[Dispatch]:
         rows = self.conn.execute("SELECT * FROM dispatches WHERE status IN (?, ?) ORDER BY due_at, id",

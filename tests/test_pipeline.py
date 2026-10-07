@@ -221,13 +221,11 @@ def test_sync_publishes_and_flags_stuck_private_videos(env):
     for row, remote in ((rows[0], "A"), (rows[1], "B")):
         pipeline.start_upload(_ready_post(env, row))
         uploads.finish(row, True, {"id": remote})
-    past = store.get_post(rows[1])
-    past.publish_at = "2026-01-01T00:00:00Z"
-    store.save_post(past)
     accounts.client.statuses = {"A": {"privacy": "public"}, "B": {"privacy": "private", "publish_at": None}}
     plan = pipeline.sync_plan(profile.id)
     assert plan.jobs and sorted(plan.jobs[0][1]) == ["A", "B"]
-    assert pipeline.apply_sync(plan, pipeline.fetch_remote(plan)) == 1
+    after_publish_time = datetime.now(timezone.utc) + timedelta(days=4)  # both were due in 3 days
+    assert pipeline.apply_sync(plan, pipeline.fetch_remote(plan), now=after_publish_time) == 1
     assert store.get_video(rows[0]).stage == Stage.PUBLISHED
     assert "audit" in store.get_post(rows[1]).error
 

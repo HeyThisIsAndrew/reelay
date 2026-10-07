@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import os
+
 from PySide6.QtCore import QUrl, Signal
-from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea,
-                               QVBoxLayout, QWidget)
+from PySide6.QtGui import QDesktopServices, QGuiApplication
+from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
+                               QPushButton, QScrollArea, QVBoxLayout, QWidget)
 
 from .. import APP_NAME, __version__
 from ..paths import data_dir, log_dir
@@ -32,10 +34,11 @@ def _muted(text: str) -> QLabel:
 class SettingsPage(QWidget):
     themeChosen = Signal(str)
 
-    def __init__(self, store: Store, parent=None):
+    def __init__(self, store: Store, services=None, parent=None):
         super().__init__(parent)
         self.setObjectName("Page")
         self.store = store
+        self.services = services
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         body = QWidget(objectName="Page")
@@ -71,6 +74,29 @@ class SettingsPage(QWidget):
         cl.addWidget(self.shorts)
         lay.addWidget(card)
 
+        card, cl = _card("Agent API")
+        cl.addWidget(_muted("A local API that lets your AI agents read the board, apply approved edits and schedule "
+                            "posts. Every request needs the token below (sent as “Authorization: Bearer …”)."))
+        self.api_status = _muted("")
+        cl.addWidget(self.api_status)
+        row = QHBoxLayout()
+        self.copy_token_btn = QPushButton("Copy Token")
+        self.copy_token_btn.clicked.connect(self._copy_token)
+        self.rotate_token_btn = QPushButton("Rotate Token…")
+        self.rotate_token_btn.clicked.connect(self._rotate_token)
+        row.addWidget(self.copy_token_btn)
+        row.addWidget(self.rotate_token_btn)
+        row.addStretch()
+        cl.addLayout(row)
+        cl.addWidget(_muted("Public URL (your Cloudflare Tunnel address, e.g. https://reelay.example.com). "
+                            "Threads downloads videos from short-lived links under this address."))
+        self.public_url = QLineEdit()
+        self.public_url.setPlaceholderText("https://…")
+        self.public_url.editingFinished.connect(
+            lambda: self.store.set_setting("public_url", self.public_url.text().strip().rstrip("/")))
+        cl.addWidget(self.public_url)
+        lay.addWidget(card)
+
         card, cl = _card("Data")
         cl.addWidget(_muted(f"Database and caches: {data_dir()}\nLogs: {log_dir()}\n"
                             "Sign-in tokens are stored in your system keychain, not in these folders."))
@@ -98,3 +124,48 @@ class SettingsPage(QWidget):
         self.shorts.blockSignals(True)
         self.shorts.setChecked(self.store.get_setting("add_shorts", "1") == "1")
         self.shorts.blockSignals(False)
+        self._refresh_api()
+
+    def _refresh_api(self) -> None:
+        api = self.services.api if self.services else None
+        env_url = os.environ.get("REELAY_PUBLIC_URL")
+        if os.environ.get("REELAY_API_DISABLED") == "1":
+            text = "Off (REELAY_API_DISABLED=1)."
+        elif api is not None and api.running:
+            text = f"Running at {api.url}. Machine-readable description: {api.url}/openapi.json"
+        elif api is not None and api.error:
+            text = api.error
+        else:
+            text = "Not running."
+        if os.environ.get("REELAY_API_TOKEN"):
+            text += "\nToken comes from the REELAY_API_TOKEN environment variable."
+        else:
+            text += "\nToken is stored in your system keychain (service “Reelay”, account “agent_api_token”)."
+        self.api_status.setText(text)
+        self.rotate_token_btn.setEnabled(bool(self.services) and not os.environ.get("REELAY_API_TOKEN"))
+        self.copy_token_btn.setEnabled(bool(self.services))
+        self.public_url.setText(env_url or self.store.get_setting("public_url"))
+        self.public_url.setEnabled(not env_url)
+        if env_url:
+            self.public_url.setToolTip("Set by REELAY_PUBLIC_URL")
+
+    def _copy_token(self) -> None:
+        if self.services:
+            QGuiApplication.clipboard().setText(self.services.agent_token())
+            self.api_status.setText(self.api_status.text().split("\n")[0] + "\nToken copied to the clipboard.")
+
+    def _rotate_token(self) -> None:
+        if not self.services:
+            return
+        answer = QMessageBox.question(self, "Rotate Agent Token",
+                                      "Create a new agent API token? Agents using the old one will get 401 errors "
+                                      "until you give them the new token.")
+        if answer == QMessageBox.Yes:
+            try:
+                self.services.rotate_agent_token()
+            except RuntimeError as exc:
+                QMessageBox.warning(self, "Rotate Agent Token", str(exc))
+                return
+            QGuiApplication.clipboard().setText(self.services.agent_token())
+            self._refresh_api()
+            self.api_status.setText(self.api_status.text() + "\nNew token copied to the clipboard.")

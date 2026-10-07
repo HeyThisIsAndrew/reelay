@@ -186,6 +186,12 @@ class CardDelegate(QStyledItemDelegate):
     @staticmethod
     def _status(card: Card) -> tuple[str, str]:
         p, post, item = theme.P, card.post, card.row.item
+        if len(card.dispatches) > 1 and not (post and post.status == PostStatus.UPLOADING):
+            marks = {"pending": "⏱", "dispatching": "…", "scheduled": "⏱", "published": "✓", "failed": "⚠"}
+            short = {"youtube": "YT", "bluesky": "Bsky", "threads": "Thr", "facebook": "FB"}
+            text = "  ".join(f"{short.get(d.platform, d.platform)} {marks.get(d.status, '?')}" for d in card.dispatches)
+            failed = any(d.status == "failed" for d in card.dispatches)
+            return text, p.danger if failed else (p.success if post and post.status == PostStatus.PUBLISHED else p.text)
         if post and post.status == PostStatus.UPLOADING:
             return ("Waiting to upload…" if card.queued else f"Uploading {(card.progress or 0):.0f}%"), p.text
         if post and post.status == PostStatus.SCHEDULED:
@@ -511,7 +517,9 @@ class BoardPage(QWidget):
         self.reload()
 
     def shutdown(self) -> None:
-        self._bridge.changed.disconnect(self._on_store_change)
+        if getattr(self, "_bridge", None) is not None:
+            self._bridge.changed.disconnect(self._on_store_change)
+            self._bridge = None
         self._closed = True
         self._reload_timer.stop()
         if self.sync_worker:

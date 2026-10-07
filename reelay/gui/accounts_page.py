@@ -9,11 +9,15 @@ from datetime import datetime
 
 from PySide6.QtCore import Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import (QComboBox, QFileDialog, QFrame, QHBoxLayout, QHeaderView, QLabel, QMessageBox,
+from PySide6.QtWidgets import (QComboBox, QFileDialog, QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
+                               QMessageBox,
                                QPushButton, QScrollArea, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
+from dataclasses import dataclass
+
 from ..accounts import YOUTUBE, AccountService
-from ..models import Profile
+from ..models import Account, Platform, Profile
+from ..publishers import BlueskyPublisher, FacebookPublisher, ThreadsPublisher
 from ..publishing import parse_utc
 from ..store import Store
 from ..youtube import OAuthClient, YouTubeError, watch_url
@@ -167,16 +171,22 @@ class AccountsPage(QWidget):
         scl.addWidget(self.schedule)
         self.body.addWidget(sc)
 
-        # ---- other platforms
+        # ---- Bluesky / Threads / Facebook
+        self.platform_cards: dict[str, PlatformCard] = {}
+        for spec in PLATFORM_SPECS:
+            card = PlatformCard(spec, self)
+            self.platform_cards[spec.platform] = card
+            self.body.addWidget(card)
+
+        # ---- not yet supported
         for name, text in (
-            ("TikTok", "Coming in a later version. TikTok's Content Posting API requires registering a TikTok "
+            ("TikTok", "Posting isn't available yet. TikTok's Content Posting API requires registering a TikTok "
                        "developer app and passing TikTok's audit; until then, API uploads can only be "
                        "posted as private (“Only me”). Downloading from TikTok already works on the "
                        "Download page."),
-            ("Instagram", "Coming in a later version. Publishing Reels requires an Instagram Professional "
+            ("Instagram", "Posting isn't available yet. Publishing Reels requires an Instagram Professional "
                           "(Creator or Business) account linked to a Facebook Page, and a Meta app that "
-                          "passes App Review. Instagram's API has no native scheduling, so Reelay will hold "
-                          "scheduled posts and publish them itself while it's running."),
+                          "passes App Review."),
         ):
             card, lay = _card()
             row = QHBoxLayout()
@@ -226,6 +236,9 @@ class AccountsPage(QWidget):
             remove.clicked.connect(lambda _=False, a=acc: self._disconnect(a))
             rl.addWidget(remove)
             self.accounts_list.addWidget(row)
+
+        for card in getattr(self, "platform_cards", {}).values():
+            card.refresh()
 
         self.schedule_account.clear()
         for acc in accounts:
@@ -323,6 +336,154 @@ class AccountsPage(QWidget):
             self.schedule.addTopLevelItem(QTreeWidgetItem(["No uploads yet.", "", ""]))
 
     def shutdown(self) -> None:
+        for card in self.platform_cards.values():
+            card.shutdown()
         self._cancel_connect()
         if self.signin_worker:
             self.signin_worker.wait(2000)
+
+
+# ====================================================================== other platforms
+@dataclass(frozen=True)
+class PlatformSpec:
+    platform: str
+    fields: tuple[tuple[str, str, bool], ...]   # (secret key, label, is_password)
+    help: str
+    publisher: type
+
+
+PLATFORM_SPECS = (
+    PlatformSpec(Platform.BLUESKY, (("handle", "Handle (e.g. lydia.bsky.social)", False),
+                                    ("app_password", "App Password", True)),
+                 "Create an App Password in Bluesky → Settings → Privacy and security → App passwords. Don't use "
+                 "your main password. Video posting needs a verified email on the account.", BlueskyPublisher),
+    PlatformSpec(Platform.THREADS, (("access_token", "Threads user access token", True),),
+                 "Needs a Meta developer app with the Threads use case and the threads_basic + "
+                 "threads_content_publish permissions (approved through App Review to post for accounts you "
+                 "don't own). Generate a long-lived user access token (valid 60 days, then refresh it). Videos "
+                 "are fetched by Meta from your Cloudflare Tunnel, so also set the Public URL in Settings.",
+                 ThreadsPublisher),
+    PlatformSpec(Platform.FACEBOOK, (("page_id", "Page ID", False), ("page_access_token", "Page access token", True)),
+                 "Needs a Meta developer app with pages_manage_posts, pages_read_engagement and pages_show_list "
+                 "(App Review for Pages you don't manage). Use a long-lived Page access token from someone who can "
+                 "create content on the Page.", FacebookPublisher),
+)
+
+
+class PlatformCard(QFrame):
+    """Connect / verify / disconnect accounts for one platform."""
+
+    def __init__(self, spec: PlatformSpec, page: "AccountsPage"):
+        super().__init__(objectName="Card")
+        self.spec, self.page = spec, page
+        self.worker: CallWorker | None = None
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(18, 16, 18, 16)
+        lay.setSpacing(8)
+        head = QHBoxLayout()
+        head.addWidget(QLabel(Platform.LABELS[spec.platform], objectName="DetailTitle"))
+        head.addStretch()
+        lay.addLayout(head)
+        lay.addWidget(_label(spec.help, "muted"))
+        self.list = QVBoxLayout()
+        self.list.setSpacing(4)
+        lay.addLayout(self.list)
+        row = QHBoxLayout()
+        self.inputs: dict[str, QLineEdit] = {}
+        for key, label, password in spec.fields:
+            edit = QLineEdit()
+            edit.setPlaceholderText(label)
+            if password:
+                edit.setEchoMode(QLineEdit.Password)
+            edit.setAttribute(Qt.WA_MacShowFocusRect, False)
+            self.inputs[key] = edit
+            row.addWidget(edit, 1)
+        self.connect_btn = QPushButton("Connect")
+        set_prop(self.connect_btn, "primary")
+        self.connect_btn.clicked.connect(self._connect)
+        row.addWidget(self.connect_btn)
+        lay.addLayout(row)
+        self.status = _label("", "muted")
+        lay.addWidget(self.status)
+
+    def refresh(self) -> None:
+        while self.list.count():
+            w = self.list.takeAt(0).widget()
+            if w:
+                w.deleteLater()
+        profile = self.page.profile
+        accounts = self.page.store.list_accounts(profile.id, self.spec.platform) if profile else []
+        if not accounts:
+            self.list.addWidget(_label("No account connected to this profile yet.", "faint"))
+        for acc in accounts:
+            row = QFrame()
+            rl = QHBoxLayout(row)
+            rl.setContentsMargins(0, 2, 0, 2)
+            rl.addWidget(QLabel(f"<b>{acc.display_name}</b>  <span style='opacity:.6'>{acc.handle}</span>"))
+            rl.addStretch()
+            if not self.page.service.has_credentials(acc):
+                rl.addWidget(_label("Credential missing: reconnect", "danger"))
+            else:
+                checked = local_text(acc.last_verified_at) if acc.last_verified_at else "never"
+                rl.addWidget(_label(f"Last verified: {checked}", "faint"))
+                verify = QPushButton("Verify")
+                set_prop(verify, "flat")
+                verify.clicked.connect(lambda _=False, a=acc: self._verify(a))
+                rl.addWidget(verify)
+            remove = QPushButton("Disconnect")
+            set_prop(remove, "flat")
+            remove.clicked.connect(lambda _=False, a=acc: self._disconnect(a))
+            rl.addWidget(remove)
+            self.list.addWidget(row)
+
+    def _busy(self) -> bool:
+        return bool(self.worker and self.worker.isRunning())
+
+    def _connect(self) -> None:
+        if self._busy() or not self.page.profile:
+            return
+        secret = {key: edit.text().strip() for key, edit in self.inputs.items()}
+        missing = [label for key, label, _ in self.spec.fields if not secret[key]]
+        if missing:
+            self.status.setText(f"Fill in: {', '.join(missing)}.")
+            return
+        self.status.setText("Checking with " + Platform.LABELS[self.spec.platform] + "…")
+        self.connect_btn.setEnabled(False)
+        self.worker = CallWorker(self.spec.publisher().verify, secret, parent=self)
+        self.worker.succeeded.connect(lambda identity, s=secret: self._connected(identity, s))
+        self.worker.failed.connect(self.status.setText)
+        self.worker.finished.connect(lambda: self.connect_btn.setEnabled(True))
+        self.worker.start()
+
+    def _connected(self, identity: dict, secret: dict) -> None:
+        if self.spec.platform == Platform.THREADS:
+            secret = {**secret, "user_id": identity["external_id"]}
+        account = self.page.service.connect_platform(self.page.profile.id, self.spec.platform, identity, secret)
+        for edit in self.inputs.values():
+            edit.clear()
+        self.status.setText(f"Connected {account.display_name}.")
+        self.refresh()
+
+    def _verify(self, account: Account) -> None:
+        secret = self.page.service.credentials(account)
+        if self._busy() or not secret:
+            return
+        self.status.setText(f"Checking {account.display_name}…")
+        self.worker = CallWorker(self.spec.publisher().verify, secret, parent=self)
+        self.worker.succeeded.connect(lambda _identity: (self.page.store.mark_verified(account.id),
+                                                         self.status.setText(f"{account.display_name} works."),
+                                                         self.refresh()))
+        self.worker.failed.connect(self.status.setText)
+        self.worker.start()
+
+    def _disconnect(self, account: Account) -> None:
+        answer = QMessageBox.question(self, "Disconnect", f"Disconnect {account.display_name} from "
+                                                          f"{self.page.profile.name}? Its credential is removed from "
+                                                          "the keychain.")
+        if answer == QMessageBox.Yes:
+            self.page.service.disconnect(account)
+            self.refresh()
+
+    def shutdown(self) -> None:
+        if self.worker:
+            self.worker.wait(3000)

@@ -801,7 +801,9 @@ class DownloadPage(QWidget):
 
     # ================================================================ shutdown
     def shutdown(self, timeout_ms: int = 8000) -> None:
-        self._bridge.changed.disconnect(self._on_store_change)
+        if getattr(self, "_bridge", None) is not None:
+            self._bridge.changed.disconnect(self._on_store_change)
+            self._bridge = None
         if self.busy:
             self.download_worker.cancel()
             self.download_worker.wait(timeout_ms)

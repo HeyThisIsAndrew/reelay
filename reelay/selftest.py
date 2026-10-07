@@ -60,8 +60,32 @@ def run() -> int:
         assert {"jpeg", "png", "webp"} <= formats, f"image plugins missing: {formats}"
         return "jpeg/png/webp"
 
+    def agent_api():
+        import urllib.request
+
+        from .accounts import AccountService
+        from .api import ApiServer, create_app
+        from .pipeline import Pipeline
+        from .store import Store
+        from .tokens import MemoryTokenStore
+        from .uploads import UploadManager
+        store = Store(":memory:")
+        accounts = AccountService(store, MemoryTokenStore())
+        server = ApiServer(create_app(store, Pipeline(store, accounts, UploadManager()), accounts, lambda: "t"),
+                           host="127.0.0.1", port=0)
+        try:
+            assert server.start(), server.error
+            with urllib.request.urlopen(server.url + "/openapi.json", timeout=5) as resp:
+                spec = resp.read().decode()
+            assert '"openapi":"3.1' in spec.replace(" ", ""), "unexpected OpenAPI document"
+        finally:
+            server.stop()
+            store.close()
+        return "serves OpenAPI 3.1"
+
     for name, fn in (("yt-dlp", ytdlp), ("TikTok impersonation", impersonation), ("ffmpeg", ffmpeg),
-                     ("Keychain", keychain), ("Database", database), ("Qt image plugins", qt)):
+                     ("Keychain", keychain), ("Database", database), ("Qt image plugins", qt),
+                     ("Agent API server", agent_api)):
         check(name, fn)
 
     ok = all(passed for _, passed, _ in checks)
