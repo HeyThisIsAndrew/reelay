@@ -1,6 +1,6 @@
 # Reelay
 
-Move a creator's short-form video archive between platforms. Reelay downloads every video from a TikTok, Instagram or YouTube profile (watermark-free, full audio), lets you review and rename them, then stages and schedules them to YouTube from a Kanban board.
+Move a creator's short-form video archive between platforms. Reelay downloads every video from a TikTok, Instagram or YouTube profile (watermark-free, full audio), lets you review and rename them, and turns each one into a **content ticket**: a card on a Kanban board holding ready-to-paste copy for every platform. You paste the copy into each platform yourself. YouTube can also be uploaded and scheduled automatically, and Bluesky, Threads and Facebook can be turned on later (see [Automatic posting](#automatic-posting)).
 
 It's a native desktop app for macOS (Windows builds included) in a monotone Light, Dark or Black theme.
 
@@ -14,10 +14,29 @@ It's a native desktop app for macOS (Windows builds included) in a monotone Ligh
 - **Apply Names** batch-renames files you've already downloaded, with a preview first.
 - Each download writes `manifest.md` (a review table) and a JSON metadata file per video.
 
-**Board**
+**Board (content tickets)**
 - A Kanban pipeline: **Backlog → Staging → Scheduled → Published**. Drag cards between columns.
-- The post editor sets the YouTube channel, title, description, tags, visibility, and a scheduled date and time.
-- Dropping a card on **Scheduled** uploads it to YouTube (resumable, with progress) with a `publishAt` time, so YouTube publishes it even when Reelay is closed.
+- Each card is a ticket with **copy blocks**:
+  - YouTube title, description and tags
+  - TikTok caption and Instagram caption
+  - Bluesky text, Threads text and Facebook text
+  - one shared hashtag block
+- Every block has a **Copy** button and a live count that uses that platform's own rules:
+
+  | Block | Limit |
+  |---|---|
+  | YouTube title | 100 characters |
+  | YouTube description | 5,000 bytes |
+  | YouTube tags | 500 characters in total |
+  | TikTok | 4,000 characters |
+  | Instagram | 2,200 characters and 30 hashtags |
+  | Bluesky | 300 characters (an emoji counts once) and 3,000 bytes |
+  | Threads | 500 characters (an emoji counts as its UTF-8 bytes) |
+  | Facebook | 63,206 characters |
+
+  Over-limit text is reported and the save is refused. Nothing is ever cut short.
+- Copying an empty block gives what Reelay would use instead: the title (plus the description if it fits) for Bluesky and Threads, and the description for TikTok, Instagram and Facebook.
+- **Auto-post** sends the video to YouTube (resumable, with progress) with a `publishAt` time, so YouTube publishes it even when Reelay is closed. Only platforms with automatic posting turned on are offered.
 - **Sync with YouTube** moves cards to Published once they go live.
 
 **Profiles and accounts**
@@ -58,12 +77,41 @@ Limits to know about:
 
 | Platform  | Download | Publish | Notes |
 |-----------|----------|---------|-------|
-| YouTube   | ✅ | ✅ Upload + schedule on YouTube | See the limits above. |
-| Facebook Pages | — | ✅ Upload + schedule on Facebook | Meta app + App Review (see below). |
-| Bluesky   | — | ✅ Posted by Reelay at the scheduled time | App Password. |
-| Threads   | — | ✅ Posted by Reelay at the scheduled time | Meta app + App Review, and a public URL (Cloudflare Tunnel). |
+| YouTube   | ✅ | ✅ Upload + schedule on YouTube (always on) | See the limits above. |
+| Facebook Pages | — | Copy-paste; automatic posting **off by default** (native scheduling when on) | Meta app + App Review (see below). |
+| Bluesky   | — | Copy-paste; automatic posting **off by default** (Reelay posts at the scheduled time when on) | App Password. |
+| Threads   | — | Copy-paste; automatic posting **off by default** (Reelay posts at the scheduled time when on) | Meta app + App Review, and a public URL (Cloudflare Tunnel). |
 | TikTok    | ✅ | Planned | Content Posting API needs an approved TikTok developer app. Unaudited apps can only post privately. |
 | Instagram | ✅ (log in with browser cookies) | Planned | Needs a Professional account linked to a Facebook Page, plus Meta App Review. |
+
+## Automatic posting
+
+Reelay is a ticket system first: the copy on each card is meant to be pasted by hand. YouTube posting is always available. Bluesky, Threads and Facebook publishers are built and tested, but stay **off** until you turn them on:
+
+| Flag | Environment variable | Setting |
+|---|---|---|
+| `publish.bluesky` | `REELAY_PUBLISH_BLUESKY=1` | Settings → Automatic posting |
+| `publish.threads` | `REELAY_PUBLISH_THREADS=1` | Settings → Automatic posting |
+| `publish.facebook` | `REELAY_PUBLISH_FACEBOOK=1` | Settings → Automatic posting |
+
+- **Precedence:** the environment variable wins when set (`1` turns the platform on, `0` forces it off), then the Settings switch, then the default (off).
+- **Restart to apply:** flags are read once at startup, so restart Reelay (or `python -m reelay.api`) after changing one.
+
+To turn a platform on:
+1. Connect its account under **Accounts**. The card there shows whether automatic posting is on.
+2. Turn its flag on.
+3. Restart Reelay.
+
+No code changes are needed.
+
+What changes when a platform is on:
+- **Facebook** uses its own scheduling (`scheduled_publish_time`): the video is uploaded right away and Facebook publishes it at the set time.
+- **Bluesky and Threads** have no scheduling of their own. Reelay posts them at the set time, so Reelay must be running and the Mac awake then.
+
+While a platform is off:
+- It isn't offered as an Auto-post target, and asking the API to schedule to it returns `422` with code `platform_disabled`.
+- A card's `target_platforms` can still list it; scheduling without a `platforms` list posts only to the enabled ones and returns the rest in `manual_platforms`.
+- Anything already queued for that platform (scheduled while it was on) waits untouched until it's turned back on.
 
 ## Agent API
 
@@ -99,9 +147,9 @@ For a stable address, create a named tunnel in the Cloudflare dashboard. Every `
 | Endpoint | What it does |
 |---|---|
 | `GET /v1/board?profile=…&stage=…&limit=…&offset=…` | A profile's board in order, with title, description, tags, target platforms, overrides, channel, visibility, schedule, file path, per-platform status, and the original caption and stats. `profile` is the sidebar name (not case-sensitive). |
-| `PATCH /v1/videos/{id}` | Partial edit of `title`, `description`, `tags`, `target_platforms`, `bluesky_text` (≤300) and `threads_text` (≤500). Everything is checked before anything is saved. Over-limit text is rejected, never cut short. |
-| `POST /v1/videos/{id}/schedule` | Schedules through the same pipeline as the Board's button. Optional `scheduled_at` (ISO 8601 with a timezone, at least 10 minutes ahead) and `platforms`. |
-| `GET /v1/platforms?profile=…` | Per platform: whether a credential is in the keychain (`connected`), account names, and `last_verified_at`. "Connected" means a credential is present, not that it worked recently. Secrets are never returned. |
+| `PATCH /v1/videos/{id}` | Partial edit of the ticket's copy: `title`, `description`, `tags`, `target_platforms`, `tiktok_text`, `instagram_text`, `bluesky_text`, `threads_text`, `facebook_text` and `hashtags`. Everything is checked before anything is saved. Over-limit text is rejected, never cut short. |
+| `POST /v1/videos/{id}/schedule` | Schedules automatic posting through the same pipeline as the Board's button. Optional `scheduled_at` (ISO 8601 with a timezone, at least 10 minutes ahead) and `platforms` (each must be enabled). Returns the queued jobs and `manual_platforms`. |
+| `GET /v1/platforms?profile=…` | Per platform: `auto_post` (whether automatic posting is on), whether a credential is in the keychain (`connected`), account names, and `last_verified_at`. "Connected" means a credential is present, not that it worked recently. Secrets are never returned. |
 
 Errors always come back as `{"detail": "…", "code": "…", "problems": […]}`:
 
@@ -121,13 +169,14 @@ python -m reelay.api --write-contract
 
 ### Examples
 
-These were run against `python -m reelay.api`, with abbreviated output.
+These were run against `python -m reelay.api` with the default flags (only YouTube posts automatically). Output is abbreviated.
 
 ```bash
 TOKEN=$(security find-generic-password -s Reelay -a agent_api_token -w)   # macOS keychain
 API=http://127.0.0.1:8471
 ```
 
+**Read the board**
 ```bash
 curl -s "$API/v1/board?profile=Lydia%20Livingood&limit=1" -H "Authorization: Bearer $TOKEN"
 ```
@@ -135,53 +184,68 @@ curl -s "$API/v1/board?profile=Lydia%20Livingood&limit=1" -H "Authorization: Bea
 {"profile": {"id": 1, "name": "Lydia Livingood"}, "total": 2, "limit": 1, "offset": 0, "next_offset": 1,
  "videos": [{"id": 1, "stage": "backlog", "title": "All my designs are hand drawn stickers are",
    "tags": ["artistsoftiktok", "handdrawnart", "vinylstickers"], "target_platforms": ["youtube"],
-   "overrides": {"bluesky_text": null, "threads_text": null}, "draft_saved": false, "file_available": true,
-   "publications": [], "source": {"platform": "TikTok", "caption": "all my designs are hand drawn ✨️ …",
-   "uploaded_on": "2026-09-29", "stats": {"views": 99, "likes": 1, "comments": 0, "duration_seconds": 8.0}}}]}
+   "overrides": {"tiktok_text": null, "instagram_text": null, "bluesky_text": null, "threads_text": null,
+                 "facebook_text": null},
+   "hashtags": null, "draft_saved": false, "file_available": true, "publications": [],
+   "source": {"platform": "TikTok", "caption": "all my designs are hand drawn ✨️ …", "uploaded_on": "2026-09-29",
+              "stats": {"views": 99, "likes": 1, "comments": 0, "duration_seconds": 8.0}}}]}
 ```
 
+**Write the ticket's copy** (after you've approved it)
 ```bash
 curl -s -X PATCH "$API/v1/videos/2" -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"title": "Letting Go of Who You Were", "tags": ["growth", "healing"],
-       "target_platforms": ["youtube", "bluesky", "threads"],
-       "bluesky_text": "Growth doesn'"'"'t always feel like winning 🦋 #growthjourney"}'
+       "tiktok_text": "the loneliness in the middle of who you'"'"'ve been and who you'"'"'re becoming 🦋",
+       "instagram_text": "Growth doesn'"'"'t always feel like winning. 🦋",
+       "bluesky_text": "Growth doesn'"'"'t always feel like winning 🦋 #growthjourney",
+       "facebook_text": "A note on letting go.", "hashtags": "#growthjourney #healing #transformation"}'
 ```
 ```json
-{"id": 2, "title": "Letting Go of Who You Were", "tags": ["growth", "healing"],
- "target_platforms": ["youtube", "bluesky", "threads"], "draft_saved": true,
- "overrides": {"bluesky_text": "Growth doesn't always feel like winning 🦋 #growthjourney", "threads_text": null}}
+{"id": 2, "title": "Letting Go of Who You Were", "tags": ["growth", "healing"], "draft_saved": true,
+ "overrides": {"tiktok_text": "the loneliness in the middle of who you've been and who you're becoming 🦋",
+               "instagram_text": "Growth doesn't always feel like winning. 🦋",
+               "bluesky_text": "Growth doesn't always feel like winning 🦋 #growthjourney",
+               "threads_text": null, "facebook_text": "A note on letting go."},
+ "hashtags": "#growthjourney #healing #transformation"}
 ```
-Text over the limit is rejected: `422 {"detail": "Those changes aren't valid.", "code": "invalid_post", "problems": ["bluesky_text: Bluesky text is 301 characters; the limit is 300."]}`
+Over-limit copy is rejected and nothing is saved:
+`422 {"detail": "Those changes aren't valid.", "code": "invalid_post", "problems": ["instagram_text: Instagram caption has 31 hashtags; the limit is 30."]}`
 
+**Schedule** (posts to the enabled targets; the rest come back as manual)
 ```bash
 curl -s -X POST "$API/v1/videos/1/schedule" -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-  -d '{"scheduled_at": "2026-10-20T09:00:00-07:00", "platforms": ["youtube", "bluesky", "facebook"]}'
+  -d '{"scheduled_at": "2026-10-20T09:00:00-07:00"}'
 ```
 ```json
 {"video_id": 1, "stage": "scheduled", "scheduled_at": "2026-10-20T16:00:00Z",
- "target_platforms": ["youtube", "bluesky", "facebook"],
- "jobs": [{"platform": "youtube",  "job_id": 1, "status": "dispatching", "due_at": "2026-10-07T22:41:08Z", "queue_position": 0},
-          {"platform": "bluesky",  "job_id": 2, "status": "pending",     "due_at": "2026-10-20T16:00:00Z", "queue_position": 1},
-          {"platform": "facebook", "job_id": 3, "status": "pending",     "due_at": "2026-10-07T22:41:08Z", "queue_position": 0}]}
+ "target_platforms": ["youtube"], "manual_platforms": ["bluesky", "threads"],
+ "jobs": [{"platform": "youtube", "job_id": 1, "status": "dispatching", "due_at": "2026-10-07T22:41:08Z",
+           "publish_at": "2026-10-20T16:00:00Z", "queue_position": 0}]}
 ```
-Each job's `queue_position` counts its place among waiting jobs, so Bluesky shows 1 here even though it isn't due until the scheduled time; `due_at` says when it will actually be sent.
+The test suite checks this response's shape (`test_disabled_targets_are_reported_as_manual`); the timestamps here are illustrative. On a real machine it needs a connected YouTube channel.
 
-Scheduling again returns `409 {"detail": "Already scheduled or published on YouTube.", "code": "already_scheduled"}`. Missing setup returns `422` listing every problem, e.g. `"Connect a Bluesky account in Accounts first."`
+When a platform is on, its job shows up too. Bluesky's `due_at` is the publish time: YouTube and Facebook are sent right away and scheduled on the platform, while Reelay sends Bluesky and Threads when they're due. `queue_position` is a job's place among waiting jobs.
 
+Errors:
+- **Asking for a turned-off platform:** `422 {"detail": "Automatic posting to Bluesky is not enabled (platform not enabled). Post it manually from the card's copy, or turn it on with REELAY_PUBLISH_BLUESKY=1.", "code": "platform_disabled"}`
+- **Scheduling again:** `409 {"detail": "Already scheduled or published on YouTube.", "code": "already_scheduled"}`
+- **Missing setup:** `422`, listing every problem (e.g. `"Choose a YouTube channel to post to."`).
+
+**Check platforms**
 ```bash
 curl -s "$API/v1/platforms?profile=Lydia%20Livingood" -H "Authorization: Bearer $TOKEN"
 ```
 ```json
 {"profile": {"id": 1, "name": "Lydia Livingood"},
- "platforms": [{"platform": "youtube", "connected": true,
-                "accounts": [{"name": "Lydia Livingood", "handle": "@livingood", "external_id": "UC…",
-                              "credential_present": true, "last_verified_at": "2026-10-07T22:41:08Z"}],
-                "setup_issue": null},
-               {"platform": "threads", "connected": false, "accounts": [],
-                "setup_issue": "No Threads account connected in Reelay → Accounts."}]}
+ "platforms": [{"platform": "youtube", "connected": false, "auto_post": true, "accounts": [],
+                "setup_issue": "Import Google API credentials in Reelay → Accounts."},
+               {"platform": "bluesky", "connected": false, "auto_post": false, "accounts": [],
+                "setup_issue": "Automatic posting is off (copy-paste only). Turn it on with REELAY_PUBLISH_BLUESKY=1 or Reelay → Settings → Automatic posting, then restart Reelay."}]}
 ```
 
 ### How publishing works
+
+This applies to YouTube, and to Bluesky, Threads and Facebook once their [flags](#automatic-posting) are on.
 
 - **YouTube** gets the video as soon as you schedule, through Reelay's upload queue (one upload at a time). It's uploaded as private with `publishAt`, and YouTube makes it public at the time you set, even if your Mac is off.
 - **Facebook Pages** get the video right away too, with `scheduled_publish_time` (allowed 10 minutes to 6 months ahead). Facebook publishes it on its own.
@@ -225,7 +289,7 @@ Secrets are only ever in the system keychain (macOS Keychain or Windows Credenti
 ## Tests
 
 ```bash
-python -m pytest                              # 124 tests: engine, database, pipeline, agent API, dispatcher,
+python -m pytest                              # 136 tests: engine, database, pipeline, agent API, dispatcher,
                                               #   platform publishers, YouTube client, headless GUI
 python -m pytest --run-network -m network     # optional live checks against TikTok
 python run_app.py --self-test                 # environment check (also works on packaged builds)

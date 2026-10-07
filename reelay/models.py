@@ -280,6 +280,10 @@ class Post:
     target_platforms: list[str] = field(default_factory=lambda: [Platform.YOUTUBE])
     bluesky_text: str | None = None   # override for Bluesky (≤300 graphemes)
     threads_text: str | None = None   # override for Threads (≤500 characters)
+    tiktok_text: str | None = None    # TikTok caption, for copy-paste (≤4,000 characters)
+    instagram_text: str | None = None # Instagram caption, for copy-paste (≤2,200 characters, ≤30 hashtags)
+    facebook_text: str | None = None  # Facebook post text (≤63,206); used as the Facebook description when posting
+    hashtags: str | None = None       # one shared hashtag block, e.g. "#growth #healing"
 
 
 @dataclass

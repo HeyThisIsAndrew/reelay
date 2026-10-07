@@ -329,6 +329,7 @@ class BoardPage(QWidget):
             cl.addWidget(col, 1)
 
         self.panel = PostPanel(self.thumbs)
+        self.panel.set_enabled_platforms(self.pipeline.enabled_platforms())
         self.panel.saveRequested.connect(self._save_post)
         self.panel.uploadRequested.connect(self._request_upload)
         self.panel.cancelUploadRequested.connect(self.pipeline.cancel_upload)
@@ -448,8 +449,10 @@ class BoardPage(QWidget):
         try:
             self.pipeline.save_draft(post)
         except PipelineError as exc:
+            self.panel.show_errors(exc.problems)   # nothing was saved; the text stays as typed
             self._status(str(exc))
             return
+        self.panel.show_errors([])
         self._status("Draft saved.")
         self.reload()
 

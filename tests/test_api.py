@@ -11,13 +11,14 @@ import requests
 from reelay.api import ApiServer, configured_address, create_app
 from reelay.media import MediaLinks
 from reelay.models import DispatchStatus, Platform, PostStatus, Stage
-from tests.fakes import SECRETS, connect_platform, make_world
+from tests.fakes import SECRETS, connect_platform, disable_publishing, enable_publishing, make_world
 
 TOKEN = SECRETS["agent"]
 
 
 @pytest.fixture
 def api(tmp_path, monkeypatch):
+    disable_publishing(monkeypatch)  # the shipped default: only YouTube posts automatically
     world = make_world(tmp_path, monkeypatch)
     media = MediaLinks()
     world.pipeline.media = media
@@ -93,7 +94,9 @@ def test_board_shape_and_source_data(api):
     assert video["stage"] == "backlog" and video["target_platforms"] == ["youtube"]
     assert video["draft_saved"] is False and video["title"].startswith("Caption number")
     assert video["youtube_channel"]["name"] == "Lydia Livingood" and video["file_available"] is True
-    assert video["overrides"] == {"bluesky_text": None, "threads_text": None}
+    assert video["overrides"] == {"tiktok_text": None, "instagram_text": None, "bluesky_text": None,
+                                  "threads_text": None, "facebook_text": None}
+    assert video["hashtags"] is None
     assert video["source"]["stats"]["views"] == 1000 and "letting go" in video["source"]["caption"]
     assert video["source"]["uploaded_on"] == "2026-10-10" and video["publications"] == []
 
@@ -212,7 +215,8 @@ def test_schedule_validation(api):
     assert api.world.uploads.jobs == []
 
 
-def test_schedule_other_platforms_need_accounts_then_follow_due_times(api):
+def test_schedule_other_platforms_need_accounts_then_follow_due_times(api, monkeypatch):
+    enable_publishing(monkeypatch, Platform.BLUESKY, Platform.FACEBOOK)
     vid, when = api.world.rows[1], future(3)
     r = api.post(f"/v1/videos/{vid}/schedule", json={"scheduled_at": when.isoformat(), "platforms": ["bluesky"]})
     assert r.status_code == 422 and "Connect a Bluesky account" in str(r.json())
@@ -229,6 +233,7 @@ def test_schedule_other_platforms_need_accounts_then_follow_due_times(api):
 
 
 def test_threads_requires_public_url(api, monkeypatch):
+    enable_publishing(monkeypatch, Platform.THREADS)
     monkeypatch.delenv("REELAY_PUBLIC_URL", raising=False)
     connect_platform(api.world.accounts, api.world.profile.id, Platform.THREADS)
     vid = api.world.rows[0]
@@ -246,8 +251,10 @@ def test_platforms_report_presence_never_secrets(api):
     info = {p["platform"]: p for p in r.json()["platforms"]}
     assert set(info) == {"youtube", "bluesky", "threads", "facebook"}
     assert info["youtube"]["connected"] and info["youtube"]["accounts"][0]["credential_present"]
+    assert info["youtube"]["auto_post"] is True and info["youtube"]["setup_issue"] is None
     assert info["bluesky"]["connected"] and info["bluesky"]["accounts"][0]["last_verified_at"]
-    assert not info["threads"]["connected"] and "No Threads account" in info["threads"]["setup_issue"]
+    assert info["bluesky"]["auto_post"] is False and "REELAY_PUBLISH_BLUESKY=1" in info["bluesky"]["setup_issue"]
+    assert not info["threads"]["connected"] and not info["threads"]["auto_post"]
     for secret in (*SECRETS.values(), "client-secret", "refresh", "access"):
         assert secret not in r.text
     assert api.get("/v1/platforms").status_code == 400
@@ -292,3 +299,54 @@ def test_agent_token_generated_once_stored_in_keychain(tmp_path, monkeypatch, ca
     assert rotated != first and tokens.get(AGENT_TOKEN_KEY) == rotated and rotated not in caplog.text
     monkeypatch.setenv("REELAY_API_TOKEN", "from-env")
     assert accounts.agent_token() == "from-env"
+
+
+# ------------------------------------------------------------------ ticket copy + publishing flags
+def test_copy_blocks_round_trip_with_platform_limits(api):
+    vid = api.world.rows[0]
+    copy = {"tiktok_text": "letting go 🦋 #growth", "instagram_text": "Letting go. 🦋\n\n#growth #healing",
+            "facebook_text": "A note on letting go.", "hashtags": "#growth #healing #transformation"}
+    r = api.patch(f"/v1/videos/{vid}", json=copy)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert {k: body["overrides"][k] for k in ("tiktok_text", "instagram_text", "facebook_text")} == \
+        {k: copy[k] for k in ("tiktok_text", "instagram_text", "facebook_text")}
+    assert body["hashtags"] == copy["hashtags"]
+    for bad in ({"tiktok_text": "x" * 4001}, {"instagram_text": "y" * 2201},
+                {"instagram_text": " ".join(f"#tag{n}" for n in range(31))}, {"facebook_text": "z" * 63207}):
+        r = api.patch(f"/v1/videos/{vid}", json={"title": "Should not save", **bad})
+        assert r.status_code == 422, bad
+    post = api.world.store.get_post(vid)
+    assert post.title != "Should not save" and post.tiktok_text == copy["tiktok_text"]  # nothing truncated or saved
+
+
+def test_scheduling_a_disabled_platform_is_rejected(api):
+    connect_platform(api.world.accounts, api.world.profile.id, Platform.BLUESKY)
+    vid = api.world.rows[0]
+    r = api.post(f"/v1/videos/{vid}/schedule", json={"platforms": ["bluesky"]})
+    assert r.status_code == 422 and r.json()["code"] == "platform_disabled"
+    assert "not enabled" in r.json()["detail"] and "REELAY_PUBLISH_BLUESKY=1" in r.json()["detail"]
+    assert api.world.store.dispatches_for(vid) == []
+
+
+def test_disabled_targets_are_reported_as_manual(api):
+    vid = api.world.rows[0]
+    api.patch(f"/v1/videos/{vid}", json={"target_platforms": ["youtube", "bluesky", "threads"]})
+    r = api.post(f"/v1/videos/{vid}/schedule", json={"scheduled_at": future().isoformat()})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["target_platforms"] == ["youtube"] and body["manual_platforms"] == ["bluesky", "threads"]
+    assert [j["platform"] for j in body["jobs"]] == ["youtube"]
+    only_manual = api.world.rows[1]
+    api.patch(f"/v1/videos/{only_manual}", json={"target_platforms": ["threads"]})
+    r = api.post(f"/v1/videos/{only_manual}/schedule", json={})
+    assert r.status_code == 422 and r.json()["code"] == "platform_disabled"
+
+
+def test_env_override_enables_a_platform(api, monkeypatch):
+    connect_platform(api.world.accounts, api.world.profile.id, Platform.BLUESKY)
+    monkeypatch.setenv("REELAY_PUBLISH_BLUESKY", "1")
+    info = {p["platform"]: p for p in api.get("/v1/platforms", params={"profile": "Lydia Livingood"}).json()["platforms"]}
+    assert info["bluesky"]["auto_post"] is True
+    r = api.post(f"/v1/videos/{api.world.rows[0]}/schedule", json={"platforms": ["bluesky"]})
+    assert r.status_code == 200 and r.json()["jobs"][0]["platform"] == "bluesky"

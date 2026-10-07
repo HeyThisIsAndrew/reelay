@@ -263,3 +263,12 @@ def test_verify_returns_identity_only(tmp_path):
 def test_redact():
     assert redact("x access_token=abc123&y=1", ()) == "x access_token=[redacted]&y=1"
     assert redact("my secret-value here", ("secret-value",)) == "my [redacted] here"
+
+
+
+def test_facebook_uses_its_own_copy_when_set(tmp_path):
+    s = FakeSession().on("POST", "/videos", FakeResponse(200, {"id": "V2"}))
+    job, _ = make_job(tmp_path, "facebook", FB_CREDS, account_id="1029")
+    job.post.facebook_text = "Facebook-only words."
+    FacebookPublisher(s).publish(job)
+    assert s.calls[0]["data"]["description"] == "Facebook-only words."

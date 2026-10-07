@@ -31,7 +31,7 @@ from .models import Account, Dispatch, DispatchStatus, Post, PostStatus, Profile
 
 log = logging.getLogger("reelay")
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 @dataclass(frozen=True)
@@ -129,6 +129,12 @@ _MIGRATIONS: dict[int, str] = {
         SELECT video_row, 'youtube', account_id, status, updated_at, publish_at, remote_id, remote_url,
                updated_at, updated_at
         FROM posts WHERE status IN ('scheduled', 'published') AND remote_id != '';
+    """,
+    3: """
+    ALTER TABLE posts ADD COLUMN tiktok_text TEXT;
+    ALTER TABLE posts ADD COLUMN instagram_text TEXT;
+    ALTER TABLE posts ADD COLUMN facebook_text TEXT;
+    ALTER TABLE posts ADD COLUMN hashtags TEXT;
     """,
 }
 
@@ -432,17 +438,20 @@ class Store:
         values = (post.account_id, post.title, post.description, json.dumps(post.tags), post.privacy,
                   post.publish_at, int(post.made_for_kids), post.status, post.remote_id, post.remote_url,
                   post.error, post.updated_at, json.dumps(post.target_platforms), post.bluesky_text,
-                  post.threads_text)
+                  post.threads_text, post.tiktok_text, post.instagram_text, post.facebook_text, post.hashtags)
         c.execute(
             "INSERT INTO posts (account_id, title, description, tags, privacy, publish_at, made_for_kids, "
             "status, remote_id, remote_url, error, updated_at, target_platforms, bluesky_text, threads_text, "
-            "video_row) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+            "tiktok_text, instagram_text, facebook_text, hashtags, "
+            "video_row) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
             "ON CONFLICT(video_row) DO UPDATE SET account_id=excluded.account_id, title=excluded.title, "
             "description=excluded.description, tags=excluded.tags, privacy=excluded.privacy, "
             "publish_at=excluded.publish_at, made_for_kids=excluded.made_for_kids, status=excluded.status, "
             "remote_id=excluded.remote_id, remote_url=excluded.remote_url, error=excluded.error, "
             "updated_at=excluded.updated_at, target_platforms=excluded.target_platforms, "
-            "bluesky_text=excluded.bluesky_text, threads_text=excluded.threads_text", (*values, post.video_row))
+            "bluesky_text=excluded.bluesky_text, threads_text=excluded.threads_text, "
+            "tiktok_text=excluded.tiktok_text, instagram_text=excluded.instagram_text, "
+            "facebook_text=excluded.facebook_text, hashtags=excluded.hashtags", (*values, post.video_row))
         post.id = c.execute("SELECT id FROM posts WHERE video_row=?", (post.video_row,)).fetchone()["id"]
 
     def reset_interrupted_uploads(self) -> int:
@@ -464,7 +473,9 @@ class Store:
                     made_for_kids=bool(row["made_for_kids"]), status=row["status"], remote_id=row["remote_id"],
                     remote_url=row["remote_url"], error=row["error"], updated_at=row["updated_at"],
                     target_platforms=json.loads(row["target_platforms"] or '["youtube"]'),
-                    bluesky_text=row["bluesky_text"], threads_text=row["threads_text"])
+                    bluesky_text=row["bluesky_text"], threads_text=row["threads_text"],
+                    tiktok_text=row["tiktok_text"], instagram_text=row["instagram_text"],
+                    facebook_text=row["facebook_text"], hashtags=row["hashtags"])
 
     # ================================================================ dispatches
     # Per-platform delivery rows. Claiming is atomic: a row only moves from
@@ -513,16 +524,25 @@ class Store:
         row = self.conn.execute("SELECT * FROM dispatches WHERE id=?", (dispatch_id,)).fetchone()
         return self._dispatch(row) if row else None
 
-    def claim_due(self, now: str, claimed_by: str, limit: int = 10) -> list[Dispatch]:
-        """Atomically claim pending dispatches that are due (and past any retry wait)."""
+    def claim_due(self, now: str, claimed_by: str, limit: int = 10,
+                  platforms: Iterable[str] | None = None) -> list[Dispatch]:
+        """Atomically claim pending dispatches that are due (and past any retry wait).
+        `platforms` limits claiming to those platforms; others are left untouched."""
+        platform_sql, platform_args = "", []
+        if platforms is not None:
+            platforms = list(platforms)
+            if not platforms:
+                return []
+            platform_sql = f" AND platform IN ({','.join('?' * len(platforms))})"
+            platform_args = platforms
         with self.tx() as c:
             rows = c.execute(
                 "UPDATE dispatches SET status=?, claimed_at=?, claimed_by=?, updated_at=? WHERE id IN ("
                 "  SELECT id FROM dispatches WHERE status=? AND due_at <= ? "
-                "  AND (next_attempt_at IS NULL OR next_attempt_at <= ?) ORDER BY due_at, id LIMIT ?"
+                f"  AND (next_attempt_at IS NULL OR next_attempt_at <= ?){platform_sql} ORDER BY due_at, id LIMIT ?"
                 ") AND status=? RETURNING *",
-                (DispatchStatus.DISPATCHING, now, claimed_by, now, DispatchStatus.PENDING, now, now, limit,
-                 DispatchStatus.PENDING)).fetchall()
+                (DispatchStatus.DISPATCHING, now, claimed_by, now, DispatchStatus.PENDING, now, now, *platform_args,
+                 limit, DispatchStatus.PENDING)).fetchall()
         claimed = sorted((self._dispatch(r) for r in rows), key=lambda d: (d.due_at, d.id))
         self._emit_dispatch_rows(claimed)
         return claimed

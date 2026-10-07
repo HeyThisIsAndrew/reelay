@@ -12,6 +12,8 @@ A background thread (no Qt) that, every REELAY_DISPATCH_INTERVAL seconds
 3. Hands each claimed item to its platform publisher. YouTube goes to the
    app-wide UploadManager via the Pipeline (one upload at a time); its result
    arrives later through the upload completion handler.
+   Only platforms with a publisher are claimed: when a platform's posting
+   flag is off (see flags.py) its items are left pending, untouched.
 4. Records the outcome per platform: scheduled / published, a retry with
    exponential backoff for transient errors, or failed for permanent ones.
    One platform's outcome never touches another's.
@@ -131,7 +133,8 @@ class Dispatcher:
                         else "this run", d.claimed_at or "unknown time")
         handled = 0
         while not self._stop.is_set():
-            claimed = self.store.claim_due(utc_iso(self.clock()), self.instance_id, limit=5)
+            claimed = self.store.claim_due(utc_iso(self.clock()), self.instance_id, limit=5,
+                                           platforms=list(self.publishers))
             if not claimed:
                 break
             for dispatch in claimed:

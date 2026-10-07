@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from reelay.accounts import AccountService
+from reelay.flags import FLAG_PLATFORMS, env_var
 from reelay.models import Account, Platform, VideoItem
 from reelay.pipeline import Pipeline
 from reelay.store import Store
@@ -107,6 +108,17 @@ def make_world(tmp_path: Path, monkeypatch, downloaded: int = 3, fetched_only: i
         connect_platform(accounts, profile.id, platform)
     return World(store, tokens, accounts, uploads, pipeline, profile, youtube,
                  [ids[i.key] for i in items], folder, client)
+
+
+def enable_publishing(monkeypatch, *platforms: str) -> None:
+    """Turn automatic posting on the way a user would: REELAY_PUBLISH_<PLATFORM>=1."""
+    for platform in platforms or FLAG_PLATFORMS:
+        monkeypatch.setenv(env_var(platform), "1")
+
+
+def disable_publishing(monkeypatch) -> None:
+    for platform in FLAG_PLATFORMS:
+        monkeypatch.delenv(env_var(platform), raising=False)
 
 
 def connect_platform(accounts: AccountService, profile_id: int, platform: str) -> Account:

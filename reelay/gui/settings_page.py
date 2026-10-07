@@ -10,6 +10,8 @@ from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QFrame, QHBoxLayout, QLa
                                QPushButton, QScrollArea, QVBoxLayout, QWidget)
 
 from .. import APP_NAME, __version__
+from ..flags import FLAG_PLATFORMS, env_var, flag_source, setting_key
+from ..models import Platform
 from ..paths import data_dir, log_dir
 from ..store import Store
 from .theme import THEMES
@@ -74,6 +76,22 @@ class SettingsPage(QWidget):
         cl.addWidget(self.shorts)
         lay.addWidget(card)
 
+        card, cl = _card("Automatic posting")
+        cl.addWidget(_muted("Reelay is a ticket system first: each card holds copy for every platform to paste by "
+                            "hand. YouTube can always post automatically. These platforms can too, once turned on "
+                            "(and connected under Accounts). Changes take effect after restarting Reelay."))
+        self.flag_boxes: dict[str, QCheckBox] = {}
+        for platform in FLAG_PLATFORMS:
+            box = QCheckBox(f"Post to {Platform.LABELS[platform]} automatically")
+            box.toggled.connect(lambda on, p=platform: (self.store.set_setting(setting_key(p), "1" if on else "0"),
+                                                        self._refresh_flags()))
+            self.flag_boxes[platform] = box
+            cl.addWidget(box)
+        cl.addWidget(_muted("Facebook schedules natively (it holds the video until the set time). Bluesky and "
+                            "Threads are posted by Reelay at the set time, so Reelay must be running and the Mac "
+                            "awake then."))
+        lay.addWidget(card)
+
         card, cl = _card("Agent API")
         cl.addWidget(_muted("A local API that lets your AI agents read the board, apply approved edits and schedule "
                             "posts. Every request needs the token below (sent as “Authorization: Bearer …”)."))
@@ -124,7 +142,26 @@ class SettingsPage(QWidget):
         self.shorts.blockSignals(True)
         self.shorts.setChecked(self.store.get_setting("add_shorts", "1") == "1")
         self.shorts.blockSignals(False)
+        self._refresh_flags()
         self._refresh_api()
+
+    def _refresh_flags(self) -> None:
+        running = self.services.enabled if self.services else frozenset()
+        for platform, box in self.flag_boxes.items():
+            enabled, source = flag_source(platform, self.store)
+            box.blockSignals(True)
+            box.setChecked(enabled)
+            box.blockSignals(False)
+            box.setEnabled(source != "env")
+            tip = (f"Set by {env_var(platform)}" if source == "env" else
+                   "Restart Reelay to apply" if enabled != (platform in running) else "")
+            box.setToolTip(tip)
+            label = f"Post to {Platform.LABELS[platform]} automatically"
+            if source == "env":
+                label += f"  ({env_var(platform)}={'1' if enabled else '0'})"
+            elif enabled != (platform in running):
+                label += "  (restart to apply)"
+            box.setText(label)
 
     def _refresh_api(self) -> None:
         api = self.services.api if self.services else None

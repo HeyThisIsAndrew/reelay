@@ -61,5 +61,6 @@ def test_contract_covers_every_endpoint_with_auth_and_errors():
     assert not any(p.startswith("/media") for p in contract["paths"])  # expiring links aren't agent tools
     patch = contract["components"]["schemas"]["VideoPatch"]
     assert patch["additionalProperties"] is False
-    assert set(patch["properties"]) == {"title", "description", "tags", "target_platforms", "bluesky_text",
-                                        "threads_text"}
+    assert set(patch["properties"]) == {"title", "description", "tags", "target_platforms", "tiktok_text",
+                                        "instagram_text", "bluesky_text", "threads_text", "facebook_text",
+                                        "hashtags"}
