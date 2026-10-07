@@ -344,6 +344,32 @@ class YouTubeClient:
         statuses = self.video_statuses(ids)
         return [{"id": vid, **statuses[vid]} for vid in ids if vid in statuses]
 
+    def list_channel_videos(self, limit: int | None = None) -> list[dict]:
+        """Every video on the connected channel (newest first), including private,
+        unlisted and scheduled ones the owner can see. Paginates the uploads
+        playlist 50 at a time; costs about 2 quota units per 50 videos."""
+        playlist = self.my_channel()["uploads_playlist"]
+        if not playlist:
+            return []
+        ids: list[str] = []
+        page_token = None
+        while True:
+            params = {"part": "contentDetails", "playlistId": playlist, "maxResults": 50}
+            if page_token:
+                params["pageToken"] = page_token
+            data = self._get("playlistItems", params)
+            ids += [i["contentDetails"]["videoId"] for i in data.get("items", [])]
+            page_token = data.get("nextPageToken")
+            if not page_token or (limit and len(ids) >= limit):
+                break
+        ids = ids[:limit] if limit else ids
+        videos: dict[str, dict] = {}
+        for i in range(0, len(ids), 50):
+            data = self._get("videos", {"part": "snippet,contentDetails,statistics,status",
+                                        "id": ",".join(ids[i:i + 50])})
+            videos.update({v["id"]: v for v in data.get("items", [])})
+        return [videos[vid] for vid in ids if vid in videos]
+
     # ---------------------------------------------------------------- upload
     def upload(self, path: Path, resource: dict,
                on_progress: Callable[[int, int], None] | None = None,

@@ -63,7 +63,7 @@ class MainWindow(QMainWindow):
         self.thumbs = ThumbnailCache(cache_dir() / "covers", self)
         self.profile: Profile | None = None
 
-        self.download = DownloadPage(store, self.thumbs)
+        self.download = DownloadPage(store, self.thumbs, services.accounts)
         self.board = BoardPage(self.pipeline, self.uploads, self.thumbs)
         self.accounts_page = AccountsPage(store, self.accounts)
         self.settings_page = SettingsPage(store, services)
@@ -75,6 +75,7 @@ class MainWindow(QMainWindow):
         self.download.videosChanged.connect(self.board.reload)
         self.download.busyChanged.connect(lambda _b: self._sync_switch_enabled())
         self.board.openAccounts.connect(lambda: self.go("accounts"))
+        self.download.openAccounts.connect(lambda: self.go("accounts"))
         self.settings_page.themeChosen.connect(self.set_theme)
 
         geo = QSettings().value("geometry")

@@ -6,8 +6,12 @@ It's a native desktop app for macOS (Windows builds included) in a monotone Ligh
 
 ## What it does
 
-**Download**
-- Paste a profile link and click **Fetch Videos** to see every video first: cover, date, hook, length and views.
+**Download (the way in)**
+- **Download from** lists this profile's sources. Click **Fetch** on one and it lists that source's videos; there's nothing to paste again.
+  - **Connected YouTube channels** (from Accounts) list their own videos through the YouTube Data API, with no link needed. Private and scheduled videos are shown but left unticked: downloading them needs **Login cookies** from a browser signed into that channel.
+  - **Saved sources** are any TikTok, Instagram or YouTube profile links you keep. Add one with **Save as Source…** next to the paste field. Mark it as one of the profile's own accounts, rename it, or remove it from its **⋯** menu. Saving the same link twice is fine: it's shown once.
+- Or paste any public profile link, yours or someone else's, and click **Fetch Videos** to see every video first: cover, date, hook, length and views.
+- Downloading pulls videos **in**. Posting pushes videos **out** to the accounts you connect under **Accounts**, from the Board.
 - Choose what to download: tick boxes, **Include Only the Newest…**, search, or press Space on selected rows.
 - Name videos with a template (`{platform}_{date}_{id}` by default, or `{date}_{custom}` and others). Use **Auto-Name** to fill custom names from captions, or type them yourself.
 - TikTok downloads are always the clean, watermark-free stream with the creator's own audio. The post's separate "sound" track is never merged in.
@@ -149,6 +153,8 @@ For a stable address, create a named tunnel in the Cloudflare dashboard. Every `
 | `GET /v1/board?profile=…&stage=…&limit=…&offset=…` | A profile's board in order, with title, description, tags, target platforms, overrides, channel, visibility, schedule, file path, per-platform status, and the original caption and stats. `profile` is the sidebar name (not case-sensitive). |
 | `PATCH /v1/videos/{id}` | Partial edit of the ticket's copy: `title`, `description`, `tags`, `target_platforms`, `tiktok_text`, `instagram_text`, `bluesky_text`, `threads_text`, `facebook_text` and `hashtags`. Everything is checked before anything is saved. Over-limit text is rejected, never cut short. |
 | `POST /v1/videos/{id}/schedule` | Schedules automatic posting through the same pipeline as the Board's button. Optional `scheduled_at` (ISO 8601 with a timezone, at least 10 minutes ahead) and `platforms` (each must be enabled). Returns the queued jobs and `manual_platforms`. |
+| `GET /v1/sources?profile=…` | The profile's download sources: connected YouTube channels (`kind: "account"`, with an `account` reference) and saved profile links (`kind: "saved"`, with `url`, `mine`, `last_fetched_at`). Duplicates are listed as stored. |
+| `POST /v1/sources?profile=…` | Saves a TikTok, Instagram or YouTube profile link: `{"url": "…", "name": "…" (optional), "mine": false}`. Returns `201` with the new source; `422` for unsupported links. |
 | `GET /v1/platforms?profile=…` | Per platform: `auto_post` (whether automatic posting is on), whether a credential is in the keychain (`connected`), account names, and `last_verified_at`. "Connected" means a credential is present, not that it worked recently. Secrets are never returned. |
 
 Errors always come back as `{"detail": "…", "code": "…", "problems": […]}`:
@@ -289,7 +295,7 @@ Secrets are only ever in the system keychain (macOS Keychain or Windows Credenti
 ## Tests
 
 ```bash
-python -m pytest                              # 136 tests: engine, database, pipeline, agent API, dispatcher,
+python -m pytest                              # 147 tests: engine, database, pipeline, agent API, dispatcher,
                                               #   platform publishers, YouTube client, headless GUI
 python -m pytest --run-network -m network     # optional live checks against TikTok
 python run_app.py --self-test                 # environment check (also works on packaged builds)

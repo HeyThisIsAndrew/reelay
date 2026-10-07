@@ -50,12 +50,14 @@ def test_contract_covers_every_endpoint_with_auth_and_errors():
     expected = {("/v1/board", "get"): {"200", "400", "401", "422"},
                 ("/v1/videos/{video_id}", "patch"): {"200", "401", "404", "409", "422"},
                 ("/v1/videos/{video_id}/schedule", "post"): {"200", "401", "404", "409", "422"},
-                ("/v1/platforms", "get"): {"200", "400", "401", "422"}}
+                ("/v1/platforms", "get"): {"200", "400", "401", "422"},
+                ("/v1/sources", "get"): {"200", "400", "401", "422"},
+                ("/v1/sources", "post"): {"201", "400", "401", "422"}}
     for (path, method), statuses in expected.items():
         op = contract["paths"][path][method]
         assert set(op["responses"]) == statuses, (path, method)
         assert op["security"] == [{"HTTPBearer": []}] and op["operationId"]
-        for status in statuses - {"200"}:
+        for status in statuses - {"200", "201"}:
             ref = op["responses"][status]["content"]["application/json"]["schema"]["$ref"]
             assert ref.endswith("/ErrorBody")
     assert not any(p.startswith("/media") for p in contract["paths"])  # expiring links aren't agent tools

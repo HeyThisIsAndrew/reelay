@@ -88,7 +88,8 @@ def friendly_error(exc: BaseException, url: str = "") -> str:
         return ("Instagram requires you to be logged in. Choose your browser under "
                 "'Login cookies' (and be signed in to Instagram there), then try again.")
     if "private" in low:
-        return "This video or account is private."
+        return ("This video or account is private. For your own private videos, set Login cookies to a browser "
+                "signed into that account.")
     if "ip address is blocked" in low or "http error 403" in low:
         return "The platform blocked the request (the video may be deleted, private, or region-locked)."
     if "http error 429" in low or "too many requests" in low:

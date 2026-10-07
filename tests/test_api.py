@@ -350,3 +350,36 @@ def test_env_override_enables_a_platform(api, monkeypatch):
     assert info["bluesky"]["auto_post"] is True
     r = api.post(f"/v1/videos/{api.world.rows[0]}/schedule", json={"platforms": ["bluesky"]})
     assert r.status_code == 200 and r.json()["jobs"][0]["platform"] == "bluesky"
+
+
+# ------------------------------------------------------------------ download sources
+def test_sources_list_and_add(api):
+    from reelay.models import Account
+    base = "/v1/sources?profile=Lydia%20Livingood"
+    assert requests.get(api.base + base, timeout=10).status_code == 401
+    assert api.get("/v1/sources").status_code == 400
+    body = api.get(base).json()
+    assert body["profile"]["name"] == "Lydia Livingood"
+    channel = body["sources"][0]
+    assert channel["kind"] == "account" and channel["platform"] == "youtube" and channel["id"] is None
+    assert channel["account"]["name"] == "Lydia Livingood" and channel["mine"] is True
+
+    r = api.post(base, json={"url": "https://www.tiktok.com/@livingood.lifestyle"})
+    assert r.status_code == 201, r.text
+    created = r.json()
+    assert created["kind"] == "saved" and created["platform"] == "tiktok" and created["id"]
+    assert created["name"] == "@livingood.lifestyle on TikTok" and created["mine"] is False
+    again = api.post(base, json={"url": "tiktok.com/@livingood.lifestyle/", "name": "Lydia's TikTok", "mine": True})
+    assert again.status_code == 201  # duplicates are allowed
+    listed = api.get(base).json()["sources"]
+    assert [s["kind"] for s in listed].count("saved") == 2  # API lists them as stored
+
+    for bad in ({"url": "https://vimeo.com/x"}, {"url": ""}, {"url": TIKTOK_URL, "extra": 1},
+                {"url": TIKTOK_URL, "name": "n" * 81}):
+        assert api.post(base, json=bad).status_code == 422, bad
+    assert api.post("/v1/sources?profile=Nobody", json={"url": TIKTOK_URL}).status_code == 400
+    for secret in SECRETS.values():
+        assert secret not in api.get(base).text
+
+
+TIKTOK_URL = "https://www.tiktok.com/@someone"

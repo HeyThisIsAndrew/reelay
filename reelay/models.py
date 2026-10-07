@@ -94,6 +94,7 @@ class VideoItem:
     format_id: str = ""
     watermark_free: bool | None = None
     downloaded_at: str = ""
+    availability: str = ""         # YouTube listing via the Data API: public | unlisted | private | scheduled
     # runtime-only
     checked: bool = True
     status: str = Status.NEW
@@ -307,6 +308,19 @@ class Dispatch:
     id: int | None = None
     created_at: str = ""
     updated_at: str = ""
+
+
+@dataclass
+class Source:
+    """A saved place to download from (a profile URL), kept per profile."""
+    profile_id: int
+    name: str
+    platform: str                  # "tiktok" | "instagram" | "youtube"
+    url: str
+    mine: bool = False             # one of this profile's own accounts
+    id: int | None = None
+    last_fetched_at: str | None = None
+    created_at: str = ""
 
 
 @dataclass

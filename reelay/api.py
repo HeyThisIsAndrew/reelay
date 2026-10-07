@@ -55,6 +55,7 @@ PlatformName = Literal["youtube", "bluesky", "threads", "facebook"]
 StageName = Literal["backlog", "staging", "scheduled", "published"]
 PublicationStatus = Literal["pending", "dispatching", "scheduled", "published", "failed"]
 Visibility = Literal["public", "unlisted", "private"]
+SourcePlatform = Literal["tiktok", "instagram", "youtube"]
 
 # PipelineError code → HTTP status
 STATUS_FOR_CODE = {
@@ -253,6 +254,41 @@ class PlatformInfo(BaseModel):
 class PlatformsResponse(BaseModel):
     profile: ProfileRef
     platforms: list[PlatformInfo]
+
+
+class SourceAccount(BaseModel):
+    id: int = Field(description="Reelay's id for the connected account.")
+    platform: Literal["youtube"]
+    name: str
+    handle: str | None = None
+
+
+class SourceOut(BaseModel):
+    id: int | None = Field(None, description="Saved source id; null for a connected account.")
+    kind: Literal["saved", "account"] = Field(description="saved = a profile URL saved in Reelay (downloaded via "
+                                                          "the link). account = a connected YouTube channel, listed "
+                                                          "through the YouTube Data API (no link needed).")
+    name: str
+    platform: SourcePlatform
+    url: str | None = Field(None, description="Profile URL (for accounts: the channel's URL, for reference).")
+    mine: bool = Field(description="One of this profile's own accounts.")
+    account: SourceAccount | None = Field(None, description="The connected account behind an account source.")
+    last_fetched_at: datetime | None = Field(None, description="Last time this saved source was fetched.")
+
+
+class SourcesResponse(BaseModel):
+    profile: ProfileRef
+    sources: list[SourceOut] = Field(description="Every source: connected YouTube channels first, then saved "
+                                                 "sources. Duplicate URLs are listed as stored (not merged).")
+
+
+class SourceCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    url: str = Field(min_length=1, description="Public TikTok, Instagram or YouTube profile URL.")
+    name: str | None = Field(None, max_length=80, description="Display name. Defaults to the handle in the URL, "
+                                                              "e.g. \"@livingood.lifestyle on TikTok\".")
+    mine: bool = Field(False, description="Mark as one of this profile's own accounts.")
 
 
 # ====================================================================== errors
@@ -473,6 +509,47 @@ def create_app(store: Store, pipeline: Pipeline, accounts: AccountService, token
             infos.append(PlatformInfo(platform=platform, connected=any(e.credential_present for e in entries),
                                       auto_post=auto_post, accounts=entries, setup_issue=issue))
         return PlatformsResponse(profile=ProfileRef(id=prof.id, name=prof.name), platforms=infos)
+
+    # ---------------------------------------------------------------- download sources
+    from .sources import SourceError, SourceService
+    sources = SourceService(store, accounts)
+
+    def to_source(view) -> SourceOut:
+        acc = view.account
+        return SourceOut(id=view.source_id, kind=view.kind, name=view.name, platform=view.platform, url=view.url,
+                         mine=view.mine,
+                         account=SourceAccount(id=acc.id, platform="youtube", name=acc.display_name,
+                                               handle=acc.handle or None) if acc else None,
+                         last_fetched_at=parse_utc(view.last_fetched_at) if view.kind == "saved" else None)
+
+    @app.get("/v1/sources", response_model=SourcesResponse, operation_id="getSources",
+             summary="List a profile's download sources", tags=["sources"], dependencies=[Depends(require_token)],
+             responses={k: ERRORS[k] for k in (400, 401, 422)})
+    def get_sources(profile: str = Query(..., description="Profile name exactly as shown in Reelay's sidebar.")
+                    ) -> SourcesResponse:
+        """Where this profile's videos are downloaded from: connected YouTube channels (listed through the
+        YouTube Data API) and saved TikTok / Instagram / YouTube profile URLs. Downloading pulls videos in;
+        publishing out is separate (see /v1/platforms)."""
+        prof = find_profile(profile)
+        return SourcesResponse(profile=ProfileRef(id=prof.id, name=prof.name),
+                               sources=[to_source(v) for v in sources.all_sources(prof.id)])
+
+    @app.post("/v1/sources", response_model=SourceOut, status_code=201, operation_id="addSource",
+              summary="Save a download source for a profile", tags=["sources"],
+              dependencies=[Depends(require_token)], responses={k: ERRORS[k] for k in (400, 401, 422)})
+    def add_source(body: SourceCreate,
+                   profile: str = Query(..., description="Profile name exactly as shown in Reelay's sidebar.")
+                   ) -> SourceOut:
+        """Saves a TikTok, Instagram or YouTube profile URL so it can be fetched in one click on the Download
+        page. Saving the same URL twice is allowed (the Download page shows it once)."""
+        prof = find_profile(profile)
+        with store.origin("api"):
+            try:
+                saved = sources.add(prof.id, body.url, body.name, body.mine)
+            except SourceError as exc:
+                raise ApiError(422, str(exc), "invalid_source") from None
+        view = next(v for v in sources.all_sources(prof.id) if v.source_id == saved.id)
+        return to_source(view)
 
     # ---------------------------------------------------------------- media links (Threads)
     @app.api_route("/media/{token}", methods=["GET", "HEAD"], include_in_schema=False)
