@@ -221,13 +221,11 @@ def test_sync_publishes_and_flags_stuck_private_videos(env):
     for row, remote in ((rows[0], "A"), (rows[1], "B")):
         pipeline.start_upload(_ready_post(env, row))
         uploads.finish(row, True, {"id": remote})
-    past = store.get_post(rows[1])
-    past.publish_at = "2026-01-01T00:00:00Z"
-    store.save_post(past)
     accounts.client.statuses = {"A": {"privacy": "public"}, "B": {"privacy": "private", "publish_at": None}}
     plan = pipeline.sync_plan(profile.id)
     assert plan.jobs and sorted(plan.jobs[0][1]) == ["A", "B"]
-    assert pipeline.apply_sync(plan, pipeline.fetch_remote(plan)) == 1
+    after_publish_time = datetime.now(timezone.utc) + timedelta(days=4)  # both were due in 3 days
+    assert pipeline.apply_sync(plan, pipeline.fetch_remote(plan), now=after_publish_time) == 1
     assert store.get_video(rows[0]).stage == Stage.PUBLISHED
     assert "audit" in store.get_post(rows[1]).error
 
@@ -307,6 +305,7 @@ def test_upload_manager_cancel_queued_job(qtbot):
     from reelay.uploads import CANCELLED, UploadManager
     manager = UploadManager(worker_factory=FakeWorker)
     manager._worker = object.__new__(type("Busy", (), {"row_id": 1, "cancel": lambda self: None}))  # occupy
+    manager._kick.disconnect(manager._start_next)  # keep the fake "busy" worker in place
     finished = []
     manager.finished.connect(lambda row, ok, msg: finished.append((row, ok, msg)))
     manager.enqueue(2, "ok", Path("b.mp4"), {})

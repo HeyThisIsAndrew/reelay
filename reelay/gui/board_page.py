@@ -20,6 +20,7 @@ from ..store import Change
 from ..text import clock, local_text
 from ..uploads import UploadManager
 from . import theme
+from .bridge import change_bridge
 from .post_panel import PostPanel
 from .table_model import fmt_duration, short_date
 from .thumbnails import ThumbnailCache
@@ -185,6 +186,12 @@ class CardDelegate(QStyledItemDelegate):
     @staticmethod
     def _status(card: Card) -> tuple[str, str]:
         p, post, item = theme.P, card.post, card.row.item
+        if len(card.dispatches) > 1 and not (post and post.status == PostStatus.UPLOADING):
+            marks = {"pending": "⏱", "dispatching": "…", "scheduled": "⏱", "published": "✓", "failed": "⚠"}
+            short = {"youtube": "YT", "bluesky": "Bsky", "threads": "Thr", "facebook": "FB"}
+            text = "  ".join(f"{short.get(d.platform, d.platform)} {marks.get(d.status, '?')}" for d in card.dispatches)
+            failed = any(d.status == "failed" for d in card.dispatches)
+            return text, p.danger if failed else (p.success if post and post.status == PostStatus.PUBLISHED else p.text)
         if post and post.status == PostStatus.UPLOADING:
             return ("Waiting to upload…" if card.queued else f"Uploading {(card.progress or 0):.0f}%"), p.text
         if post and post.status == PostStatus.SCHEDULED:
@@ -279,7 +286,8 @@ class BoardPage(QWidget):
         self._closed = False
         self._reload_timer = QTimer(self, singleShot=True, interval=30, timeout=self.reload)
         self._build_ui()
-        self._unsubscribe = self.store.subscribe(self._on_store_change)
+        self._bridge = change_bridge(self.store)
+        self._bridge.changed.connect(self._on_store_change)
         uploads.progress.connect(self._on_upload_progress)
         uploads.finished.connect(lambda _row, _ok, message: self._status(message))
         uploads.changed.connect(self._schedule_reload)
@@ -344,7 +352,7 @@ class BoardPage(QWidget):
         self.reload()
 
     def _on_store_change(self, change: Change) -> None:
-        if change.entity in ("video", "post", "account") and self.profile and \
+        if change.entity in ("video", "post", "account", "dispatch") and self.profile and \
                 change.profile_id in (None, self.profile.id):
             self._schedule_reload()
 
@@ -509,7 +517,9 @@ class BoardPage(QWidget):
         self.reload()
 
     def shutdown(self) -> None:
-        self._unsubscribe()
+        if getattr(self, "_bridge", None) is not None:
+            self._bridge.changed.disconnect(self._on_store_change)
+            self._bridge = None
         self._closed = True
         self._reload_timer.stop()
         if self.sync_worker:

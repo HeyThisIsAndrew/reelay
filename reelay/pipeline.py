@@ -1,36 +1,59 @@
 """The content pipeline: every rule for moving videos through
-Backlog → Staging → Scheduled → Published, editing posts, uploading and syncing.
+Backlog → Staging → Scheduled → Published, editing posts, scheduling to
+YouTube / Bluesky / Threads / Facebook, and syncing.
 
-One place for the rules, used by the desktop Board and (Phase 2) the
-companion server. No Qt and no dialogs here: callers confirm with the user
-first, then call in. Problems come back as `PipelineError`s with a stable
-`code` the companion API can return.
+One place for the rules, used by the desktop Board, the agent API and the
+dispatcher. No Qt and no dialogs here: callers confirm with the user first,
+then call in. Problems come back as `PipelineError`s with a stable `code`
+that the API maps to HTTP statuses.
+
+Scheduling model (per platform, tracked as Dispatch rows):
+- YouTube and Facebook schedule natively: Reelay hands the video over right
+  away with the publish time, and the platform makes it live on its own.
+  YouTube goes through the app-wide UploadManager (one upload at a time).
+- Bluesky and Threads have no native scheduling: the dispatcher posts them
+  when they're due.
+A post's own status and the card's stage summarise its platforms' statuses;
+a failure on one platform never changes another platform's status.
 """
 
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, replace
-from datetime import datetime, timezone
+import time
+import uuid
+from dataclasses import dataclass, field, replace
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Protocol
+from typing import Callable, Protocol
 
 from .accounts import YOUTUBE, AccountService
 from .library import Library
-from .models import Account, Post, PostStatus, Profile, Stage, VideoItem, VideoRow
-from .publishing import (build_resource, default_post, humanize_name, reconcile, stage_after_upload,
-                         validate_post)
+from .media import MediaLinks, public_base_url
+from .models import (Account, Dispatch, DispatchStatus, Platform, Post, PostStatus, Profile, Stage, VideoItem,
+                     VideoRow)
+from .platform_text import resolve_text, text_problem
+from .publishers.base import PermanentError, PublishJob
+from .publishing import (DESCRIPTION_MAX_BYTES, MIN_SCHEDULE_LEAD, TAGS_MAX_CHARS, TITLE_MAX, build_resource,
+                         default_post, humanize_name, parse_utc, reconcile, validate_post)
 from .store import Store
 from .text import local_text, short_title
 from .youtube import YouTubeError, watch_url
 
 log = logging.getLogger("reelay")
 
-LOCKED_MESSAGE = "Scheduled and published videos are managed on YouTube; they can't be moved back."
+LOCKED_MESSAGE = "Scheduled and published videos are managed on their platforms; they can't be moved back."
+EDITABLE_FIELDS = ("title", "description", "tags", "target_platforms", "bluesky_text", "threads_text")
+FACEBOOK_MAX_LEAD = timedelta(days=182)
+THREADS_MAX_SECONDS = 300
+HEARTBEAT_SECONDS = 30
 
 
 class PipelineError(Exception):
-    """A request the pipeline refuses. `code` is stable; `message` is for people."""
+    """A request the pipeline refuses. `code` is stable; `message` is for people.
+
+    Codes: not_found, invalid_post, invalid_field, invalid_stage, invalid_time,
+    invalid_platform, locked, needs_upload, already_scheduled, already_uploading."""
 
     def __init__(self, message: str, code: str = "invalid", problems: list[str] | None = None):
         super().__init__(message)
@@ -55,6 +78,7 @@ class Card:
     account: Account | None = None
     progress: float | None = None   # upload percent while uploading
     queued: bool = False
+    dispatches: list[Dispatch] = field(default_factory=list)
 
     @property
     def id(self) -> int:
@@ -76,14 +100,31 @@ class SyncPlan:
     posts: list[Post]
     jobs: list[tuple[object, list[str]]]   # (YouTube client, remote video ids)
     problems: list[str]
+    dispatches: dict[str, Dispatch] = field(default_factory=dict)   # remote id → YouTube dispatch
+
+
+@dataclass
+class ScheduleResult:
+    post: Post
+    dispatches: list[Dispatch]
+
+
+def utc_iso(dt: datetime) -> str:
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 class Pipeline:
-    def __init__(self, store: Store, accounts: AccountService, uploads: UploadQueue):
+    def __init__(self, store: Store, accounts: AccountService, uploads: UploadQueue,
+                 instance_id: str | None = None, media: MediaLinks | None = None):
         self.store = store
         self.accounts = accounts
         self.uploads = uploads
+        self.media = media or MediaLinks()
+        self.instance_id = instance_id or uuid.uuid4().hex
+        self.on_scheduled: Callable[[], None] | None = None   # e.g. wake the dispatcher
+        self._last_heartbeat: dict[int, float] = {}
         uploads.completion_handler = self._on_upload_finished
+        uploads.progress_handler = self._on_upload_progress
 
     # ================================================================ reads
     def _row(self, row_id: int) -> VideoRow:
@@ -107,6 +148,14 @@ class Pipeline:
     def video_path(self, row: VideoRow) -> Path | None:
         return row.item.path(self._profile(row.profile_id).output_folder)
 
+    def post_or_default(self, row: VideoRow) -> tuple[Post, bool]:
+        """(post, saved): the stored post, or the pre-filled draft it would get."""
+        post = self.store.get_post(row.id)
+        if post is not None:
+            return post, True
+        accounts = self.youtube_accounts(row.profile_id)
+        return default_post(row.id, row.item, accounts[0].id if accounts else None), False
+
     def board(self, profile_id: int) -> dict[str, list[Card]]:
         """Cards per stage, in board order. Fetched-but-not-downloaded videos are
         left out of the Backlog (they live on the Download page)."""
@@ -128,22 +177,19 @@ class Pipeline:
     def _card(self, row: VideoRow, accounts: dict[int, Account]) -> Card:
         post = self.store.get_post(row.id)
         return Card(row=row, post=post, account=accounts.get(post.account_id) if post else None,
-                    progress=self.uploads.progress_of(row.id), queued=self.uploads.is_queued(row.id))
+                    progress=self.uploads.progress_of(row.id), queued=self.uploads.is_queued(row.id),
+                    dispatches=self.store.dispatches_for(row.id))
 
     # ================================================================ moving cards
     def ensure_post(self, row_id: int) -> Post:
         """The video's post, creating a pre-filled draft if it has none."""
-        post = self.store.get_post(row_id)
-        if post is None:
-            row = self._row(row_id)
-            accounts = self.youtube_accounts(row.profile_id)
-            post = self.store.save_post(default_post(row_id, row.item, accounts[0].id if accounts else None))
-        return post
+        post, saved = self.post_or_default(self._row(row_id))
+        return post if saved else self.store.save_post(post)
 
     def move(self, row_id: int, target: str, position: int | None = None) -> None:
         """Move a card to another column, or reorder it within its column.
 
-        Moving to Scheduled isn't a move: it's an upload (see start_upload).
+        Moving to Scheduled isn't a move: it's scheduling (see schedule()).
         Moving to Published means "posted outside Reelay"; confirm first."""
         if target not in Stage.ALL:
             raise PipelineError(f"Unknown stage “{target}”.", "invalid_stage")
@@ -156,7 +202,7 @@ class Pipeline:
         if row.stage in (Stage.SCHEDULED, Stage.PUBLISHED) or (post and post.status == PostStatus.UPLOADING):
             raise PipelineError(LOCKED_MESSAGE, "locked")
         if target == Stage.SCHEDULED:
-            raise PipelineError("Upload the video to schedule it.", "needs_upload")
+            raise PipelineError("Schedule the video to move it to Scheduled.", "needs_upload")
         if target == Stage.STAGING:
             self.ensure_post(row_id)
         self.store.set_stage([row_id], target)
@@ -175,7 +221,7 @@ class Pipeline:
             self.store.set_stage([row_id], Stage.STAGING)
         return post
 
-    # ================================================================ posts
+    # ================================================================ editing posts
     def save_post(self, post: Post) -> Post:
         """Persist edits without changing status or stage."""
         self._row(post.video_row)
@@ -188,91 +234,343 @@ class Pipeline:
             self.store.set_stage([post.video_row], Stage.STAGING)
         return post
 
+    def update_metadata(self, row_id: int, changes: dict) -> Post:
+        """Apply a partial edit (title, description, tags, target_platforms,
+        bluesky_text, threads_text). Everything is validated before anything is
+        written; one write per call. Raises PipelineError."""
+        unknown = sorted(set(changes) - set(EDITABLE_FIELDS))
+        if unknown:
+            raise PipelineError(f"These fields can't be edited: {', '.join(unknown)}.", "invalid_field")
+        row = self._row(row_id)
+        if any(d.status in DispatchStatus.ACTIVE + (DispatchStatus.PUBLISHED,)
+               for d in self.store.dispatches_for(row_id)) or row.stage == Stage.PUBLISHED:
+            raise PipelineError("This video is already scheduled or published; its details were sent to the "
+                                "platforms and can't be changed here.", "locked")
+        post, _saved = self.post_or_default(row)
+        problems = metadata_problems(changes)
+        if problems:
+            raise PipelineError("Those changes aren't valid.", "invalid_post", problems)
+        updates = dict(changes)
+        if "tags" in updates:
+            updates["tags"] = [t.strip().lstrip("#") for t in updates["tags"]]
+        if "target_platforms" in updates:
+            updates["target_platforms"] = list(dict.fromkeys(updates["target_platforms"]))
+        return self.store.save_post(replace(post, **updates))
+
+    # ================================================================ scheduling
     def upload_problems(self, post: Post) -> list[str]:
-        """Everything stopping this post from uploading, in plain words."""
+        """Everything stopping this post from being scheduled to its target platforms."""
         row = self._row(post.video_row)
-        problems = validate_post(post, self.video_path(row))
-        current = self.store.get_post(post.video_row)
-        if current is not None and current.status in (PostStatus.UPLOADING, PostStatus.SCHEDULED,
-                                                      PostStatus.PUBLISHED):
-            problems.insert(0, "This video has already been uploaded.")
-        if post.account_id is not None:
-            account = self.store.get_account(post.account_id)
+        problems = []
+        busy = self._busy_platforms(row, post.target_platforms)
+        if busy:
+            problems.append(f"Already scheduled or published on {', '.join(Platform.LABELS[p] for p in busy)}.")
+        return problems + self.schedule_problems(post, post.target_platforms, row)
+
+    def schedule_problems(self, post: Post, platforms: list[str], row: VideoRow | None = None,
+                          now: datetime | None = None) -> list[str]:
+        now = now or datetime.now(timezone.utc)
+        row = row or self._row(post.video_row)
+        path = self.video_path(row)
+        problems: list[str] = []
+
+        def add(message: str) -> None:
+            if message not in problems:
+                problems.append(message)
+
+        if not platforms:
+            add("Choose at least one platform.")
+        for platform in platforms:
+            if platform not in Platform.ALL:
+                add(f"Unknown platform “{platform}”.")
+        if path is None or not path.is_file():
+            add("The video file is missing. Download it again first.")
+        when = parse_utc(post.publish_at)
+        if post.publish_at and when is None:
+            add("The scheduled time isn't valid.")
+        elif when is not None and when < now + MIN_SCHEDULE_LEAD:
+            add("Schedule at least 10 minutes from now.")
+
+        for platform in platforms:
+            label = Platform.LABELS.get(platform, platform)
+            if platform == Platform.YOUTUBE:
+                for problem in validate_post(post, path, now):
+                    add(problem)
+                if post.account_id is not None:
+                    account = self.store.get_account(post.account_id)
+                    if account is None:
+                        add("That YouTube channel is no longer connected.")
+                    else:
+                        try:
+                            self.accounts.client_for(account)
+                        except YouTubeError as exc:
+                            add(str(exc))
+                continue
+            if platform not in Platform.ALL:
+                continue
+            account = self.accounts.account_for(row.profile_id, platform)
             if account is None:
-                problems.append("That YouTube channel is no longer connected.")
-            else:
+                add(f"Connect a {label} account in Accounts first.")
+            elif not self.accounts.has_credentials(account):
+                add(f"{label}: the sign-in is missing from the keychain. Reconnect it in Accounts.")
+            if platform in (Platform.BLUESKY, Platform.THREADS):
                 try:
-                    self.accounts.client_for(account)
-                except YouTubeError as exc:
-                    problems.append(str(exc))
+                    resolve_text(post, platform)
+                except ValueError as exc:
+                    add(str(exc))
+            if platform == Platform.THREADS:
+                if not public_base_url(self.store):
+                    add("Threads needs a public link to the video: set REELAY_PUBLIC_URL (or Settings → Public "
+                        "URL) to your Cloudflare Tunnel address.")
+                if row.item.duration and row.item.duration > THREADS_MAX_SECONDS:
+                    add("Threads videos can be at most 5 minutes long.")
+            if platform == Platform.FACEBOOK:
+                if not post.title.strip() and not post.description.strip():
+                    add("Facebook needs a title or description.")
+                if when is not None and when > now + FACEBOOK_MAX_LEAD:
+                    add("Facebook can only schedule up to 6 months ahead.")
         return problems
+
+    def _busy_platforms(self, row: VideoRow, platforms: list[str]) -> list[str]:
+        existing = {d.platform: d for d in self.store.dispatches_for(row.id)}
+        return [p for p in platforms if p in existing and
+                existing[p].status in DispatchStatus.ACTIVE + (DispatchStatus.PUBLISHED,)]
 
     def describe_upload(self, post: Post) -> str:
         """One line for a confirmation prompt."""
-        account = self.store.get_account(post.account_id) if post.account_id else None
+        names = []
+        for platform in post.target_platforms:
+            if platform == Platform.YOUTUBE:
+                account = self.store.get_account(post.account_id) if post.account_id else None
+                names.append(f"YouTube ({account.display_name})" if account else "YouTube")
+            else:
+                names.append(Platform.LABELS.get(platform, platform))
         when = (f"goes live {local_text(post.publish_at)}" if post.publish_at
-                else f"is published immediately as {post.privacy.capitalize()}")
-        return f"Upload “{post.title}” to {account.display_name if account else 'YouTube'}? It {when}."
+                else f"is published immediately{' as ' + post.privacy.capitalize() if Platform.YOUTUBE in post.target_platforms else ''}")
+        return f"Post “{post.title}” to {', '.join(names)}? It {when}."
+
+    def schedule(self, row_id: int, scheduled_at: str | datetime | None = None, platforms: list[str] | None = None,
+                 add_shorts: bool | None = None, post: Post | None = None,
+                 now: datetime | None = None) -> ScheduleResult:
+        """Schedule (or publish now) a video to its target platforms.
+
+        scheduled_at: timezone-aware time; omitted → the card's saved time if it
+        has one, else publish as soon as possible. platforms: overrides the
+        card's target_platforms for this request. Raises PipelineError."""
+        now = now or datetime.now(timezone.utc)
+        row = self._row(row_id)
+        base, _saved = (post, True) if post is not None else self.post_or_default(row)
+        if scheduled_at is not None:
+            when = _parse_aware(scheduled_at)
+            if when is None:
+                raise PipelineError("scheduled_at must be an ISO 8601 time with a timezone.", "invalid_time")
+            if when <= now:
+                raise PipelineError("scheduled_at is in the past.", "invalid_time")
+            base = replace(base, publish_at=utc_iso(when))
+        targets = list(dict.fromkeys(platforms or base.target_platforms or [Platform.YOUTUBE]))
+        unknown = [p for p in targets if p not in Platform.ALL]
+        if unknown:
+            raise PipelineError(f"Unknown platform(s): {', '.join(unknown)}.", "invalid_platform")
+
+        if row.stage == Stage.PUBLISHED and not self.store.dispatches_for(row_id):
+            raise PipelineError("This video is already marked as published.", "already_scheduled")
+        busy = self._busy_platforms(row, targets)
+        if busy:
+            raise PipelineError(f"Already scheduled or published on "
+                                f"{', '.join(Platform.LABELS[p] for p in busy)}.", "already_scheduled")
+        if self.uploads.progress_of(row_id) is not None:
+            raise PipelineError("This video is already uploading.", "already_uploading")
+
+        problems = self.schedule_problems(base, targets, row, now)
+        if problems:
+            current = self.store.get_post(row_id)
+            if post is not None and (current is None or current.status in (PostStatus.DRAFT, PostStatus.FAILED)):
+                self.store.save_post(replace(post, status=PostStatus.DRAFT))  # keep what was typed
+            raise PipelineError("This post can't be scheduled yet.", "invalid_post", problems)
+
+        now_iso = utc_iso(now)
+        add_shorts = self.add_shorts_default() if add_shorts is None else add_shorts
+        dispatches = []
+        for platform in targets:
+            account = (self.store.get_account(base.account_id) if platform == Platform.YOUTUBE
+                       else self.accounts.account_for(row.profile_id, platform))
+            native = platform in Platform.NATIVE_SCHEDULING
+            dispatches.append(Dispatch(
+                video_row=row_id, platform=platform, account_id=account.id if account else None,
+                due_at=now_iso if (native or not base.publish_at) else base.publish_at,
+                publish_at=base.publish_at,
+                options={"add_shorts": add_shorts} if platform == Platform.YOUTUBE else {}))
+        status = PostStatus.UPLOADING if Platform.YOUTUBE in targets else PostStatus.SCHEDULED
+        saved = replace(base, status=status, error="")
+        rows = self.store.schedule_post(saved, dispatches, Stage.SCHEDULED,
+                                        claim=[Platform.YOUTUBE] if Platform.YOUTUBE in targets else [],
+                                        claimed_by=self.instance_id)
+        youtube = next((d for d in rows if d.platform == Platform.YOUTUBE), None)
+        if youtube is not None:
+            try:
+                self.enqueue_youtube(youtube)
+            except PermanentError as exc:
+                self.store.finish_dispatch(youtube.id, DispatchStatus.FAILED, error=str(exc))
+                self.refresh_post(row_id)
+        if self.on_scheduled:
+            self.on_scheduled()
+        return ScheduleResult(self.store.get_post(row_id), self.store.dispatches_for(row_id))
 
     def start_upload(self, post: Post, add_shorts: bool | None = None) -> Post:
-        """Validate, mark as uploading, move to Scheduled and queue the upload.
+        """The desktop Board's "Upload & Schedule": schedule the post as edited."""
+        return self.schedule(post.video_row, platforms=post.target_platforms, add_shorts=add_shorts, post=post).post
 
-        Raises PipelineError(code="invalid_post") with every problem listed."""
-        problems = self.upload_problems(post)
-        if problems:
-            current = self.store.get_post(post.video_row)
-            if current is None or current.status in (PostStatus.DRAFT, PostStatus.FAILED):
-                self.store.save_post(replace(post, status=PostStatus.DRAFT))  # keep what was typed
-            raise PipelineError("This post can't be uploaded yet.", "invalid_post", problems)
-        row = self._row(post.video_row)
-        client = self.accounts.client_for(self.store.get_account(post.account_id))
-        add_shorts = self.add_shorts_default() if add_shorts is None else add_shorts
-        post = self.store.save_post(replace(post, status=PostStatus.UPLOADING, error=""))
-        self.store.set_stage([row.id], Stage.SCHEDULED)
-        try:
-            self.uploads.enqueue(row.id, client, self.video_path(row), build_resource(post, add_shorts))
-        except ValueError as exc:
-            raise PipelineError(str(exc), "already_uploading") from exc
-        return post
+    def queue_position(self, dispatch: Dispatch) -> int | None:
+        """YouTube: place in the upload queue (0 = uploading now). Others: place
+        among waiting dispatches by due time (0 = next). None when not queued."""
+        if dispatch.platform == Platform.YOUTUBE:
+            position = getattr(self.uploads, "queue_position", None)
+            return position(dispatch.video_row) if position else None
+        if dispatch.status not in (DispatchStatus.PENDING, DispatchStatus.DISPATCHING):
+            return None
+        waiting = [d for d in self.store.pending_dispatches() if d.platform != Platform.YOUTUBE]
+        return next((n for n, d in enumerate(waiting) if d.id == dispatch.id), None)
 
     def cancel_upload(self, row_id: int) -> bool:
         return self.uploads.cancel(row_id)
 
+    # ================================================================ YouTube via UploadManager
+    def enqueue_youtube(self, dispatch: Dispatch) -> None:
+        """Hand a claimed YouTube dispatch to the app-wide upload queue."""
+        row = self.store.get_video(dispatch.video_row)
+        post = self.store.get_post(dispatch.video_row)
+        if row is None or post is None:
+            raise PermanentError("The video or its post was deleted.")
+        account = (self.store.get_account(dispatch.account_id) if dispatch.account_id else None) or \
+            self.accounts.account_for(row.profile_id, Platform.YOUTUBE, post.account_id)
+        if account is None:
+            raise PermanentError("No YouTube channel is connected for this post.")
+        path = self.video_path(row)
+        if path is None or not path.is_file():
+            raise PermanentError("The video file is missing.")
+        try:
+            client = self.accounts.client_for(account)
+        except YouTubeError as exc:
+            raise PermanentError(str(exc)) from None
+        resource = build_resource(replace(post, publish_at=dispatch.publish_at),
+                                  dispatch.options.get("add_shorts", self.add_shorts_default()))
+        try:
+            self.uploads.enqueue(row.id, client, path, resource)
+        except ValueError:
+            pass  # already in the queue (e.g. resumed after a restart)
+
     def complete_upload(self, row_id: int, resource: dict) -> Post | None:
-        post = self.store.get_post(row_id)
-        if post is None:
-            return None
+        dispatch = self._youtube_dispatch(row_id)
         remote_id = resource.get("id", "")
-        post = self.store.save_post(replace(
-            post, remote_id=remote_id, remote_url=watch_url(remote_id) if remote_id else "",
-            status=PostStatus.SCHEDULED if post.publish_at else PostStatus.PUBLISHED, error=""))
-        self.store.set_stage([row_id], stage_after_upload(post))
-        return post
+        if dispatch is None:  # uploaded outside the dispatch model; nothing to track
+            return self.store.get_post(row_id)
+        when = parse_utc(dispatch.publish_at)
+        live_later = when is not None and when > datetime.now(timezone.utc)
+        self.store.finish_dispatch(dispatch.id, DispatchStatus.SCHEDULED if live_later else DispatchStatus.PUBLISHED,
+                                   remote_id=remote_id, remote_url=watch_url(remote_id) if remote_id else "")
+        if dispatch.account_id:
+            self.store.mark_verified(dispatch.account_id)
+        return self.refresh_post(row_id)
 
     def fail_upload(self, row_id: int, reason: str) -> Post | None:
-        post = self.store.get_post(row_id)
-        if post is None:
-            return None
-        post = self.store.save_post(replace(post, status=PostStatus.FAILED, error=reason))
-        self.store.set_stage([row_id], Stage.STAGING)
-        return post
+        dispatch = self._youtube_dispatch(row_id)
+        if dispatch is not None:
+            self.store.finish_dispatch(dispatch.id, DispatchStatus.FAILED, error=reason)
+        return self.refresh_post(row_id)
+
+    def _youtube_dispatch(self, row_id: int) -> Dispatch | None:
+        return next((d for d in self.store.dispatches_for(row_id) if d.platform == Platform.YOUTUBE), None)
 
     def _on_upload_finished(self, row_id: int, ok: bool, payload) -> str:
+        self._last_heartbeat.pop(row_id, None)
         if ok:
             post = self.complete_upload(row_id, payload)
             if post is None:
                 return "Upload finished."
             when = f" It goes live {local_text(post.publish_at)}." if post.publish_at else ""
-            return f"Uploaded “{post.title}”.{when}"
+            return f"Uploaded “{post.title}” to YouTube.{when}"
         self.fail_upload(row_id, str(payload))
-        return f"Upload failed: {payload}"
+        return f"YouTube upload failed: {payload}"
+
+    def _on_upload_progress(self, row_id: int, _pct: float) -> None:
+        """Keep the YouTube claim fresh during long uploads (stale-claim recovery)."""
+        now = time.monotonic()
+        if now - self._last_heartbeat.get(row_id, 0.0) < HEARTBEAT_SECONDS:
+            return
+        self._last_heartbeat[row_id] = now
+        dispatch = self._youtube_dispatch(row_id)
+        if dispatch is not None:
+            self.store.heartbeat(dispatch.id)
+
+    # ================================================================ status summary
+    def refresh_post(self, row_id: int) -> Post | None:
+        """Recompute the post status and card stage from its platforms' statuses."""
+        post = self.store.get_post(row_id)
+        dispatches = self.store.dispatches_for(row_id)
+        if post is None or not dispatches:
+            return post
+        statuses = [d.status for d in dispatches]
+        youtube = next((d for d in dispatches if d.platform == Platform.YOUTUBE), None)
+        if youtube and youtube.status in (DispatchStatus.PENDING, DispatchStatus.DISPATCHING):
+            status, stage = PostStatus.UPLOADING, Stage.SCHEDULED
+        elif all(s == DispatchStatus.FAILED for s in statuses):
+            status, stage = PostStatus.FAILED, Stage.STAGING
+        elif all(s in (DispatchStatus.PUBLISHED, DispatchStatus.FAILED) for s in statuses):
+            status, stage = PostStatus.PUBLISHED, Stage.PUBLISHED
+        else:
+            status, stage = PostStatus.SCHEDULED, Stage.SCHEDULED
+        error = "; ".join(f"{Platform.LABELS.get(d.platform, d.platform)}: {d.error}"
+                          for d in dispatches if d.error)
+        main = youtube if (youtube and youtube.remote_id) else next(
+            (d for d in dispatches if d.remote_id), None)
+        updated = replace(post, status=status, error=error,
+                          remote_id=main.remote_id if main else post.remote_id,
+                          remote_url=main.remote_url if main else post.remote_url)
+        if updated != post:
+            self.store.save_post(updated)
+        if self._row(row_id).stage != stage:
+            self.store.set_stage([row_id], stage)
+        return updated
+
+    # ================================================================ dispatcher support
+    def build_job(self, dispatch: Dispatch) -> PublishJob:
+        """Everything a publisher needs for one claimed dispatch. Raises PermanentError."""
+        row = self.store.get_video(dispatch.video_row)
+        post = self.store.get_post(dispatch.video_row)
+        if row is None or post is None:
+            raise PermanentError("The video or its post was deleted.")
+        label = Platform.LABELS.get(dispatch.platform, dispatch.platform)
+        account = self.accounts.account_for(row.profile_id, dispatch.platform, dispatch.account_id)
+        if account is None:
+            raise PermanentError(f"No {label} account is connected for this profile.")
+        credentials = self.accounts.credentials(account)
+        if credentials is None:
+            raise PermanentError(f"{label}: the sign-in is missing from the keychain. Reconnect it in Accounts.")
+        path = self.video_path(row)
+        if path is None or not path.is_file():
+            raise PermanentError("The video file is missing.")
+        text = ""
+        if dispatch.platform in (Platform.BLUESKY, Platform.THREADS):
+            try:
+                text = resolve_text(post, dispatch.platform)
+            except ValueError as exc:
+                raise PermanentError(str(exc)) from None
+        media_url = None
+        base = public_base_url(self.store)
+        if dispatch.platform == Platform.THREADS and base:
+            media_url = lambda: self.media.url(self.media.issue(path), base)  # noqa: E731
+        return PublishJob(dispatch=dispatch, post=replace(post, publish_at=dispatch.publish_at), item=row.item,
+                          video_path=path, account=account, credentials=credentials, text=text,
+                          media_url=media_url, checkpoint=lambda c: self.store.set_checkpoint(dispatch.id, c))
 
     # ================================================================ YouTube sync
     def sync_plan(self, profile_id: int) -> SyncPlan:
-        """What to ask YouTube about: scheduled posts, grouped per channel."""
-        posts = [p for p in self.store.posts_with_status(profile_id, [PostStatus.SCHEDULED]) if p.remote_id]
+        """What to ask YouTube about: uploads waiting to go live, grouped per channel."""
+        waiting = [d for d in self.store.dispatches_with_status(profile_id, Platform.YOUTUBE,
+                                                                [DispatchStatus.SCHEDULED]) if d.remote_id]
+        posts = [p for p in (self.store.get_post(d.video_row) for d in waiting) if p]
         jobs, problems = [], []
-        for account_id in sorted({p.account_id for p in posts if p.account_id}):
+        for account_id in sorted({d.account_id for d in waiting if d.account_id}):
             account = self.store.get_account(account_id)
             if account is None:
                 continue
@@ -281,8 +579,8 @@ class Pipeline:
             except YouTubeError as exc:
                 problems.append(str(exc))
                 continue
-            jobs.append((client, [p.remote_id for p in posts if p.account_id == account_id]))
-        return SyncPlan(posts, jobs, problems)
+            jobs.append((client, [d.remote_id for d in waiting if d.account_id == account_id]))
+        return SyncPlan(posts, jobs, problems, {d.remote_id: d for d in waiting})
 
     @staticmethod
     def fetch_remote(plan: SyncPlan) -> dict[str, dict | None]:
@@ -297,15 +595,19 @@ class Pipeline:
         """Apply YouTube's answers. Returns how many videos went live."""
         now = now or datetime.now(timezone.utc)
         published = 0
-        for post in plan.posts:
-            if post.remote_id not in remote:
+        for remote_id, dispatch in plan.dispatches.items():
+            if remote_id not in remote:
                 continue  # that channel wasn't checked
-            status, note = reconcile(post, remote[post.remote_id], now)
-            if status != post.status or note != post.error:
-                self.store.save_post(replace(post, status=status, error=note))
+            probe = Post(video_row=dispatch.video_row, status=PostStatus.SCHEDULED, publish_at=dispatch.publish_at)
+            status, note = reconcile(probe, remote[remote_id], now)
             if status == PostStatus.PUBLISHED:
-                self.store.set_stage([post.video_row], Stage.PUBLISHED)
+                self.store.finish_dispatch(dispatch.id, DispatchStatus.PUBLISHED)
                 published += 1
+            elif status == PostStatus.FAILED:
+                self.store.finish_dispatch(dispatch.id, DispatchStatus.FAILED, error=note)
+            elif note != dispatch.error:
+                self.store.finish_dispatch(dispatch.id, DispatchStatus.SCHEDULED, error=note)
+            self.refresh_post(dispatch.video_row)
         return published
 
     # ================================================================ video edits
@@ -339,3 +641,59 @@ class Pipeline:
         except OSError as exc:
             log.warning("Couldn't update library files in %s: %s", folder, exc)
 
+
+def _parse_aware(value: str | datetime) -> datetime | None:
+    """ISO 8601 with a timezone (or an aware datetime) → aware datetime; else None."""
+    if isinstance(value, datetime):
+        return value if value.tzinfo else None
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return dt if dt.tzinfo else None
+
+
+def metadata_problems(changes: dict) -> list[str]:
+    """Validate edited fields by their own rules (YouTube's for title/description/
+    tags, each platform's for its override). Never truncates."""
+    problems: list[str] = []
+    if "title" in changes:
+        title = changes["title"]
+        if not isinstance(title, str) or not title.strip():
+            problems.append("title must be non-empty text.")
+        elif len(title.strip()) > TITLE_MAX:
+            problems.append(f"title is {len(title.strip())} characters; the limit is {TITLE_MAX}.")
+        elif "<" in title or ">" in title:
+            problems.append("title can't contain < or >.")
+    if "description" in changes:
+        desc = changes["description"]
+        if not isinstance(desc, str):
+            problems.append("description must be text.")
+        elif len(desc.encode("utf-8")) > DESCRIPTION_MAX_BYTES:
+            problems.append(f"description is over {DESCRIPTION_MAX_BYTES} bytes.")
+        elif "<" in desc or ">" in desc:
+            problems.append("description can't contain < or >.")
+    if "tags" in changes:
+        tags = changes["tags"]
+        if not isinstance(tags, list) or not all(isinstance(t, str) and t.strip().lstrip("#") for t in tags):
+            problems.append("tags must be a list of non-empty strings.")
+        elif sum(len(t.strip().lstrip("#")) + 1 for t in tags) > TAGS_MAX_CHARS:
+            problems.append(f"tags are over {TAGS_MAX_CHARS} characters in total.")
+    if "target_platforms" in changes:
+        targets = changes["target_platforms"]
+        if not isinstance(targets, list) or not targets:
+            problems.append("target_platforms must list at least one platform.")
+        else:
+            unknown = [p for p in targets if p not in Platform.ALL]
+            if unknown:
+                problems.append(f"Unknown platform(s): {', '.join(map(str, unknown))}.")
+    for key, platform in (("bluesky_text", Platform.BLUESKY), ("threads_text", Platform.THREADS)):
+        if key in changes and changes[key] is not None:
+            value = changes[key]
+            if not isinstance(value, str):
+                problems.append(f"{key} must be text or null.")
+            else:
+                problem = text_problem(platform, value)
+                if problem:
+                    problems.append(f"{key}: {problem}")
+    return problems

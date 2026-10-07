@@ -11,7 +11,8 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDateTimeEdit, QFrame, QHBo
                                QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QStackedWidget,
                                QVBoxLayout, QWidget)
 
-from ..models import Account, Post, PostStatus, Privacy, Stage, VideoRow
+from ..models import Account, Platform, Post, PostStatus, Privacy, Stage, VideoRow
+from ..platform_text import BLUESKY_MAX_GRAPHEMES, THREADS_MAX_CHARS, grapheme_count, threads_length
 from ..publishing import TITLE_MAX, default_post, humanize_name, parse_utc, to_utc_iso
 from ..pipeline import Card
 from ..text import clock, local_text, short_title  # noqa: F401 (re-exported)
@@ -123,14 +124,29 @@ class PostPanel(QFrame):
         fl.setContentsMargins(0, 0, 0, 0)
         fl.setSpacing(6)
 
-        fl.addWidget(_section("YOUTUBE CHANNEL"))
+        fl.addWidget(_section("POST TO"))
+        prow = QHBoxLayout()
+        self.platform_boxes: dict[str, QCheckBox] = {}
+        for platform in Platform.ALL:
+            box = QCheckBox(Platform.LABELS[platform])
+            box.toggled.connect(self._sync_platforms)
+            self.platform_boxes[platform] = box
+            prow.addWidget(box)
+        prow.addStretch()
+        fl.addLayout(prow)
+
+        self.channel_label = _section("YOUTUBE CHANNEL")
+        fl.addWidget(self.channel_label)
         crow = QHBoxLayout()
         self.account = QComboBox()
         crow.addWidget(self.account, 1)
         self.connect_btn = QPushButton("Connect…")
         self.connect_btn.clicked.connect(self.connectRequested.emit)
         crow.addWidget(self.connect_btn)
-        fl.addLayout(crow)
+        self.channel_row = QWidget()
+        self.channel_row.setLayout(crow)
+        crow.setContentsMargins(0, 0, 0, 0)
+        fl.addWidget(self.channel_row)
 
         trow = QHBoxLayout()
         trow.addWidget(_section("TITLE"))
@@ -153,6 +169,27 @@ class PostPanel(QFrame):
         self.tags = QLineEdit()
         self.tags.setPlaceholderText("comma, separated, tags")
         fl.addWidget(self.tags)
+
+        self.override_boxes: dict[str, tuple[QWidget, QPlainTextEdit, QLabel]] = {}
+        for platform, limit in ((Platform.BLUESKY, BLUESKY_MAX_GRAPHEMES), (Platform.THREADS, THREADS_MAX_CHARS)):
+            wrap = QWidget()
+            wl = QVBoxLayout(wrap)
+            wl.setContentsMargins(0, 0, 0, 0)
+            wl.setSpacing(4)
+            head = QHBoxLayout()
+            head.addWidget(_section(f"{Platform.LABELS[platform].upper()} TEXT"))
+            head.addStretch()
+            counter = QLabel()
+            counter.setProperty("faint", True)
+            head.addWidget(counter)
+            wl.addLayout(head)
+            edit = QPlainTextEdit()
+            edit.setFixedHeight(76)
+            edit.setPlaceholderText("Leave empty to post the title (plus the description if it fits).")
+            edit.textChanged.connect(lambda p=platform: self._update_counter(p))
+            wl.addWidget(edit)
+            self.override_boxes[platform] = (wrap, edit, counter)
+            fl.addWidget(wrap)
 
         fl.addWidget(_section("VISIBILITY & TIMING"))
         self.privacy = QComboBox()
@@ -218,6 +255,14 @@ class PostPanel(QFrame):
         self.stage_label.setText(f"In {Stage.LABELS.get(card.row.stage, card.row.stage)}")
 
         post = card.post or default_post(card.id, item, accounts[0].id if accounts else None)
+        if not same or not self.form.isEnabled():
+            for platform, box in self.platform_boxes.items():
+                box.blockSignals(True)
+                box.setChecked(platform in post.target_platforms)
+                box.blockSignals(False)
+            for platform, (_wrap, edit, _counter) in self.override_boxes.items():
+                edit.setPlainText({Platform.BLUESKY: post.bluesky_text,
+                                   Platform.THREADS: post.threads_text}[platform] or "")
         self.account.blockSignals(True)
         self.account.clear()
         for acc in accounts:
@@ -244,15 +289,43 @@ class PostPanel(QFrame):
             self.kids.setChecked(post.made_for_kids)
             self.shorts.setChecked(add_shorts_default)
             self.errors.setText(post.error if post.status in (PostStatus.FAILED, PostStatus.DRAFT) else "")
+        self._sync_platforms()
         self._sync_when()
         self._sync_status()
+
+    def _targets(self) -> list[str]:
+        return [p for p, box in self.platform_boxes.items() if box.isChecked()]
+
+    def _sync_platforms(self) -> None:
+        targets = self._targets()
+        youtube = Platform.YOUTUBE in targets
+        for widget in (self.channel_label, self.channel_row, self.privacy, self.shorts, self.kids):
+            widget.setVisible(youtube)
+        for platform, (wrap, _edit, _counter) in self.override_boxes.items():
+            wrap.setVisible(platform in targets)
+            self._update_counter(platform)
+        self._sync_when()
+
+    def _update_counter(self, platform: str) -> None:
+        _wrap, edit, counter = self.override_boxes[platform]
+        text = edit.toPlainText()
+        if platform == Platform.BLUESKY:
+            used, limit = grapheme_count(text), BLUESKY_MAX_GRAPHEMES
+        else:
+            used, limit = threads_length(text), THREADS_MAX_CHARS
+        counter.setText(f"{used}/{limit}" if text else "using the title")
+        counter.setProperty("danger", used > limit)
+        counter.style().unpolish(counter)
+        counter.style().polish(counter)
 
     def _sync_when(self) -> None:
         scheduled = self.when.currentData() == "schedule"
         self.publish_at.setVisible(scheduled)
         self.sched_note.setVisible(scheduled)
         self.privacy.setEnabled(not scheduled)
-        self.upload_btn.setText("Upload & Schedule" if scheduled else "Upload Now")
+        self.sched_note.setText("YouTube and Facebook get the video now and publish it at this time; Reelay posts "
+                                "to Bluesky and Threads at this time (Reelay must be running).")
+        self.upload_btn.setText("Schedule" if scheduled else "Publish Now")
 
     def _sync_status(self) -> None:
         card = self.card
@@ -263,7 +336,7 @@ class PostPanel(QFrame):
         self.status_box.setVisible(locked or bool(card and card.row.stage == Stage.PUBLISHED))
         self.cancel_btn.setVisible(bool(post and post.status == PostStatus.UPLOADING))
         self.upload_bar.setVisible(bool(post and post.status == PostStatus.UPLOADING))
-        has_remote = bool(post and post.remote_id)
+        has_remote = bool(post and post.remote_id and post.remote_url and "youtube" in post.remote_url)
         self.open_btn.setVisible(has_remote)
         self.studio_btn.setVisible(has_remote)
         if not card:
@@ -276,14 +349,28 @@ class PostPanel(QFrame):
                                          f"{(card.progress or 0):.0f}%")
             self.upload_bar.setValue(int((card.progress or 0) * 10))
         elif post and post.status == PostStatus.SCHEDULED:
-            note = f"\n\n{post.error}" if post.error else ""
-            self.status_text.setText(f"Scheduled to go live {local_text(post.publish_at)}"
-                                     f"{' on ' + card.account.display_name if card.account else ''}. "
-                                     f"To change it, edit the video in YouTube Studio.{note}")
+            self.status_text.setText(f"Goes live {local_text(post.publish_at) or 'as soon as possible'}.\n"
+                                     + self._platform_lines(card))
         elif post and post.status == PostStatus.PUBLISHED:
-            self.status_text.setText(f"Published{' on ' + card.account.display_name if card.account else ''}.")
+            self.status_text.setText("Published.\n" + self._platform_lines(card))
         elif card.row.stage == Stage.PUBLISHED:
             self.status_text.setText("Marked as published (posted outside Reelay).")
+        if post and post.status == PostStatus.UPLOADING and len(card.dispatches) > 1:
+            self.status_text.setText(self.status_text.text() + "\n" + self._platform_lines(card))
+
+    @staticmethod
+    def _platform_lines(card: Card) -> str:
+        words = {"pending": "waiting", "dispatching": "sending now", "scheduled": "scheduled on the platform",
+                 "published": "live", "failed": "FAILED"}
+        lines = []
+        for d in card.dispatches:
+            line = f"• {Platform.LABELS.get(d.platform, d.platform)}: {words.get(d.status, d.status)}"
+            if d.status == "pending" and d.attempts:
+                line += f" (retry {d.attempts})"
+            if d.error:
+                line += f" — {d.error}"
+            lines.append(line)
+        return "\n".join(lines)
 
     def set_progress(self, row_id: int, pct: float) -> None:
         if self.card and self.card.id == row_id:
@@ -301,9 +388,12 @@ class PostPanel(QFrame):
         if self.when.currentData() == "schedule":
             when = to_utc_iso(self.publish_at.dateTime().toPython())
         tags = [t.strip().lstrip("#") for t in self.tags.text().split(",") if t.strip()]
+        overrides = {p: (edit.toPlainText().strip() or None) for p, (_w, edit, _c) in self.override_boxes.items()}
         return replace(base, account_id=self.account.currentData(), title=self.title.text().strip(),
                        description=self.description.toPlainText().strip(), tags=tags,
-                       privacy=self.privacy.currentData(), publish_at=when, made_for_kids=self.kids.isChecked())
+                       privacy=self.privacy.currentData(), publish_at=when, made_for_kids=self.kids.isChecked(),
+                       target_platforms=self._targets() or [Platform.YOUTUBE],
+                       bluesky_text=overrides[Platform.BLUESKY], threads_text=overrides[Platform.THREADS])
 
     def _open_remote(self) -> None:
         if self.card and self.card.post and self.card.post.remote_url:

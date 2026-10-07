@@ -36,6 +36,10 @@ datas += collect_data_files("yt_dlp_ejs")
 from PyInstaller.utils.hooks import collect_submodules, copy_metadata  # noqa: E402
 
 hiddenimports += collect_submodules("keyring.backends")
+
+# Agent API: uvicorn picks its event loop / protocol modules at runtime.
+hiddenimports += collect_submodules("uvicorn") + ["reelay.api", "reelay.scheduler"]
+hiddenimports += collect_submodules("reelay.publishers")
 datas += copy_metadata("keyring")
 
 # Bundled ffmpeg (used when the user has no system ffmpeg).

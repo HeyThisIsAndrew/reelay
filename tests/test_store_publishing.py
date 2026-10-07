@@ -23,7 +23,8 @@ def vid(n, **kw):
 
 # ------------------------------------------------------------------ store
 def test_schema_and_default_profile(store, tmp_path):
-    assert store.conn.execute("PRAGMA user_version").fetchone()[0] == 1
+    from reelay.store import SCHEMA_VERSION
+    assert store.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     p = store.active_profile(tmp_path / "lib")
     assert p.name == "My Channel" and store.active_profile(tmp_path).id == p.id  # stable
 

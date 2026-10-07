@@ -4,6 +4,10 @@ Owns upload workers independently of any screen, so an upload started from
 the Board (or, later, the companion app) keeps going whatever is on screen.
 Uploads run one at a time.
 
+Thread-safe: `enqueue`, `cancel` and the queries may be called from any thread
+(the agent API, the dispatcher). Workers are always started on the manager's
+own (GUI) thread via a queued signal.
+
 When an upload ends, `completion_handler(row_id, ok, payload)` runs first
 (the Pipeline sets it to update the database) and returns a user message;
 then `finished(row_id, ok, message)` is emitted for the UI.
@@ -80,48 +84,70 @@ class UploadManager(QObject):
     progress = Signal(int, float)        # row id, percent
     finished = Signal(int, bool, str)    # row id, succeeded, message for the user
     changed = Signal()                   # queue membership changed
+    _kick = Signal()                     # internal: start the next job on our thread
 
     def __init__(self, parent=None, worker_factory: Callable[..., UploadWorker] = UploadWorker):
         super().__init__(parent)
         self.completion_handler: Callable[[int, bool, object], str] | None = None
+        self.progress_handler: Callable[[int, float], None] | None = None
         self._worker_factory = worker_factory
+        self._lock = threading.RLock()
         self._queue: deque[UploadJob] = deque()
         self._worker: UploadWorker | None = None
         self._progress: dict[int, float] = {}
+        self._kick.connect(self._start_next)
 
     # ---------------------------------------------------------------- queries
     @property
     def busy(self) -> bool:
-        return self._worker is not None or bool(self._queue)
+        with self._lock:
+            return self._worker is not None or bool(self._queue)
 
     def is_active(self, row_id: int) -> bool:
-        return self._worker is not None and self._worker.row_id == row_id
+        with self._lock:
+            return self._worker is not None and self._worker.row_id == row_id
 
     def is_queued(self, row_id: int) -> bool:
-        return any(job.row_id == row_id for job in self._queue)
+        with self._lock:
+            return any(job.row_id == row_id for job in self._queue)
+
+    def queue_position(self, row_id: int) -> int | None:
+        """0 = uploading now, 1 = next, …; None if not in the queue."""
+        with self._lock:
+            if self.is_active(row_id):
+                return 0
+            for n, job in enumerate(self._queue, 1 if self._worker is not None else 0):
+                if job.row_id == row_id:
+                    return n
+            return None
 
     def progress_of(self, row_id: int) -> float | None:
-        if self.is_active(row_id) or self.is_queued(row_id):
-            return self._progress.get(row_id, 0.0)
-        return None
+        with self._lock:
+            if self.is_active(row_id) or self.is_queued(row_id):
+                return self._progress.get(row_id, 0.0)
+            return None
 
     # ---------------------------------------------------------------- control
     def enqueue(self, row_id: int, client, path: Path, resource: dict) -> None:
-        if self.is_active(row_id) or self.is_queued(row_id):
-            raise ValueError("This video is already uploading.")
-        self._queue.append(UploadJob(row_id, client, Path(path), resource))
-        self._progress[row_id] = 0.0
+        with self._lock:
+            if self.is_active(row_id) or self.is_queued(row_id):
+                raise ValueError("This video is already uploading.")
+            self._queue.append(UploadJob(row_id, client, Path(path), resource))
+            self._progress[row_id] = 0.0
         self.changed.emit()
-        self._start_next()
+        self._kick.emit()  # queued onto our thread when called from another one
 
     def cancel(self, row_id: int) -> bool:
-        for job in list(self._queue):
-            if job.row_id == row_id:
+        with self._lock:
+            job = next((j for j in self._queue if j.row_id == row_id), None)
+            if job is not None:
                 self._queue.remove(job)
-                self._finish(row_id, False, CANCELLED)
-                return True
-        if self.is_active(row_id):
-            self._worker.cancel()
+            active = None if job is not None else (self._worker if self.is_active(row_id) else None)
+        if job is not None:
+            self._finish(row_id, False, CANCELLED)
+            return True
+        if active is not None:
+            active.cancel()
             return True
         return False
 
@@ -133,24 +159,32 @@ class UploadManager(QObject):
 
     # ---------------------------------------------------------------- internals
     def _start_next(self) -> None:
-        if self._worker is not None or not self._queue:
-            return
-        job = self._queue.popleft()
-        worker = self._worker_factory(job.row_id, job.client, job.path, job.resource, self)
+        with self._lock:
+            if self._worker is not None or not self._queue:
+                return
+            job = self._queue.popleft()
+            worker = self._worker_factory(job.row_id, job.client, job.path, job.resource, self)
+            self._worker = worker
         worker.progress.connect(self._on_progress)
         worker.done.connect(lambda row_id, resource: self._finish(row_id, True, resource))
         worker.failed.connect(lambda row_id, reason: self._finish(row_id, False, reason))
         worker.finished.connect(self._on_worker_finished)
-        self._worker = worker
         self.changed.emit()
         worker.start()
 
     def _on_progress(self, row_id: int, pct: float) -> None:
-        self._progress[row_id] = pct
+        with self._lock:
+            self._progress[row_id] = pct
+        if self.progress_handler is not None:
+            try:
+                self.progress_handler(row_id, pct)
+            except Exception:  # noqa: BLE001
+                log.exception("Upload progress handler failed")
         self.progress.emit(row_id, pct)
 
     def _finish(self, row_id: int, ok: bool, payload) -> None:
-        self._progress.pop(row_id, None)
+        with self._lock:
+            self._progress.pop(row_id, None)
         message = payload if isinstance(payload, str) else ""
         if self.completion_handler is not None:
             try:
@@ -161,7 +195,8 @@ class UploadManager(QObject):
         self.changed.emit()
 
     def _on_worker_finished(self) -> None:
-        worker, self._worker = self._worker, None
+        with self._lock:
+            worker, self._worker = self._worker, None
         if worker is not None:
             worker.deleteLater()
         self._start_next()

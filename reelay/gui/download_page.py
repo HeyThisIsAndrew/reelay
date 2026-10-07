@@ -22,6 +22,7 @@ from ..naming import DEFAULT_TEMPLATE, PRESETS, slugify
 from ..platforms import is_supported_url
 from ..store import Store
 from ..ytdl import COOKIE_BROWSERS, base_options, find_ffmpeg
+from .bridge import change_bridge
 from .detail_panel import DetailPanel
 from .dialogs import RenamePreviewDialog, tokens_help_html
 from .table_model import ROW_HEIGHT, Col, CoverDelegate, VideoFilterProxy, VideoTableModel
@@ -95,7 +96,8 @@ class DownloadPage(QWidget):
 
         self._build_ui()
         self._connect()
-        self._unsubscribe = store.subscribe(self._on_store_change)
+        self._bridge = change_bridge(store)
+        self._bridge.changed.connect(self._on_store_change)
 
     # ================================================================ UI
     def _build_ui(self) -> None:
@@ -799,7 +801,9 @@ class DownloadPage(QWidget):
 
     # ================================================================ shutdown
     def shutdown(self, timeout_ms: int = 8000) -> None:
-        self._unsubscribe()
+        if getattr(self, "_bridge", None) is not None:
+            self._bridge.changed.disconnect(self._on_store_change)
+            self._bridge = None
         if self.busy:
             self.download_worker.cancel()
             self.download_worker.wait(timeout_ms)

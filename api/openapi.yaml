@@ -1,0 +1,866 @@
+# Reelay Agent API contract. GENERATED from the code: do not edit by hand.
+# Regenerate with:  python -m reelay.api --write-contract
+# tests/test_api_contract.py fails if the live /openapi.json drifts from this file.
+openapi: 3.1.0
+info:
+  title: Reelay Agent API
+  description: 'Read a creator''s video board, apply approved metadata edits, and schedule posts to YouTube, Bluesky,
+    Threads and Facebook. All /v1 routes need `Authorization: Bearer <token>`. Changes show up immediately on the
+    Reelay desktop board.'
+  version: 0.3.0
+paths:
+  /v1/board:
+    get:
+      tags:
+      - videos
+      summary: List a profile's videos on the board
+      description: 'Videos in board order (Backlog → Staging → Scheduled → Published), with their post metadata,
+        target
+
+        platforms, per-platform status, and the original caption and stats. Videos fetched but not yet
+
+        downloaded aren''t on the board.'
+      operationId: getBoard
+      security:
+      - HTTPBearer: []
+      parameters:
+      - name: profile
+        in: query
+        required: true
+        schema:
+          type: string
+          description: Profile name exactly as shown in Reelay's sidebar.
+          title: Profile
+        description: Profile name exactly as shown in Reelay's sidebar.
+      - name: stage
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - enum:
+            - backlog
+            - staging
+            - scheduled
+            - published
+            type: string
+          - type: 'null'
+          description: Only this board column.
+          title: Stage
+        description: Only this board column.
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 200
+          minimum: 1
+          description: Page size (1-200).
+          default: 50
+          title: Limit
+        description: Page size (1-200).
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+          description: Videos to skip (from next_offset of the previous page).
+          default: 0
+          title: Offset
+        description: Videos to skip (from next_offset of the previous page).
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BoardPage'
+        '400':
+          description: Bad request (e.g. missing or unknown profile).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '401':
+          description: Missing or invalid bearer token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Invalid input; nothing was changed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+  /v1/videos/{video_id}:
+    patch:
+      tags:
+      - videos
+      summary: Update a video's post metadata
+      description: 'Partial update. Accepts only title, description, tags, target_platforms, bluesky_text and
+
+        threads_text. Everything is validated first; if anything is invalid nothing is written (422).
+
+        Over-limit text is rejected, never shortened. Returns the updated video.'
+      operationId: updateVideo
+      security:
+      - HTTPBearer: []
+      parameters:
+      - name: video_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Video Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VideoPatch'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Video'
+        '401':
+          description: Missing or invalid bearer token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: No video with that id.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: Conflicts with the video's current state (already scheduled).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Invalid input; nothing was changed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+  /v1/videos/{video_id}/schedule:
+    post:
+      tags:
+      - videos
+      summary: Schedule or publish a video to its platforms
+      description: 'Queues publishing through Reelay''s pipeline. YouTube uploads join the app''s upload queue (one
+        at a time)
+
+        and are scheduled on YouTube; Facebook is uploaded and scheduled on the Page; Bluesky and Threads are posted
+
+        by Reelay at the scheduled time. 409 if any requested platform is already scheduled or published.'
+      operationId: scheduleVideo
+      security:
+      - HTTPBearer: []
+      parameters:
+      - name: video_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Video Id
+      requestBody:
+        content:
+          application/json:
+            schema:
+              anyOf:
+              - $ref: '#/components/schemas/ScheduleRequest'
+              - type: 'null'
+              title: Request
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScheduleResponse'
+        '401':
+          description: Missing or invalid bearer token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: No video with that id.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: Conflicts with the video's current state (already scheduled).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Invalid input; nothing was changed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+  /v1/platforms:
+    get:
+      tags:
+      - platforms
+      summary: Which platforms are connected for a profile
+      description: 'Credential presence and account names per platform. Never returns secrets. "connected" means
+        a
+
+        credential is stored in the keychain, not that it was checked recently (see last_verified_at).'
+      operationId: getPlatforms
+      security:
+      - HTTPBearer: []
+      parameters:
+      - name: profile
+        in: query
+        required: true
+        schema:
+          type: string
+          description: Profile name exactly as shown in Reelay's sidebar.
+          title: Profile
+        description: Profile name exactly as shown in Reelay's sidebar.
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlatformsResponse'
+        '400':
+          description: Bad request (e.g. missing or unknown profile).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '401':
+          description: Missing or invalid bearer token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Invalid input; nothing was changed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+components:
+  schemas:
+    BoardPage:
+      properties:
+        profile:
+          $ref: '#/components/schemas/ProfileRef'
+        stage:
+          anyOf:
+          - type: string
+            enum:
+            - backlog
+            - staging
+            - scheduled
+            - published
+          - type: 'null'
+          title: Stage
+          description: The stage filter applied, if any.
+        total:
+          type: integer
+          title: Total
+          description: Videos matching the filter.
+        limit:
+          type: integer
+          title: Limit
+        offset:
+          type: integer
+          title: Offset
+        next_offset:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Next Offset
+          description: Pass as offset to get the next page; null on the last page.
+        videos:
+          items:
+            $ref: '#/components/schemas/Video'
+          type: array
+          title: Videos
+      type: object
+      required:
+      - profile
+      - total
+      - limit
+      - offset
+      - videos
+      title: BoardPage
+    ChannelRef:
+      properties:
+        id:
+          type: integer
+          title: Id
+          description: Reelay's id for the connected channel.
+        name:
+          type: string
+          title: Name
+        handle:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Handle
+      type: object
+      required:
+      - id
+      - name
+      title: ChannelRef
+    ErrorBody:
+      properties:
+        detail:
+          type: string
+          title: Detail
+          description: What went wrong, in plain words.
+        code:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Code
+          description: Stable machine-readable error code, e.g. 'unauthorized', 'not_found', 'invalid_post', 'already_scheduled',
+            'locked'.
+        problems:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Problems
+          description: Every individual problem found, when there are several.
+      type: object
+      required:
+      - detail
+      title: ErrorBody
+    Overrides:
+      properties:
+        bluesky_text:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Bluesky Text
+          description: Post text used on Bluesky instead of the default (max 300 characters). null = unset.
+        threads_text:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Threads Text
+          description: Post text used on Threads instead of the default (max 500 characters). null = unset.
+      type: object
+      title: Overrides
+    PlatformAccount:
+      properties:
+        name:
+          type: string
+          title: Name
+        handle:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Handle
+        external_id:
+          type: string
+          title: External Id
+          description: The platform's id for the account (channel id, DID, user id, Page id).
+        credential_present:
+          type: boolean
+          title: Credential Present
+          description: A credential is stored in the system keychain. This is not a live check; see last_verified_at.
+        last_verified_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Last Verified At
+          description: Last time the credential worked against the platform (sign-in check or successful post).
+            null = never verified.
+      type: object
+      required:
+      - name
+      - external_id
+      - credential_present
+      title: PlatformAccount
+    PlatformInfo:
+      properties:
+        platform:
+          type: string
+          enum:
+          - youtube
+          - bluesky
+          - threads
+          - facebook
+          title: Platform
+        connected:
+          type: boolean
+          title: Connected
+          description: 'True when at least one account has a credential in the keychain. "Connected" means a credential
+            is present, not that it was verified recently: check last_verified_at.'
+        accounts:
+          items:
+            $ref: '#/components/schemas/PlatformAccount'
+          type: array
+          title: Accounts
+        setup_issue:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Setup Issue
+          description: What still needs setting up before posting works, if anything.
+      type: object
+      required:
+      - platform
+      - connected
+      - accounts
+      title: PlatformInfo
+    PlatformsResponse:
+      properties:
+        profile:
+          $ref: '#/components/schemas/ProfileRef'
+        platforms:
+          items:
+            $ref: '#/components/schemas/PlatformInfo'
+          type: array
+          title: Platforms
+      type: object
+      required:
+      - profile
+      - platforms
+      title: PlatformsResponse
+    ProfileRef:
+      properties:
+        id:
+          type: integer
+          title: Id
+        name:
+          type: string
+          title: Name
+          description: Profile name as shown in Reelay's sidebar.
+      type: object
+      required:
+      - id
+      - name
+      title: ProfileRef
+    Publication:
+      properties:
+        platform:
+          type: string
+          enum:
+          - youtube
+          - bluesky
+          - threads
+          - facebook
+          title: Platform
+        status:
+          type: string
+          enum:
+          - pending
+          - dispatching
+          - scheduled
+          - published
+          - failed
+          title: Status
+          description: pending = waiting for its time or a retry; dispatching = being sent now; scheduled = accepted
+            by the platform, goes live at the set time; published = live; failed = gave up (see error).
+        publish_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Publish At
+          description: When it goes live (UTC); null = as soon as possible.
+        url:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Url
+          description: Link to the post once the platform has it.
+        error:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Error
+          description: Last error for this platform, if any.
+        attempts:
+          type: integer
+          title: Attempts
+          description: Failed attempts so far (transient errors are retried with backoff).
+        updated_at:
+          type: string
+          format: date-time
+          title: Updated At
+      type: object
+      required:
+      - platform
+      - status
+      - attempts
+      - updated_at
+      title: Publication
+    QueueJob:
+      properties:
+        platform:
+          type: string
+          enum:
+          - youtube
+          - bluesky
+          - threads
+          - facebook
+          title: Platform
+        job_id:
+          type: integer
+          title: Job Id
+          description: Id of this platform's publishing job.
+        status:
+          type: string
+          enum:
+          - pending
+          - dispatching
+          - scheduled
+          - published
+          - failed
+          title: Status
+        due_at:
+          type: string
+          format: date-time
+          title: Due At
+          description: When Reelay sends it. YouTube and Facebook are sent right away and scheduled on the platform;
+            Bluesky and Threads are sent at publish time.
+        publish_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Publish At
+        queue_position:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Queue Position
+          description: 'Place in line: 0 = being processed now, null = not waiting. YouTube uploads run one at a
+            time.'
+      type: object
+      required:
+      - platform
+      - job_id
+      - status
+      - due_at
+      title: QueueJob
+    ScheduleRequest:
+      properties:
+        scheduled_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Scheduled At
+          description: When to go live, ISO 8601 with a timezone, at least 10 minutes ahead. Omit to use the card's
+            saved time, or publish as soon as possible if it has none.
+        platforms:
+          anyOf:
+          - items:
+              type: string
+              enum:
+              - youtube
+              - bluesky
+              - threads
+              - facebook
+            type: array
+            minItems: 1
+          - type: 'null'
+          title: Platforms
+          description: Platforms for this request. Omit to use the video's target_platforms.
+      additionalProperties: false
+      type: object
+      title: ScheduleRequest
+    ScheduleResponse:
+      properties:
+        video_id:
+          type: integer
+          title: Video Id
+        stage:
+          type: string
+          enum:
+          - backlog
+          - staging
+          - scheduled
+          - published
+          title: Stage
+        scheduled_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Scheduled At
+          description: When it goes live (UTC); null = as soon as possible.
+        target_platforms:
+          items:
+            type: string
+            enum:
+            - youtube
+            - bluesky
+            - threads
+            - facebook
+          type: array
+          title: Target Platforms
+        jobs:
+          items:
+            $ref: '#/components/schemas/QueueJob'
+          type: array
+          title: Jobs
+      type: object
+      required:
+      - video_id
+      - stage
+      - target_platforms
+      - jobs
+      title: ScheduleResponse
+    SourceInfo:
+      properties:
+        platform:
+          type: string
+          title: Platform
+          description: Where the video was originally posted (TikTok, Instagram, YouTube).
+        url:
+          type: string
+          title: Url
+          description: The original post's URL.
+        caption:
+          type: string
+          title: Caption
+          description: The original caption, in full.
+        hook:
+          type: string
+          title: Hook
+          description: The caption's opening line (what viewers see first).
+        uploaded_on:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Uploaded On
+          description: Original upload date, YYYY-MM-DD.
+        creator:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Creator
+        stats:
+          $ref: '#/components/schemas/Stats'
+      type: object
+      required:
+      - platform
+      - url
+      - caption
+      - hook
+      - stats
+      title: SourceInfo
+    Stats:
+      properties:
+        views:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Views
+          description: View count on the source platform when downloaded.
+        likes:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Likes
+        comments:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Comments
+        duration_seconds:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Duration Seconds
+      type: object
+      title: Stats
+    Video:
+      properties:
+        id:
+          type: integer
+          title: Id
+          description: Video id used by the other endpoints.
+        profile:
+          type: string
+          title: Profile
+          description: Profile (creator) the video belongs to.
+        stage:
+          type: string
+          enum:
+          - backlog
+          - staging
+          - scheduled
+          - published
+          title: Stage
+          description: Board column.
+        title:
+          type: string
+          title: Title
+          description: Title used for YouTube and Facebook (and as default post text).
+        description:
+          type: string
+          title: Description
+        tags:
+          items:
+            type: string
+          type: array
+          title: Tags
+        target_platforms:
+          items:
+            type: string
+            enum:
+            - youtube
+            - bluesky
+            - threads
+            - facebook
+          type: array
+          title: Target Platforms
+          description: Where this video will be posted when scheduled.
+        overrides:
+          $ref: '#/components/schemas/Overrides'
+          description: Platform-specific post text, if set.
+        youtube_channel:
+          anyOf:
+          - $ref: '#/components/schemas/ChannelRef'
+          - type: 'null'
+          description: Connected YouTube channel the video posts to.
+        visibility:
+          type: string
+          enum:
+          - public
+          - unlisted
+          - private
+          title: Visibility
+          description: YouTube visibility for immediate posts. Scheduled YouTube videos are uploaded private and
+            go public at scheduled_at.
+        scheduled_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Scheduled At
+          description: When the video goes live (UTC), if scheduled.
+        draft_saved:
+          type: boolean
+          title: Draft Saved
+          description: False when title/description/tags are suggestions generated from the original caption and
+            haven't been saved yet.
+        custom_name:
+          type: string
+          title: Custom Name
+          description: Reelay's custom file name for the video, if set.
+        notes:
+          type: string
+          title: Notes
+        file_path:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: File Path
+          description: Local path of the downloaded video file.
+        file_available:
+          type: boolean
+          title: File Available
+          description: Whether the video file exists on disk.
+        publications:
+          items:
+            $ref: '#/components/schemas/Publication'
+          type: array
+          title: Publications
+          description: Per-platform publishing status (empty until scheduled).
+        source:
+          $ref: '#/components/schemas/SourceInfo'
+        updated_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Updated At
+      type: object
+      required:
+      - id
+      - profile
+      - stage
+      - title
+      - description
+      - tags
+      - target_platforms
+      - overrides
+      - visibility
+      - draft_saved
+      - custom_name
+      - notes
+      - file_available
+      - publications
+      - source
+      title: Video
+    VideoPatch:
+      properties:
+        title:
+          type: string
+          maxLength: 100
+          minLength: 1
+          title: Title
+          description: Title (1-100 characters, no < or >). Used on YouTube and Facebook.
+        description:
+          type: string
+          title: Description
+          description: Description (max 5,000 bytes, no < or >).
+        tags:
+          items:
+            type: string
+          type: array
+          title: Tags
+          description: Tags without '#', 500 characters in total.
+        target_platforms:
+          items:
+            type: string
+            enum:
+            - youtube
+            - bluesky
+            - threads
+            - facebook
+          type: array
+          minItems: 1
+          title: Target Platforms
+          description: Platforms to post to when scheduled.
+        bluesky_text:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Bluesky Text
+          description: Bluesky post text, max 300 characters (grapheme clusters, so an emoji counts once). null
+            clears it.
+        threads_text:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Threads Text
+          description: Threads post text, max 500 characters (emoji count as their UTF-8 byte length). null clears
+            it.
+      additionalProperties: false
+      type: object
+      title: VideoPatch
+      description: Only these fields can be changed. Omitted fields are left as they are.
+  securitySchemes:
+    HTTPBearer:
+      type: http
+      description: 'Agent API token (system keychain: service "Reelay", account "agent_api_token"; or REELAY_API_TOKEN).'
+      scheme: bearer

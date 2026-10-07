@@ -14,6 +14,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 
 from .. import APP_ID, APP_NAME, __version__
 from ..paths import db_path, log_dir
+from ..services import Services
 from ..store import Store
 from ..tokens import KeyringTokenStore, TokenStore
 from .theme import apply_theme
@@ -53,10 +54,16 @@ def resource_path(relative: str) -> Path:
     return base / relative
 
 
-def create_window(app: QApplication, store: Store, tokens: TokenStore):
+def create_window(app: QApplication, store: Store, tokens: TokenStore, start_services: bool = False):
+    """Build the main window. start_services=True also starts the dispatcher and
+    agent API (the real app does; tests don't)."""
     apply_theme(app, store.get_setting("theme", "dark"))
     from .main_window import MainWindow
-    return MainWindow(store, tokens)
+    services = Services(store, tokens)
+    window = MainWindow(services)
+    if start_services:
+        services.start_background(api=True)
+    return window
 
 
 def main() -> int:
@@ -73,10 +80,11 @@ def main() -> int:
     install_excepthook()
 
     store = Store(db_path())
-    interrupted = store.reset_interrupted_uploads()
+    interrupted = store.reset_interrupted_uploads()  # pre-dispatcher posts only
     if interrupted:
         log.warning("%d upload(s) were interrupted last session", interrupted)
-    window = create_window(app, store, KeyringTokenStore())
+    window = create_window(app, store, KeyringTokenStore(), start_services=True)
+    app.aboutToQuit.connect(window.services.stop)  # also covers Cmd-Q without a close event
     window.show()
     code = app.exec()
     store.close()
