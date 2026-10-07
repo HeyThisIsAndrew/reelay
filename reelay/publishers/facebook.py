@@ -56,7 +56,8 @@ class FacebookPublisher:
             raise PermanentError("Facebook: a previous upload was interrupted and may have been posted. "
                                  "Check the Page, then schedule Facebook again if it isn't there.")
 
-        data = {"title": job.post.title, "description": job.post.description, "access_token": token}
+        description = job.post.facebook_text or job.post.description
+        data = {"title": job.post.title, "description": description, "access_token": token}
         when = parse_utc(job.dispatch.publish_at)
         scheduled = when is not None and when > self.now() + MIN_LEAD
         if scheduled:

@@ -300,3 +300,78 @@ def test_accounts_import_connect_disconnect(app_window, tmp_path, monkeypatch):
     monkeypatch.setattr("reelay.accounts.revoke", lambda *a, **k: None)
     page._disconnect(account)
     assert store.list_accounts(window.profile.id) == [] and tokens.get("youtube:UCx") is None
+
+
+# ------------------------------------------------------------------ ticket editor (copy blocks)
+def open_ticket(window, store, monkeypatch):
+    from tests.fakes import disable_publishing
+    disable_publishing(monkeypatch)
+    items, ids = seed_board(store, window.profile, None)
+    row = ids[items[0].key]
+    store.save_post(Post(video_row=row, title="Letting go", description="A note on growth.",
+                         target_platforms=["youtube", "threads"]))
+    window.go("board")
+    board = window.board
+    col = board.columns[Stage.BACKLOG]
+    index = next(col.model.index(r) for r, c in enumerate(col.model.cards) if c.id == row)
+    board._on_select(col, index)
+    return board.panel, row
+
+
+def test_ticket_offers_only_enabled_platforms(app_window, monkeypatch):
+    window, store, _ = app_window
+    panel, _row = open_ticket(window, store, monkeypatch)
+    visible = {p for p, box in panel.platform_boxes.items() if not box.isHidden()}
+    assert visible == {"youtube"}
+    assert "Bluesky, Threads, Facebook: copy-paste only" in panel.manual_note.text()
+    assert not panel.manual_note.isHidden()
+
+
+def test_copy_buttons_and_live_counts(app_window, monkeypatch):
+    window, store, _ = app_window
+    panel, _row = open_ticket(window, store, monkeypatch)
+    clipboard = QApplication.clipboard()
+    panel.blocks["tiktok_text"].set_text("letting go 🦋 #growth")
+    panel.blocks["tiktok_text"].copy_btn.click()
+    assert clipboard.text() == "letting go 🦋 #growth" and "Copied tiktok caption" in panel.copied.text()
+    panel.blocks["bluesky_text"].copy_btn.click()  # empty → what Reelay would post
+    assert clipboard.text() == "Letting go\n\nA note on growth."
+    panel.blocks["facebook_text"].copy_btn.click()  # empty → the description
+    assert clipboard.text() == "A note on growth."
+    panel.blocks["threads_text"].set_text("hi 👍")
+    assert panel.blocks["threads_text"].counter.text() == "7/500"  # emoji count as UTF-8 bytes
+    panel.blocks["bluesky_text"].set_text("😀" * 301)
+    assert panel.blocks["bluesky_text"].counter.text().startswith("301/300")
+    assert panel.blocks["bluesky_text"].counter.property("danger") is True
+    panel.blocks["instagram_text"].set_text(" ".join(f"#t{n}" for n in range(31)))
+    assert "#31/30" in panel.blocks["instagram_text"].counter.text()
+
+
+def test_over_limit_copy_is_rejected_not_truncated(app_window, monkeypatch):
+    window, store, _ = app_window
+    panel, row = open_ticket(window, store, monkeypatch)
+    long_title = "T" * 120
+    panel.blocks["title"].set_text(long_title)
+    panel.blocks["threads_text"].set_text("🌊" * 126)   # 504 by Threads' count
+    panel.save_btn.click()
+    assert panel.blocks["title"].text() == long_title    # nothing cut in the editor
+    errors = panel.errors.text()
+    assert "title is 120 characters" in errors and "threads_text" in errors
+    saved = store.get_post(row)
+    assert saved.title == "Letting go" and saved.threads_text is None   # nothing saved
+    panel.blocks["title"].set_text("Letting go of who you were")
+    panel.blocks["threads_text"].set_text("letting go 🦋")
+    panel.save_btn.click()
+    saved = store.get_post(row)
+    assert saved.title == "Letting go of who you were" and saved.threads_text == "letting go 🦋"
+    assert panel.errors.text() == ""
+
+
+def test_editor_keeps_copy_paste_targets_set_by_agents(app_window, monkeypatch):
+    window, store, _ = app_window
+    panel, row = open_ticket(window, store, monkeypatch)
+    post = panel.collect()
+    assert post.target_platforms == ["youtube", "threads"]   # threads kept though it isn't offered
+    panel.platform_boxes["youtube"].setChecked(False)
+    assert panel.collect().target_platforms == ["threads"]
+    assert not panel.upload_btn.isEnabled()                  # nothing left to auto-post

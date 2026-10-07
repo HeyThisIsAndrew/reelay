@@ -383,6 +383,8 @@ class PlatformCard(QFrame):
         head = QHBoxLayout()
         head.addWidget(QLabel(Platform.LABELS[spec.platform], objectName="DetailTitle"))
         head.addStretch()
+        self.flag_label = _label("", "faint")
+        head.addWidget(self.flag_label)
         lay.addLayout(head)
         lay.addWidget(_label(spec.help, "muted"))
         self.list = QVBoxLayout()
@@ -407,6 +409,10 @@ class PlatformCard(QFrame):
         lay.addWidget(self.status)
 
     def refresh(self) -> None:
+        from ..flags import env_var, publishing_enabled
+        on = publishing_enabled(self.spec.platform, self.page.store)
+        self.flag_label.setText("Automatic posting on" if on else
+                                f"Copy-paste only (turn on in Settings or {env_var(self.spec.platform)}=1)")
         while self.list.count():
             w = self.list.takeAt(0).widget()
             if w:

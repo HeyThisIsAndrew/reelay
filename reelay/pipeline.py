@@ -32,7 +32,7 @@ from .library import Library
 from .media import MediaLinks, public_base_url
 from .models import (Account, Dispatch, DispatchStatus, Platform, Post, PostStatus, Profile, Stage, VideoItem,
                      VideoRow)
-from .platform_text import resolve_text, text_problem
+from .platform_text import COPY_FIELDS, resolve_text, text_problem
 from .publishers.base import PermanentError, PublishJob
 from .publishing import (DESCRIPTION_MAX_BYTES, MIN_SCHEDULE_LEAD, TAGS_MAX_CHARS, TITLE_MAX, build_resource,
                          default_post, humanize_name, parse_utc, reconcile, validate_post)
@@ -43,7 +43,8 @@ from .youtube import YouTubeError, watch_url
 log = logging.getLogger("reelay")
 
 LOCKED_MESSAGE = "Scheduled and published videos are managed on their platforms; they can't be moved back."
-EDITABLE_FIELDS = ("title", "description", "tags", "target_platforms", "bluesky_text", "threads_text")
+COPY_TEXT_FIELDS = ("tiktok_text", "instagram_text", "bluesky_text", "threads_text", "facebook_text", "hashtags")
+EDITABLE_FIELDS = ("title", "description", "tags", "target_platforms", *COPY_TEXT_FIELDS)
 FACEBOOK_MAX_LEAD = timedelta(days=182)
 THREADS_MAX_SECONDS = 300
 HEARTBEAT_SECONDS = 30
@@ -53,7 +54,8 @@ class PipelineError(Exception):
     """A request the pipeline refuses. `code` is stable; `message` is for people.
 
     Codes: not_found, invalid_post, invalid_field, invalid_stage, invalid_time,
-    invalid_platform, locked, needs_upload, already_scheduled, already_uploading."""
+    invalid_platform, platform_disabled, locked, needs_upload, already_scheduled,
+    already_uploading."""
 
     def __init__(self, message: str, code: str = "invalid", problems: list[str] | None = None):
         super().__init__(message)
@@ -107,6 +109,7 @@ class SyncPlan:
 class ScheduleResult:
     post: Post
     dispatches: list[Dispatch]
+    manual: list[str] = field(default_factory=list)   # targets left for copy-paste (posting turned off)
 
 
 def utc_iso(dt: datetime) -> str:
@@ -115,8 +118,13 @@ def utc_iso(dt: datetime) -> str:
 
 class Pipeline:
     def __init__(self, store: Store, accounts: AccountService, uploads: UploadQueue,
-                 instance_id: str | None = None, media: MediaLinks | None = None):
+                 instance_id: str | None = None, media: MediaLinks | None = None,
+                 enabled: frozenset[str] | None = None):
+        """`enabled`: platforms automatic posting may use (YouTube is always on).
+        Services passes the set it built the dispatcher with; when omitted it is
+        read from the flags (env / settings) on each call."""
         self.store = store
+        self._enabled = frozenset(enabled) | {Platform.YOUTUBE} if enabled is not None else None
         self.accounts = accounts
         self.uploads = uploads
         self.media = media or MediaLinks()
@@ -138,6 +146,16 @@ class Pipeline:
         if profile is None:
             raise PipelineError("That profile no longer exists.", "not_found")
         return profile
+
+    def enabled_platforms(self) -> frozenset[str]:
+        from .flags import enabled_platforms
+        return self._enabled if self._enabled is not None else enabled_platforms(self.store)
+
+    def auto_targets(self, post: Post) -> tuple[list[str], list[str]]:
+        """(platforms Reelay will post to, platforms left for copy-paste) for a post."""
+        enabled = self.enabled_platforms()
+        targets = list(dict.fromkeys(post.target_platforms or [Platform.YOUTUBE]))
+        return [p for p in targets if p in enabled], [p for p in targets if p not in enabled]
 
     def youtube_accounts(self, profile_id: int) -> list[Account]:
         return self.store.list_accounts(profile_id, YOUTUBE)
@@ -228,7 +246,14 @@ class Pipeline:
         return self.store.save_post(post)
 
     def save_draft(self, post: Post) -> Post:
-        """Save as a draft; a Backlog card moves to Staging."""
+        """Validate every copy block, then save as a draft; a Backlog card moves to
+        Staging. Raises PipelineError(invalid_post) and saves nothing if any block
+        is over its platform's limit (text is never shortened)."""
+        problems = metadata_problems({"title": post.title, "description": post.description, "tags": post.tags,
+                                      **{f: getattr(post, f) for f in COPY_TEXT_FIELDS}})
+        if problems:
+            raise PipelineError("Some copy is over its platform's limit; nothing was saved.", "invalid_post",
+                                problems)
         post = self.store.save_post(replace(post, status=PostStatus.DRAFT, error=""))
         if self._row(post.video_row).stage == Stage.BACKLOG:
             self.store.set_stage([post.video_row], Stage.STAGING)
@@ -259,13 +284,16 @@ class Pipeline:
 
     # ================================================================ scheduling
     def upload_problems(self, post: Post) -> list[str]:
-        """Everything stopping this post from being scheduled to its target platforms."""
+        """Everything stopping this post from being scheduled to its auto-post platforms."""
         row = self._row(post.video_row)
+        targets, _manual = self.auto_targets(post)
+        if not targets:
+            return ["Choose a platform to post to automatically."]
         problems = []
-        busy = self._busy_platforms(row, post.target_platforms)
+        busy = self._busy_platforms(row, targets)
         if busy:
             problems.append(f"Already scheduled or published on {', '.join(Platform.LABELS[p] for p in busy)}.")
-        return problems + self.schedule_problems(post, post.target_platforms, row)
+        return problems + self.schedule_problems(post, targets, row)
 
     def schedule_problems(self, post: Post, platforms: list[str], row: VideoRow | None = None,
                           now: datetime | None = None) -> list[str]:
@@ -325,7 +353,7 @@ class Pipeline:
                 if row.item.duration and row.item.duration > THREADS_MAX_SECONDS:
                     add("Threads videos can be at most 5 minutes long.")
             if platform == Platform.FACEBOOK:
-                if not post.title.strip() and not post.description.strip():
+                if not (post.title.strip() or post.description.strip() or (post.facebook_text or "").strip()):
                     add("Facebook needs a title or description.")
                 if when is not None and when > now + FACEBOOK_MAX_LEAD:
                     add("Facebook can only schedule up to 6 months ahead.")
@@ -339,7 +367,8 @@ class Pipeline:
     def describe_upload(self, post: Post) -> str:
         """One line for a confirmation prompt."""
         names = []
-        for platform in post.target_platforms:
+        targets, _manual = self.auto_targets(post)
+        for platform in targets:
             if platform == Platform.YOUTUBE:
                 account = self.store.get_account(post.account_id) if post.account_id else None
                 names.append(f"YouTube ({account.display_name})" if account else "YouTube")
@@ -367,10 +396,27 @@ class Pipeline:
             if when <= now:
                 raise PipelineError("scheduled_at is in the past.", "invalid_time")
             base = replace(base, publish_at=utc_iso(when))
-        targets = list(dict.fromkeys(platforms or base.target_platforms or [Platform.YOUTUBE]))
-        unknown = [p for p in targets if p not in Platform.ALL]
-        if unknown:
-            raise PipelineError(f"Unknown platform(s): {', '.join(unknown)}.", "invalid_platform")
+        enabled = self.enabled_platforms()
+        manual: list[str] = []
+        if platforms:
+            targets = list(dict.fromkeys(platforms))
+            unknown = [p for p in targets if p not in Platform.ALL]
+            if unknown:
+                raise PipelineError(f"Unknown platform(s): {', '.join(unknown)}.", "invalid_platform")
+            off = [p for p in targets if p not in enabled]
+            if off:
+                names = ", ".join(Platform.LABELS[p] for p in off)
+                raise PipelineError(f"Automatic posting to {names} is not enabled (platform not enabled). "
+                                    "Post it manually from the card's copy, or turn it on with "
+                                    + " / ".join(f"REELAY_PUBLISH_{p.upper()}=1" for p in off) + ".",
+                                    "platform_disabled")
+        else:
+            targets, manual = self.auto_targets(base)
+            if not targets:
+                names = ", ".join(Platform.LABELS[p] for p in manual) or "none"
+                raise PipelineError(f"None of this video's platforms are enabled for automatic posting "
+                                    f"(targets: {names}). Post them manually from the card's copy.",
+                                    "platform_disabled")
 
         if row.stage == Stage.PUBLISHED and not self.store.dispatches_for(row_id):
             raise PipelineError("This video is already marked as published.", "already_scheduled")
@@ -414,11 +460,12 @@ class Pipeline:
                 self.refresh_post(row_id)
         if self.on_scheduled:
             self.on_scheduled()
-        return ScheduleResult(self.store.get_post(row_id), self.store.dispatches_for(row_id))
+        return ScheduleResult(self.store.get_post(row_id), self.store.dispatches_for(row_id), manual)
 
     def start_upload(self, post: Post, add_shorts: bool | None = None) -> Post:
-        """The desktop Board's "Upload & Schedule": schedule the post as edited."""
-        return self.schedule(post.video_row, platforms=post.target_platforms, add_shorts=add_shorts, post=post).post
+        """The desktop Board's Schedule button: schedule the post as edited to its
+        enabled platforms (the rest stay copy-paste tickets)."""
+        return self.schedule(post.video_row, add_shorts=add_shorts, post=post).post
 
     def queue_position(self, dispatch: Dispatch) -> int | None:
         """YouTube: place in the upload queue (0 = uploading now). Others: place
@@ -687,13 +734,13 @@ def metadata_problems(changes: dict) -> list[str]:
             unknown = [p for p in targets if p not in Platform.ALL]
             if unknown:
                 problems.append(f"Unknown platform(s): {', '.join(map(str, unknown))}.")
-    for key, platform in (("bluesky_text", Platform.BLUESKY), ("threads_text", Platform.THREADS)):
+    for key, (_label, rule) in COPY_FIELDS.items():
         if key in changes and changes[key] is not None:
             value = changes[key]
             if not isinstance(value, str):
                 problems.append(f"{key} must be text or null.")
             else:
-                problem = text_problem(platform, value)
+                problem = text_problem(rule, value)
                 if problem:
                     problems.append(f"{key}: {problem}")
     return problems

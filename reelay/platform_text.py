@@ -21,6 +21,20 @@ from .models import Platform, Post
 BLUESKY_MAX_GRAPHEMES = 300
 BLUESKY_MAX_BYTES = 3000
 THREADS_MAX_CHARS = 500
+TIKTOK_MAX_CHARS = 4000
+INSTAGRAM_MAX_CHARS = 2200
+INSTAGRAM_MAX_HASHTAGS = 30
+FACEBOOK_MAX_CHARS = 63206
+
+# Copy blocks on a card: post field → (label, platform rule key).
+COPY_FIELDS: dict[str, tuple[str, str]] = {
+    "tiktok_text": ("TikTok caption", "tiktok"),
+    "instagram_text": ("Instagram caption", "instagram"),
+    "bluesky_text": ("Bluesky text", "bluesky"),
+    "threads_text": ("Threads text", "threads"),
+    "facebook_text": ("Facebook text", "facebook"),
+    "hashtags": ("Hashtags", "hashtags"),
+}
 
 _ZWJ = 0x200D
 
@@ -69,8 +83,29 @@ def threads_length(text: str) -> int:
     return sum(len(ch.encode("utf-8")) if _is_emoji(ord(ch)) else 1 for ch in text)
 
 
+def hashtag_count(text: str) -> int:
+    return len(_TAG.findall(text or ""))
+
+
 def text_problem(platform: str, text: str) -> str | None:
-    """Why `text` can't be posted to `platform`, or None."""
+    """Why `text` can't be posted to `platform` (bluesky, threads, tiktok,
+    instagram, facebook, hashtags), or None. Never shortens anything."""
+    if platform == "tiktok":
+        if len(text) > TIKTOK_MAX_CHARS:
+            return f"TikTok caption is {len(text)} characters; the limit is {TIKTOK_MAX_CHARS}."
+        return None
+    if platform == "instagram":
+        if len(text) > INSTAGRAM_MAX_CHARS:
+            return f"Instagram caption is {len(text)} characters; the limit is {INSTAGRAM_MAX_CHARS}."
+        if hashtag_count(text) > INSTAGRAM_MAX_HASHTAGS:
+            return f"Instagram caption has {hashtag_count(text)} hashtags; the limit is {INSTAGRAM_MAX_HASHTAGS}."
+        return None
+    if platform == Platform.FACEBOOK:
+        if len(text) > FACEBOOK_MAX_CHARS:
+            return f"Facebook text is {len(text)} characters; the limit is {FACEBOOK_MAX_CHARS}."
+        return None
+    if platform == "hashtags":
+        return None
     if platform == Platform.BLUESKY:
         n = grapheme_count(text)
         if n > BLUESKY_MAX_GRAPHEMES:

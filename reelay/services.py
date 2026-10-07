@@ -8,6 +8,7 @@ import logging
 import os
 
 from .accounts import AccountService
+from .flags import enabled_platforms
 from .media import MediaLinks
 from .pipeline import Pipeline
 from .publishers import default_publishers
@@ -26,9 +27,14 @@ class Services:
         self.accounts = AccountService(store, tokens)
         self.uploads = UploadManager(qt_parent)
         self.media = MediaLinks()
-        self.pipeline = Pipeline(store, self.accounts, self.uploads, media=self.media)
-        self.dispatcher = Dispatcher(store, self.pipeline, publishers if publishers is not None
-                                     else default_publishers())
+        self.enabled = enabled_platforms(store)   # read once: dispatcher and scheduling always agree
+        if publishers is None:
+            publishers = {p: pub for p, pub in default_publishers().items() if p in self.enabled}
+        self.pipeline = Pipeline(store, self.accounts, self.uploads, media=self.media, enabled=self.enabled)
+        self.dispatcher = Dispatcher(store, self.pipeline, publishers)
+        off = sorted(set(default_publishers()) - set(publishers))
+        if off:
+            log.info("Automatic posting is off for: %s (copy-paste only).", ", ".join(off))
         self.pipeline.on_scheduled = self.dispatcher.kick
         self.api = None
         self._agent_token: str | None = None

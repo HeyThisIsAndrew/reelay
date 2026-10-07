@@ -14,7 +14,7 @@ from reelay.models import DispatchStatus, Platform, PostStatus, Stage
 from reelay.pipeline import utc_iso
 from reelay.publishers.base import PermanentError, PublishResult, TransientError
 from reelay.scheduler import Dispatcher, backoff_seconds
-from tests.fakes import make_world
+from tests.fakes import enable_publishing, make_world
 
 T0 = datetime.now(timezone.utc).replace(microsecond=0)  # claims made by the pipeline use the real clock
 
@@ -53,6 +53,7 @@ class FakePublisher:
 
 @pytest.fixture
 def world(tmp_path, monkeypatch):
+    enable_publishing(monkeypatch)  # these tests exercise the (normally dormant) publishers
     w = make_world(tmp_path, monkeypatch, connect=(Platform.BLUESKY, Platform.THREADS, Platform.FACEBOOK))
     w.store.set_setting("public_url", "https://reelay.example.com")
     yield w
@@ -280,6 +281,7 @@ def test_backoff_curve():
 def test_upgrade_carries_youtube_schedules_into_dispatches(tmp_path, monkeypatch):
     import reelay.store as store_module
     from reelay.models import Post, VideoItem
+    current = store_module.SCHEMA_VERSION
     monkeypatch.setattr(store_module, "SCHEMA_VERSION", 1)
     old = store_module.Store(tmp_path / "old.db")
     profile = old.create_profile("Lydia", tmp_path)
@@ -290,11 +292,69 @@ def test_upgrade_carries_youtube_schedules_into_dispatches(tmp_path, monkeypatch
         (row,))
     old.conn.commit()
     old.close()
-    monkeypatch.setattr(store_module, "SCHEMA_VERSION", 2)
+    monkeypatch.setattr(store_module, "SCHEMA_VERSION", current)  # upgrade v1 → current in one go
     new = store_module.Store(tmp_path / "old.db")
     [dispatch] = new.dispatches_for(row)
     assert (dispatch.platform, dispatch.status, dispatch.remote_id, dispatch.publish_at) == \
         ("youtube", "scheduled", "YTold", "2026-12-01T16:00:00Z")
     post = new.get_post(row)
     assert post.target_platforms == ["youtube"] and post.bluesky_text is None
+    assert post.tiktok_text is None and post.hashtags is None
     new.close()
+
+
+
+# ------------------------------------------------------------------ publishing flags
+def test_flags_default_off_env_wins_over_setting(tmp_path, monkeypatch):
+    from reelay.flags import enabled_platforms, flag_source
+    from reelay.store import Store
+    from tests.fakes import disable_publishing
+    disable_publishing(monkeypatch)
+    store = Store(tmp_path / "f.db")
+    assert enabled_platforms(store) == {"youtube"}
+    store.set_setting("publish.threads", "1")
+    assert flag_source("threads", store) == (True, "setting")
+    monkeypatch.setenv("REELAY_PUBLISH_THREADS", "0")
+    assert flag_source("threads", store) == (False, "env")
+    monkeypatch.setenv("REELAY_PUBLISH_FACEBOOK", "true")
+    assert enabled_platforms(store) == {"youtube", "facebook"}
+    monkeypatch.setenv("REELAY_PUBLISH_BLUESKY", "maybe")  # nonsense is ignored, not treated as on
+    assert flag_source("bluesky", store) == (False, "default")
+    store.close()
+
+
+def test_services_only_build_enabled_publishers(tmp_path, monkeypatch):
+    from reelay.services import Services
+    from reelay.store import Store
+    from reelay.tokens import MemoryTokenStore
+    from tests.fakes import disable_publishing
+    disable_publishing(monkeypatch)
+    store = Store(tmp_path / "s.db")
+    services = Services(store, MemoryTokenStore())
+    assert set(services.dispatcher.publishers) == {"youtube"}  # only the YouTube hand-off
+    assert services.pipeline.enabled_platforms() == {"youtube"}
+    assert services.dispatcher.run_once() == 0  # harmless with nothing to post
+    monkeypatch.setenv("REELAY_PUBLISH_BLUESKY", "1")
+    enabled = Services(store, MemoryTokenStore())
+    assert set(enabled.dispatcher.publishers) == {"youtube", "bluesky"}
+    services.stop()
+    enabled.stop()
+    store.close()
+
+
+def test_dispatcher_with_no_publishers_leaves_items_untouched(world, monkeypatch):
+    row = world.rows[0]
+    schedule(world, row, ["bluesky", "threads"])  # scheduled while they were on
+    clock = Clock(T0 + timedelta(days=2))
+    dormant = Dispatcher(world.store, world.pipeline, {}, interval=1, stale_seconds=600, clock=clock)
+    assert dormant.run_once() == 0
+    assert statuses(world, row) == {"bluesky": "pending", "threads": "pending"}  # waiting, not failed
+    dormant.start()
+    dormant.kick()
+    time.sleep(0.2)
+    dormant.stop()
+    assert statuses(world, row) == {"bluesky": "pending", "threads": "pending"}
+    # turning a platform back on needs no code changes: the same items go out
+    active, pubs = make_dispatcher(world, clock)
+    active.run_once()
+    assert statuses(world, row) == {"bluesky": "published", "threads": "published"}

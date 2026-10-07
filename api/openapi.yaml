@@ -7,7 +7,7 @@ info:
   description: 'Read a creator''s video board, apply approved metadata edits, and schedule posts to YouTube, Bluesky,
     Threads and Facebook. All /v1 routes need `Authorization: Bearer <token>`. Changes show up immediately on the
     Reelay desktop board.'
-  version: 0.3.0
+  version: 0.4.0
 paths:
   /v1/board:
     get:
@@ -98,11 +98,13 @@ paths:
       tags:
       - videos
       summary: Update a video's post metadata
-      description: 'Partial update. Accepts only title, description, tags, target_platforms, bluesky_text and
+      description: 'Partial update of the card''s copy: title, description, tags, target_platforms, tiktok_text,
 
-        threads_text. Everything is validated first; if anything is invalid nothing is written (422).
+        instagram_text, bluesky_text, threads_text, facebook_text and hashtags. Everything is validated first; if
 
-        Over-limit text is rejected, never shortened. Returns the updated video.'
+        anything is invalid nothing is written (422). Over-limit text is rejected, never shortened. Returns the
+
+        updated video.'
       operationId: updateVideo
       security:
       - HTTPBearer: []
@@ -155,12 +157,15 @@ paths:
       tags:
       - videos
       summary: Schedule or publish a video to its platforms
-      description: 'Queues publishing through Reelay''s pipeline. YouTube uploads join the app''s upload queue (one
-        at a time)
+      description: 'Queues automatic posting through Reelay''s pipeline. YouTube uploads join the app''s upload
+        queue (one at
 
-        and are scheduled on YouTube; Facebook is uploaded and scheduled on the Page; Bluesky and Threads are posted
+        a time) and are scheduled on YouTube. Bluesky, Threads and Facebook post automatically only when enabled
 
-        by Reelay at the scheduled time. 409 if any requested platform is already scheduled or published.'
+        (see GET /v1/platforms auto_post); otherwise their copy is posted by hand. 409 if any requested platform
+        is
+
+        already scheduled or published.'
       operationId: scheduleVideo
       security:
       - HTTPBearer: []
@@ -348,20 +353,39 @@ components:
       title: ErrorBody
     Overrides:
       properties:
+        tiktok_text:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Tiktok Text
+          description: TikTok caption (max 4000 characters).
+        instagram_text:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Instagram Text
+          description: Instagram caption (max 2200 characters, 30 hashtags).
         bluesky_text:
           anyOf:
           - type: string
           - type: 'null'
           title: Bluesky Text
-          description: Post text used on Bluesky instead of the default (max 300 characters). null = unset.
+          description: Bluesky text (max 300 characters). Used instead of the title when posting to Bluesky.
         threads_text:
           anyOf:
           - type: string
           - type: 'null'
           title: Threads Text
-          description: Post text used on Threads instead of the default (max 500 characters). null = unset.
+          description: Threads text (max 500 characters). Used instead of the title when posting to Threads.
+        facebook_text:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Facebook Text
+          description: Facebook post text (max 63206 characters). Used as the Facebook description when posting.
       type: object
       title: Overrides
+      description: Ready-to-paste copy for each platform. null = not written yet.
     PlatformAccount:
       properties:
         name:
@@ -409,6 +433,12 @@ components:
           title: Connected
           description: 'True when at least one account has a credential in the keychain. "Connected" means a credential
             is present, not that it was verified recently: check last_verified_at.'
+        auto_post:
+          type: boolean
+          title: Auto Post
+          description: Whether Reelay may post to this platform automatically. When false, scheduling to it is rejected
+            and its copy is posted by hand. YouTube is always true; the others follow REELAY_PUBLISH_<PLATFORM>
+            or Settings.
         accounts:
           items:
             $ref: '#/components/schemas/PlatformAccount'
@@ -424,6 +454,7 @@ components:
       required:
       - platform
       - connected
+      - auto_post
       - accounts
       title: PlatformInfo
     PlatformsResponse:
@@ -581,7 +612,8 @@ components:
             minItems: 1
           - type: 'null'
           title: Platforms
-          description: Platforms for this request. Omit to use the video's target_platforms.
+          description: Platforms for this request; each must have automatic posting enabled (422 platform_disabled
+            otherwise). Omit to use the video's target_platforms that are enabled; the rest are reported as manual.
       additionalProperties: false
       type: object
       title: ScheduleRequest
@@ -615,6 +647,18 @@ components:
             - facebook
           type: array
           title: Target Platforms
+          description: Platforms Reelay will post to.
+        manual_platforms:
+          items:
+            type: string
+            enum:
+            - youtube
+            - bluesky
+            - threads
+            - facebook
+          type: array
+          title: Manual Platforms
+          description: 'The video''s other targets, which have automatic posting turned off: post these by hand.'
         jobs:
           items:
             $ref: '#/components/schemas/QueueJob'
@@ -735,7 +779,13 @@ components:
           description: Where this video will be posted when scheduled.
         overrides:
           $ref: '#/components/schemas/Overrides'
-          description: Platform-specific post text, if set.
+          description: Per-platform copy (the card's copy blocks).
+        hashtags:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Hashtags
+          description: 'The card''s shared hashtag block, e.g. "#growth #healing".'
         youtube_channel:
           anyOf:
           - $ref: '#/components/schemas/ChannelRef'
@@ -855,6 +905,30 @@ components:
           title: Threads Text
           description: Threads post text, max 500 characters (emoji count as their UTF-8 byte length). null clears
             it.
+        tiktok_text:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Tiktok Text
+          description: TikTok caption, max 4000 characters. null clears it.
+        instagram_text:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Instagram Text
+          description: Instagram caption, max 2200 characters and 30 hashtags. null clears it.
+        facebook_text:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Facebook Text
+          description: Facebook post text, max 63206 characters. null clears it.
+        hashtags:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Hashtags
+          description: 'Shared hashtag block for the card, e.g. "#growth #healing". null clears it.'
       additionalProperties: false
       type: object
       title: VideoPatch

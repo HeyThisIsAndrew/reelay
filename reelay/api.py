@@ -39,7 +39,9 @@ from .accounts import YOUTUBE, AccountService
 from .media import MediaLinks, public_base_url
 from .models import Platform, Profile, Stage
 from .pipeline import Card, Pipeline, PipelineError
-from .platform_text import BLUESKY_MAX_GRAPHEMES, THREADS_MAX_CHARS
+from .flags import env_var
+from .platform_text import (BLUESKY_MAX_GRAPHEMES, FACEBOOK_MAX_CHARS, INSTAGRAM_MAX_CHARS, INSTAGRAM_MAX_HASHTAGS,
+                            THREADS_MAX_CHARS, TIKTOK_MAX_CHARS)
 from .publishing import TITLE_MAX, parse_utc
 from .store import Store
 
@@ -59,7 +61,7 @@ STATUS_FOR_CODE = {
     "not_found": 404,
     "locked": 409, "already_scheduled": 409, "already_uploading": 409, "needs_upload": 409,
     "invalid_post": 422, "invalid_field": 422, "invalid_stage": 422, "invalid_time": 422,
-    "invalid_platform": 422, "invalid": 422,
+    "invalid_platform": 422, "platform_disabled": 422, "invalid": 422,
 }
 
 
@@ -103,10 +105,16 @@ class SourceInfo(BaseModel):
 
 
 class Overrides(BaseModel):
-    bluesky_text: str | None = Field(None, description=f"Post text used on Bluesky instead of the default "
-                                                       f"(max {BLUESKY_MAX_GRAPHEMES} characters). null = unset.")
-    threads_text: str | None = Field(None, description=f"Post text used on Threads instead of the default "
-                                                       f"(max {THREADS_MAX_CHARS} characters). null = unset.")
+    """Ready-to-paste copy for each platform. null = not written yet."""
+    tiktok_text: str | None = Field(None, description=f"TikTok caption (max {TIKTOK_MAX_CHARS} characters).")
+    instagram_text: str | None = Field(None, description=f"Instagram caption (max {INSTAGRAM_MAX_CHARS} characters, "
+                                                         f"{INSTAGRAM_MAX_HASHTAGS} hashtags).")
+    bluesky_text: str | None = Field(None, description=f"Bluesky text (max {BLUESKY_MAX_GRAPHEMES} characters). Used "
+                                                       "instead of the title when posting to Bluesky.")
+    threads_text: str | None = Field(None, description=f"Threads text (max {THREADS_MAX_CHARS} characters). Used "
+                                                       "instead of the title when posting to Threads.")
+    facebook_text: str | None = Field(None, description=f"Facebook post text (max {FACEBOOK_MAX_CHARS} characters). "
+                                                        "Used as the Facebook description when posting.")
 
 
 class ChannelRef(BaseModel):
@@ -135,7 +143,8 @@ class Video(BaseModel):
     description: str
     tags: list[str]
     target_platforms: list[PlatformName] = Field(description="Where this video will be posted when scheduled.")
-    overrides: Overrides = Field(description="Platform-specific post text, if set.")
+    overrides: Overrides = Field(description="Per-platform copy (the card's copy blocks).")
+    hashtags: str | None = Field(None, description="The card's shared hashtag block, e.g. \"#growth #healing\".")
     youtube_channel: ChannelRef | None = Field(None, description="Connected YouTube channel the video posts to.")
     visibility: Visibility = Field(description="YouTube visibility for immediate posts. Scheduled YouTube videos "
                                                "are uploaded private and go public at scheduled_at.")
@@ -175,6 +184,14 @@ class VideoPatch(BaseModel):
                                                        "(grapheme clusters, so an emoji counts once). null clears it.")
     threads_text: str | None = Field(None, description=f"Threads post text, max {THREADS_MAX_CHARS} characters "
                                                        "(emoji count as their UTF-8 byte length). null clears it.")
+    tiktok_text: str | None = Field(None, description=f"TikTok caption, max {TIKTOK_MAX_CHARS} characters. "
+                                                      "null clears it.")
+    instagram_text: str | None = Field(None, description=f"Instagram caption, max {INSTAGRAM_MAX_CHARS} characters "
+                                                         f"and {INSTAGRAM_MAX_HASHTAGS} hashtags. null clears it.")
+    facebook_text: str | None = Field(None, description=f"Facebook post text, max {FACEBOOK_MAX_CHARS} characters. "
+                                                        "null clears it.")
+    hashtags: str | None = Field(None, description="Shared hashtag block for the card, e.g. \"#growth #healing\". "
+                                                   "null clears it.")
 
 
 class ScheduleRequest(BaseModel):
@@ -184,7 +201,9 @@ class ScheduleRequest(BaseModel):
         None, description="When to go live, ISO 8601 with a timezone, at least 10 minutes ahead. Omit to use the "
                           "card's saved time, or publish as soon as possible if it has none.")
     platforms: list[PlatformName] | None = Field(
-        None, min_length=1, description="Platforms for this request. Omit to use the video's target_platforms.")
+        None, min_length=1, description="Platforms for this request; each must have automatic posting enabled "
+                                        "(422 platform_disabled otherwise). Omit to use the video's "
+                                        "target_platforms that are enabled; the rest are reported as manual.")
 
 
 class QueueJob(BaseModel):
@@ -202,7 +221,9 @@ class ScheduleResponse(BaseModel):
     video_id: int
     stage: StageName
     scheduled_at: datetime | None = Field(None, description="When it goes live (UTC); null = as soon as possible.")
-    target_platforms: list[PlatformName]
+    target_platforms: list[PlatformName] = Field(description="Platforms Reelay will post to.")
+    manual_platforms: list[PlatformName] = Field(default_factory=list, description="The video's other targets, "
+                                                 "which have automatic posting turned off: post these by hand.")
     jobs: list[QueueJob]
 
 
@@ -222,6 +243,9 @@ class PlatformInfo(BaseModel):
     connected: bool = Field(description="True when at least one account has a credential in the keychain. "
                                         "\"Connected\" means a credential is present, not that it was verified "
                                         "recently: check last_verified_at.")
+    auto_post: bool = Field(description="Whether Reelay may post to this platform automatically. When false, "
+                                        "scheduling to it is rejected and its copy is posted by hand. YouTube is "
+                                        "always true; the others follow REELAY_PUBLISH_<PLATFORM> or Settings.")
     accounts: list[PlatformAccount]
     setup_issue: str | None = Field(None, description="What still needs setting up before posting works, if anything.")
 
@@ -316,7 +340,10 @@ def create_app(store: Store, pipeline: Pipeline, accounts: AccountService, token
         return Video(
             id=row.id, profile=profile.name, stage=row.stage, title=post.title, description=post.description,
             tags=post.tags, target_platforms=post.target_platforms,
-            overrides=Overrides(bluesky_text=post.bluesky_text, threads_text=post.threads_text),
+            overrides=Overrides(tiktok_text=post.tiktok_text, instagram_text=post.instagram_text,
+                                bluesky_text=post.bluesky_text, threads_text=post.threads_text,
+                                facebook_text=post.facebook_text),
+            hashtags=post.hashtags,
             youtube_channel=ChannelRef(id=channel.id, name=channel.display_name, handle=channel.handle or None)
             if channel else None,
             visibility=post.privacy, scheduled_at=parse_utc(post.publish_at), draft_saved=saved,
@@ -378,9 +405,10 @@ def create_app(store: Store, pipeline: Pipeline, accounts: AccountService, token
                summary="Update a video's post metadata", responses={k: ERRORS[k] for k in (401, 404, 409, 422)},
                **v1)
     def update_video(video_id: int, patch: VideoPatch) -> Video:
-        """Partial update. Accepts only title, description, tags, target_platforms, bluesky_text and
-        threads_text. Everything is validated first; if anything is invalid nothing is written (422).
-        Over-limit text is rejected, never shortened. Returns the updated video."""
+        """Partial update of the card's copy: title, description, tags, target_platforms, tiktok_text,
+        instagram_text, bluesky_text, threads_text, facebook_text and hashtags. Everything is validated first; if
+        anything is invalid nothing is written (422). Over-limit text is rejected, never shortened. Returns the
+        updated video."""
         changes = patch.model_dump(exclude_unset=True)
         if not changes:
             raise ApiError(422, "Send at least one field to change.", "invalid_request")
@@ -395,9 +423,10 @@ def create_app(store: Store, pipeline: Pipeline, accounts: AccountService, token
               summary="Schedule or publish a video to its platforms",
               responses={k: ERRORS[k] for k in (401, 404, 409, 422)}, **v1)
     def schedule_video(video_id: int, request: ScheduleRequest | None = None) -> ScheduleResponse:
-        """Queues publishing through Reelay's pipeline. YouTube uploads join the app's upload queue (one at a time)
-        and are scheduled on YouTube; Facebook is uploaded and scheduled on the Page; Bluesky and Threads are posted
-        by Reelay at the scheduled time. 409 if any requested platform is already scheduled or published."""
+        """Queues automatic posting through Reelay's pipeline. YouTube uploads join the app's upload queue (one at
+        a time) and are scheduled on YouTube. Bluesky, Threads and Facebook post automatically only when enabled
+        (see GET /v1/platforms auto_post); otherwise their copy is posted by hand. 409 if any requested platform is
+        already scheduled or published."""
         request = request or ScheduleRequest()
         with store.origin("api"):
             try:
@@ -405,13 +434,14 @@ def create_app(store: Store, pipeline: Pipeline, accounts: AccountService, token
                                            platforms=list(request.platforms) if request.platforms else None)
             except PipelineError as exc:
                 raise pipeline_error(exc) from None
-        targets = list(request.platforms) if request.platforms else result.post.target_platforms
+        targets = [d.platform for d in result.dispatches
+                   if d.platform in (request.platforms or result.post.target_platforms) and d.platform not in result.manual]
         jobs = [QueueJob(platform=d.platform, job_id=d.id, status=d.status, due_at=parse_utc(d.due_at),
                          publish_at=parse_utc(d.publish_at), queue_position=pipeline.queue_position(d))
                 for d in result.dispatches if d.platform in targets]
         row = store.get_video(video_id)
         return ScheduleResponse(video_id=video_id, stage=row.stage, scheduled_at=parse_utc(result.post.publish_at),
-                                target_platforms=targets, jobs=jobs)
+                                target_platforms=targets, manual_platforms=result.manual, jobs=jobs)
 
     @app.get("/v1/platforms", response_model=PlatformsResponse, operation_id="getPlatforms",
              summary="Which platforms are connected for a profile", tags=["platforms"],
@@ -428,7 +458,11 @@ def create_app(store: Store, pipeline: Pipeline, accounts: AccountService, token
                                        credential_present=accounts.has_credentials(a),
                                        last_verified_at=parse_utc(a.last_verified_at)) for a in listed]
             issue = None
-            if platform == Platform.YOUTUBE and accounts.oauth_client() is None:
+            auto_post = platform in pipeline.enabled_platforms()
+            if not auto_post:
+                issue = (f"Automatic posting is off (copy-paste only). Turn it on with {env_var(platform)}=1 or "
+                         "Reelay → Settings → Automatic posting, then restart Reelay.")
+            elif platform == Platform.YOUTUBE and accounts.oauth_client() is None:
                 issue = "Import Google API credentials in Reelay → Accounts."
             elif not listed:
                 issue = f"No {Platform.LABELS[platform]} account connected in Reelay → Accounts."
@@ -437,7 +471,7 @@ def create_app(store: Store, pipeline: Pipeline, accounts: AccountService, token
             elif platform == Platform.THREADS and not public_base_url(store):
                 issue = "Set REELAY_PUBLIC_URL to your Cloudflare Tunnel address so Threads can fetch videos."
             infos.append(PlatformInfo(platform=platform, connected=any(e.credential_present for e in entries),
-                                      accounts=entries, setup_issue=issue))
+                                      auto_post=auto_post, accounts=entries, setup_issue=issue))
         return PlatformsResponse(profile=ProfileRef(id=prof.id, name=prof.name), platforms=infos)
 
     # ---------------------------------------------------------------- media links (Threads)
