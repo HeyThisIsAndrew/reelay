@@ -257,6 +257,8 @@ class VideoTableModel(QAbstractTableModel):
             return "Queued"
         if item.status == Status.FAILED:
             return "Failed"
+        if item.availability in ("private", "scheduled"):
+            return "Private on YouTube" if item.availability == "private" else "Scheduled on YouTube"
         return "Ready" if item.checked else "Skipped"
 
     def _sort_value(self, item: VideoItem, col: Col):
@@ -278,6 +280,9 @@ class VideoTableModel(QAbstractTableModel):
             return fmt_date(item.upload_date)
         if col == Col.STATUS and item.status == Status.FAILED:
             return item.error
+        if col == Col.STATUS and item.availability in ("private", "scheduled") and not item.is_downloaded:
+            return ("Only you can see this video. Downloading it needs Login cookies from a browser "
+                    "signed into this YouTube channel.")
         if col == Col.FILENAME and item.is_downloaded and self.planned_filename(item) != item.filename:
             return f"Currently: {item.filename}\nClick “Apply Names” to rename."
         if col == Col.CUSTOM and not item.custom_name:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import logging
 import re
 from dataclasses import replace
@@ -9,18 +10,23 @@ from pathlib import Path
 
 from PySide6.QtCore import QSettings, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import (QApplication, QComboBox, QFileDialog, QHBoxLayout, QHeaderView,
-                               QInputDialog, QLabel, QLineEdit, QMenu, QMessageBox, QProgressBar,
-                               QPushButton, QSplitter, QStackedWidget, QTableView, QToolButton,
-                               QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
+                               QFrame, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QMenu,
+                               QMessageBox, QProgressBar, QPushButton, QScrollArea, QSplitter, QStackedWidget,
+                               QTableView, QToolButton, QVBoxLayout, QWidget)
 
 from .. import APP_NAME
 from ..downloader import QUALITY_BEST, QUALITY_LABELS
 from ..library import Library
 from ..models import Profile, Status, VideoItem
 from ..naming import DEFAULT_TEMPLATE, PRESETS, slugify
+from ..accounts import AccountService
 from ..platforms import is_supported_url
+from ..sources import (SourceError, SourceService, SourceView, channel_url, default_name, downloadable_by_default,
+                       normalize_url, youtube_items)
 from ..store import Store
+from ..tokens import MemoryTokenStore
+from ..youtube import YouTubeError
 from ..ytdl import COOKIE_BROWSERS, base_options, find_ffmpeg
 from .bridge import change_bridge
 from .detail_panel import DetailPanel
@@ -28,7 +34,7 @@ from .dialogs import RenamePreviewDialog, tokens_help_html
 from .table_model import ROW_HEIGHT, Col, CoverDelegate, VideoFilterProxy, VideoTableModel
 from .theme import set_prop
 from .thumbnails import ThumbnailCache
-from .workers import DetailsWorker, DownloadWorker, FetchWorker
+from .workers import CallWorker, DetailsWorker, DownloadWorker, FetchWorker
 
 log = logging.getLogger("reelay")
 
@@ -69,15 +75,89 @@ class VideoTable(QTableView):
         super().keyPressEvent(event)
 
 
+class SourceChip(QFrame):
+    """One source in "Download from": name, platform, one-click Fetch, ⋯ menu."""
+    fetchRequested = Signal(object)
+    renameRequested = Signal(object)
+    mineToggled = Signal(object)
+    removeRequested = Signal(object)
+    manageRequested = Signal()
+
+    def __init__(self, view: SourceView, parent=None):
+        super().__init__(parent)
+        self.setObjectName("Card")
+        self.view = view
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(10, 4, 4, 4)
+        lay.setSpacing(6)
+        platform = {"tiktok": "TikTok", "instagram": "Instagram", "youtube": "YouTube"}.get(view.platform, view.platform)
+        tag = "connected" if view.account else ("mine" if view.mine else "")
+        text = QLabel(f"<b>{html.escape(view.name)}</b>&nbsp;&nbsp;<span style='opacity:.6'>{platform}"
+                      f"{' · ' + tag if tag else ''}</span>")
+        text.setToolTip((view.url or "") + (f"\nSaved {view.duplicates + 1} times" if view.duplicates else ""))
+        lay.addWidget(text)
+        self.fetch_btn = QPushButton("Fetch")
+        self.fetch_btn.setToolTip("List this source's videos (account sources use the YouTube Data API)"
+                                  if view.account else f"Fetch {view.url}")
+        self.fetch_btn.clicked.connect(lambda: self.fetchRequested.emit(self.view))
+        lay.addWidget(self.fetch_btn)
+        more = QToolButton(text="⋯")
+        more.setPopupMode(QToolButton.InstantPopup)
+        menu = QMenu(more)
+        if view.account:
+            menu.addAction("Manage in Accounts", self.manageRequested.emit)
+        else:
+            menu.addAction("Rename…", lambda: self.renameRequested.emit(self.view))
+            menu.addAction("Not one of my accounts" if view.mine else "This is one of my accounts",
+                           lambda: self.mineToggled.emit(self.view))
+            menu.addSeparator()
+            menu.addAction("Remove", lambda: self.removeRequested.emit(self.view))
+        more.setMenu(menu)
+        lay.addWidget(more)
+
+    def set_busy(self, busy: bool) -> None:
+        self.fetch_btn.setEnabled(not busy)
+
+
+class SourceDialog(QDialog):
+    """Name a pasted link and say whether it's one of the profile's own accounts."""
+
+    def __init__(self, default: str, profile_name: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Save as Source")
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(20, 18, 20, 14)
+        lay.addWidget(muted("Name"))
+        self.name_edit = QLineEdit(default)
+        self.name_edit.selectAll()
+        lay.addWidget(self.name_edit)
+        self.mine_box = QCheckBox(f"This is one of {profile_name}'s own accounts")
+        lay.addWidget(self.mine_box)
+        buttons = QDialogButtonBox(QDialogButtonBox.Cancel | QDialogButtonBox.Save)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        lay.addWidget(buttons)
+
+    def name(self) -> str:
+        return self.name_edit.text().strip()
+
+    def mine(self) -> bool:
+        return self.mine_box.isChecked()
+
+
 class DownloadPage(QWidget):
     videosChanged = Signal()        # downloads finished / files renamed (board should reload)
     busyChanged = Signal(bool)
+    openAccounts = Signal()
 
-    def __init__(self, store: Store, thumbs: ThumbnailCache, parent=None):
+    def __init__(self, store: Store, thumbs: ThumbnailCache, accounts: AccountService | None = None, parent=None):
         super().__init__(parent)
         self.setObjectName("Page")
         self.store = store
         self.thumbs = thumbs
+        self.accounts = accounts or AccountService(store, MemoryTokenStore())
+        self.source_service = SourceService(store, self.accounts)
+        self.account_fetch: CallWorker | None = None
         self.profile: Profile | None = None
         self.library: Library | None = None
         self.model = VideoTableModel(thumbs, self)
@@ -105,16 +185,46 @@ class DownloadPage(QWidget):
         outer.setContentsMargins(18, 16, 18, 12)
         outer.setSpacing(12)
 
+        # ---- "Download from": the IN door
+        head = QHBoxLayout()
+        title = QLabel("Download from")
+        title.setObjectName("DetailTitle")
+        head.addWidget(title)
+        head.addSpacing(10)
+        self.doors_note = muted("Downloading pulls videos in from these sources. Posting pushes videos out to the "
+                                "accounts you connect under Accounts.")
+        self.doors_note.setWordWrap(True)
+        head.addWidget(self.doors_note, 1)
+        outer.addLayout(head)
+
+        self.chip_area = QScrollArea()
+        self.chip_area.setWidgetResizable(True)
+        self.chip_area.setFrameShape(QFrame.NoFrame)
+        self.chip_area.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.chip_area.setFixedHeight(54)
+        chip_body = QWidget(objectName="Page")
+        self.chip_row = QHBoxLayout(chip_body)
+        self.chip_row.setContentsMargins(0, 0, 0, 0)
+        self.chip_row.setSpacing(8)
+        self.chip_area.setWidget(chip_body)
+        outer.addWidget(self.chip_area)
+
+        self.paste_label = muted("Paste any public profile link, yours or someone else's (or several video links).")
+        outer.addWidget(self.paste_label)
         row1 = QHBoxLayout()
         row1.setSpacing(8)
         self.url = QLineEdit(objectName="UrlField")
-        self.url.setPlaceholderText("Paste a TikTok, Instagram or YouTube profile link (or several video links)")
+        self.url.setPlaceholderText("https://www.tiktok.com/@creator")
         self.url.setClearButtonEnabled(True)
         self.url.setAttribute(Qt.WA_MacShowFocusRect, False)
         self.fetch_btn = QPushButton("Fetch Videos")
         set_prop(self.fetch_btn, "primary")
         self.fetch_btn.setMinimumHeight(38)
+        self.save_source_btn = QPushButton("Save as Source…")
+        self.save_source_btn.setToolTip("Keep this link as a one-click source for this profile")
+        self.save_source_btn.setMinimumHeight(38)
         row1.addWidget(self.url, 1)
+        row1.addWidget(self.save_source_btn)
         row1.addWidget(self.fetch_btn)
         outer.addLayout(row1)
 
@@ -297,9 +407,9 @@ class DownloadPage(QWidget):
         w = QWidget()
         lay = QVBoxLayout(w)
         lay.addStretch()
-        t = QLabel("Start with a profile link", objectName="EmptyTitle")
+        t = QLabel("Pick a source, or paste a profile link", objectName="EmptyTitle")
         t.setAlignment(Qt.AlignCenter)
-        s = muted("Paste a creator's TikTok, Instagram or YouTube link above and click Fetch Videos.\n"
+        s = muted("Click Fetch on one of the sources above, or paste a TikTok, Instagram or YouTube link.\n"
                   "You'll see every video here first, then choose which ones to download and how to name them.")
         s.setAlignment(Qt.AlignCenter)
         s.setWordWrap(True)
@@ -312,6 +422,7 @@ class DownloadPage(QWidget):
     def _connect(self) -> None:
         self.fetch_btn.clicked.connect(self._fetch)
         self.url.returnPressed.connect(self._fetch)
+        self.save_source_btn.clicked.connect(self._save_pasted_source)
         self.folder_btn.clicked.connect(self.choose_folder)
         self.open_folder_btn.clicked.connect(self.open_output_folder)
         self.manifest_btn.clicked.connect(self.open_manifest)
@@ -333,6 +444,9 @@ class DownloadPage(QWidget):
     def _on_store_change(self, change) -> None:
         """Pick up custom-name edits made outside this page (e.g. the companion
         app). This page's own writes are "local" and already on screen."""
+        if change.entity in ("source", "account") and self.profile and change.profile_id in (None, self.profile.id):
+            self.refresh_sources()
+            return
         if change.origin == "local" or change.entity != "video" or not self.profile \
                 or change.profile_id != self.profile.id:
             return
@@ -370,6 +484,7 @@ class DownloadPage(QWidget):
         self.url.setText(profile.last_source)
         self._loading_profile = False
         self._open_folder(self.folder)
+        self.refresh_sources()
         self._set_status("")
         self._start_details()
 
@@ -519,8 +634,14 @@ class DownloadPage(QWidget):
             log.warning("Couldn't write manifest: %s", exc)
 
     # ================================================================ fetch
+    @property
+    def fetching(self) -> bool:
+        return bool((self.fetch_worker and self.fetch_worker.isRunning()) or
+                    (self.account_fetch and self.account_fetch.isRunning()))
+
     def _fetch(self) -> None:
-        if (self.fetch_worker and self.fetch_worker.isRunning()) or not self.profile:
+        """Fetch from the pasted link(s), exactly as before sources existed."""
+        if self.fetching or not self.profile:
             return
         urls = [u for u in re.split(r"[\s,]+", self.url.text().strip()) if u]
         if not urls:
@@ -533,22 +654,128 @@ class DownloadPage(QWidget):
             return
         self.profile.last_source = self.url.text().strip()
         self.store.update_profile(self.profile)
+        self._fetch_urls(urls)
+
+    def _fetch_urls(self, urls: list[str], source_id: int | None = None) -> None:
+        self._begin_fetch("Fetching video list…")
+        self.fetch_worker = FetchWorker(urls, self._opts(), self)
+        self.fetch_worker.sourceStarted.connect(lambda u: self._set_status(f"Fetching video list from {u} …"))
+        self.fetch_worker.fetched.connect(lambda items, errs: self._on_fetched(urls, items, errs, source_id))
+        self.fetch_worker.start()
+
+    def _begin_fetch(self, message: str) -> None:
         self._stop_details()
         self.fetch_btn.setEnabled(False)
         self.fetch_btn.setText("Fetching…")
+        for chip in self._chips():
+            chip.set_busy(True)
         self.progress.setRange(0, 0)
         self.progress.setVisible(True)
-        self._set_status("Fetching video list…")
-        self.fetch_worker = FetchWorker(urls, self._opts(), self)
-        self.fetch_worker.sourceStarted.connect(lambda u: self._set_status(f"Fetching video list from {u} …"))
-        self.fetch_worker.fetched.connect(lambda items, errs: self._on_fetched(urls, items, errs))
-        self.fetch_worker.start()
+        self._set_status(message)
 
-    def _on_fetched(self, urls: list[str], items: list[VideoItem], errors: list[tuple[str, str]]) -> None:
+    # ================================================================ sources
+    def _chips(self) -> list["SourceChip"]:
+        return [self.chip_row.itemAt(i).widget() for i in range(self.chip_row.count())
+                if isinstance(self.chip_row.itemAt(i).widget(), SourceChip)]
+
+    def refresh_sources(self) -> None:
+        """Rebuild the "Download from" chips: own accounts first, then saved profiles."""
+        while self.chip_row.count():
+            item = self.chip_row.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        if not self.profile:
+            return
+        views = self.source_service.display_sources(self.profile.id)
+        for view in views:
+            chip = SourceChip(view, self)
+            chip.fetchRequested.connect(self.fetch_source)
+            chip.renameRequested.connect(self._rename_source)
+            chip.mineToggled.connect(self._toggle_mine)
+            chip.removeRequested.connect(self._remove_source)
+            chip.manageRequested.connect(self.openAccounts.emit)
+            chip.set_busy(self.fetching)
+            self.chip_row.addWidget(chip)
+        if not views:
+            hint = muted("No sources yet. Paste a profile link below and click “Save as Source…”, or connect a "
+                         "YouTube channel under Accounts.")
+            hint.setProperty("faint", True)
+            self.chip_row.addWidget(hint)
+        self.chip_row.addStretch()
+
+    def fetch_source(self, view: SourceView) -> None:
+        """One click: fetch from a saved source's URL or a connected channel."""
+        if self.fetching or not self.profile:
+            return
+        if view.account is not None:
+            self._fetch_account(view)
+            return
+        self.url.setText(view.url)
+        self.profile.last_source = view.url
+        self.store.update_profile(self.profile)
+        self._fetch_urls([view.url], source_id=view.source_id)
+
+    def _fetch_account(self, view: SourceView) -> None:
+        try:
+            client = self.accounts.client_for(view.account)
+        except YouTubeError as exc:
+            QMessageBox.warning(self, APP_NAME, str(exc))
+            return
+        url = channel_url(view.account)
+        self._begin_fetch(f"Listing {view.name}'s videos from YouTube…")
+        self.account_fetch = CallWorker(lambda: youtube_items(client.list_channel_videos()), parent=self)
+        self.account_fetch.succeeded.connect(lambda items: self._on_fetched([url], items, []))
+        self.account_fetch.failed.connect(lambda message: self._on_fetched([url], [], [(view.name, message)]))
+        self.account_fetch.start()
+
+    def _save_pasted_source(self) -> None:
+        if not self.profile:
+            return
+        url = self.url.text().strip()
+        if not url or len(re.split(r"[\s,]+", url)) > 1:
+            QMessageBox.information(self, APP_NAME, "Paste one profile link to save it as a source.")
+            return
+        dialog = SourceDialog(default_name(url), self.profile.name, self)
+        if dialog.exec() != SourceDialog.Accepted:
+            return
+        try:
+            self.source_service.add(self.profile.id, url, dialog.name(), dialog.mine())
+        except SourceError as exc:
+            QMessageBox.warning(self, APP_NAME, str(exc))
+            return
+        self._set_status(f"Saved “{dialog.name() or default_name(url)}”. Next time it's one click above.")
+
+    def _rename_source(self, view: SourceView) -> None:
+        name, ok = QInputDialog.getText(self, "Rename Source", "Name:", text=view.name)
+        if ok:
+            try:
+                self.source_service.rename(view.source_id, name)
+            except SourceError as exc:
+                QMessageBox.warning(self, APP_NAME, str(exc))
+
+    def _toggle_mine(self, view: SourceView) -> None:
+        self.source_service.set_mine(view.source_id, not view.mine)
+
+    def _remove_source(self, view: SourceView) -> None:
+        extra = f" (and {view.duplicates} duplicate{'s' if view.duplicates != 1 else ''})" if view.duplicates else ""
+        if QMessageBox.question(self, "Remove Source", f"Remove “{view.name}”{extra} from this profile's sources?\n\n"
+                                "Videos already fetched or downloaded stay.") != QMessageBox.Yes:
+            return
+        target = normalize_url(view.url)
+        for other in self.source_service.all_sources(self.profile.id):
+            if other.kind == "saved" and normalize_url(other.url) == target:
+                self.source_service.remove(other.source_id)
+
+    def _on_fetched(self, urls: list[str], items: list[VideoItem], errors: list[tuple[str, str]],
+                    source_id: int | None = None) -> None:
         self.fetch_btn.setEnabled(True)
         self.fetch_btn.setText("Fetch Videos")
+        for chip in self._chips():
+            chip.set_busy(False)
         self.progress.setRange(0, 1000)
         self.progress.setVisible(False)
+        if source_id is not None and items:
+            self.source_service.mark_fetched(source_id)
         if errors:
             self.failures.extend(errors)
             QMessageBox.warning(self, "Couldn't fetch everything",
@@ -559,10 +786,15 @@ class DownloadPage(QWidget):
         self.fetched = items
         self.sources = urls
         self.reload()
+        held = [i for i in self.model.items() if not i.is_downloaded and not downloadable_by_default(i)]
+        if held:  # private / scheduled YouTube videos need the owner's login cookies
+            self.model.set_checked([i.key for i in held], False)
         self.store.save_videos(self.profile.id, self.model.items())
         new = sum(1 for i in self.model.items() if not i.is_downloaded)
+        note = (f" {len(held)} private or scheduled video{'s are' if len(held) != 1 else ' is'} left unticked: "
+                "downloading those needs Login cookies from a browser signed into that channel.") if held else ""
         self._set_status(f"Found {len(items)} videos · {new} not downloaded yet. "
-                         "Choose which to include, name them, then click Download.")
+                         "Choose which to include, name them, then click Download." + note)
         self._start_details()
 
     def _start_details(self) -> None:

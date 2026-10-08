@@ -7,7 +7,7 @@ info:
   description: 'Read a creator''s video board, apply approved metadata edits, and schedule posts to YouTube, Bluesky,
     Threads and Facebook. All /v1 routes need `Authorization: Bearer <token>`. Changes show up immediately on the
     Reelay desktop board.'
-  version: 0.4.0
+  version: 0.5.0
 paths:
   /v1/board:
     get:
@@ -243,6 +243,104 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/PlatformsResponse'
+        '400':
+          description: Bad request (e.g. missing or unknown profile).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '401':
+          description: Missing or invalid bearer token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Invalid input; nothing was changed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+  /v1/sources:
+    get:
+      tags:
+      - sources
+      summary: List a profile's download sources
+      description: 'Where this profile''s videos are downloaded from: connected YouTube channels (listed through
+        the
+
+        YouTube Data API) and saved TikTok / Instagram / YouTube profile URLs. Downloading pulls videos in;
+
+        publishing out is separate (see /v1/platforms).'
+      operationId: getSources
+      security:
+      - HTTPBearer: []
+      parameters:
+      - name: profile
+        in: query
+        required: true
+        schema:
+          type: string
+          description: Profile name exactly as shown in Reelay's sidebar.
+          title: Profile
+        description: Profile name exactly as shown in Reelay's sidebar.
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SourcesResponse'
+        '400':
+          description: Bad request (e.g. missing or unknown profile).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '401':
+          description: Missing or invalid bearer token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Invalid input; nothing was changed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+    post:
+      tags:
+      - sources
+      summary: Save a download source for a profile
+      description: 'Saves a TikTok, Instagram or YouTube profile URL so it can be fetched in one click on the Download
+
+        page. Saving the same URL twice is allowed (the Download page shows it once).'
+      operationId: addSource
+      security:
+      - HTTPBearer: []
+      parameters:
+      - name: profile
+        in: query
+        required: true
+        schema:
+          type: string
+          description: Profile name exactly as shown in Reelay's sidebar.
+          title: Profile
+        description: Profile name exactly as shown in Reelay's sidebar.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SourceCreate'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SourceOut'
         '400':
           description: Bad request (e.g. missing or unknown profile).
           content:
@@ -671,6 +769,54 @@ components:
       - target_platforms
       - jobs
       title: ScheduleResponse
+    SourceAccount:
+      properties:
+        id:
+          type: integer
+          title: Id
+          description: Reelay's id for the connected account.
+        platform:
+          type: string
+          const: youtube
+          title: Platform
+        name:
+          type: string
+          title: Name
+        handle:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Handle
+      type: object
+      required:
+      - id
+      - platform
+      - name
+      title: SourceAccount
+    SourceCreate:
+      properties:
+        url:
+          type: string
+          minLength: 1
+          title: Url
+          description: Public TikTok, Instagram or YouTube profile URL.
+        name:
+          anyOf:
+          - type: string
+            maxLength: 80
+          - type: 'null'
+          title: Name
+          description: Display name. Defaults to the handle in the URL, e.g. "@livingood.lifestyle on TikTok".
+        mine:
+          type: boolean
+          title: Mine
+          description: Mark as one of this profile's own accounts.
+          default: false
+      additionalProperties: false
+      type: object
+      required:
+      - url
+      title: SourceCreate
     SourceInfo:
       properties:
         platform:
@@ -710,6 +856,77 @@ components:
       - hook
       - stats
       title: SourceInfo
+    SourceOut:
+      properties:
+        id:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Id
+          description: Saved source id; null for a connected account.
+        kind:
+          type: string
+          enum:
+          - saved
+          - account
+          title: Kind
+          description: saved = a profile URL saved in Reelay (downloaded via the link). account = a connected YouTube
+            channel, listed through the YouTube Data API (no link needed).
+        name:
+          type: string
+          title: Name
+        platform:
+          type: string
+          enum:
+          - tiktok
+          - instagram
+          - youtube
+          title: Platform
+        url:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Url
+          description: 'Profile URL (for accounts: the channel''s URL, for reference).'
+        mine:
+          type: boolean
+          title: Mine
+          description: One of this profile's own accounts.
+        account:
+          anyOf:
+          - $ref: '#/components/schemas/SourceAccount'
+          - type: 'null'
+          description: The connected account behind an account source.
+        last_fetched_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Last Fetched At
+          description: Last time this saved source was fetched.
+      type: object
+      required:
+      - kind
+      - name
+      - platform
+      - mine
+      title: SourceOut
+    SourcesResponse:
+      properties:
+        profile:
+          $ref: '#/components/schemas/ProfileRef'
+        sources:
+          items:
+            $ref: '#/components/schemas/SourceOut'
+          type: array
+          title: Sources
+          description: 'Every source: connected YouTube channels first, then saved sources. Duplicate URLs are listed
+            as stored (not merged).'
+      type: object
+      required:
+      - profile
+      - sources
+      title: SourcesResponse
     Stats:
       properties:
         views:

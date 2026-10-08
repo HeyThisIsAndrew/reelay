@@ -27,11 +27,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterable, Iterator
 
-from .models import Account, Dispatch, DispatchStatus, Post, PostStatus, Profile, Stage, VideoItem, VideoRow
+from .models import (Account, Dispatch, DispatchStatus, Post, PostStatus, Profile, Source, Stage, VideoItem,
+                     VideoRow)
 
 log = logging.getLogger("reelay")
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 @dataclass(frozen=True)
@@ -135,6 +136,19 @@ _MIGRATIONS: dict[int, str] = {
     ALTER TABLE posts ADD COLUMN instagram_text TEXT;
     ALTER TABLE posts ADD COLUMN facebook_text TEXT;
     ALTER TABLE posts ADD COLUMN hashtags TEXT;
+    """,
+    4: """
+    CREATE TABLE sources (
+        id INTEGER PRIMARY KEY,
+        profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        platform TEXT NOT NULL,
+        url TEXT NOT NULL,
+        mine INTEGER NOT NULL DEFAULT 0,
+        last_fetched_at TEXT,
+        created_at TEXT NOT NULL
+    );
+    CREATE INDEX sources_by_profile ON sources (profile_id);
     """,
 }
 
@@ -476,6 +490,46 @@ class Store:
                     bluesky_text=row["bluesky_text"], threads_text=row["threads_text"],
                     tiktok_text=row["tiktok_text"], instagram_text=row["instagram_text"],
                     facebook_text=row["facebook_text"], hashtags=row["hashtags"])
+
+    # ================================================================ download sources
+    def list_sources(self, profile_id: int) -> list[Source]:
+        rows = self.conn.execute("SELECT * FROM sources WHERE profile_id=? ORDER BY mine DESC, name COLLATE NOCASE, id",
+                                 (profile_id,)).fetchall()
+        return [self._source(r) for r in rows]
+
+    def get_source(self, source_id: int) -> Source | None:
+        row = self.conn.execute("SELECT * FROM sources WHERE id=?", (source_id,)).fetchone()
+        return self._source(row) if row else None
+
+    def add_source(self, source: Source) -> Source:
+        source.created_at = source.created_at or utcnow()
+        with self.tx() as c:
+            cur = c.execute("INSERT INTO sources (profile_id, name, platform, url, mine, last_fetched_at, created_at) "
+                            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                            (source.profile_id, source.name, source.platform, source.url, int(source.mine),
+                             source.last_fetched_at, source.created_at))
+        source.id = cur.lastrowid
+        self._emit("source", (source.id,), source.profile_id)
+        return source
+
+    def update_source(self, source: Source) -> None:
+        with self.tx() as c:
+            c.execute("UPDATE sources SET name=?, url=?, platform=?, mine=?, last_fetched_at=? WHERE id=?",
+                      (source.name, source.url, source.platform, int(source.mine), source.last_fetched_at, source.id))
+        self._emit("source", (source.id,), source.profile_id)
+
+    def delete_source(self, source_id: int) -> None:
+        source = self.get_source(source_id)
+        with self.tx() as c:
+            c.execute("DELETE FROM sources WHERE id=?", (source_id,))
+        if source:
+            self._emit("source", (source_id,), source.profile_id)
+
+    @staticmethod
+    def _source(row: sqlite3.Row) -> Source:
+        return Source(id=row["id"], profile_id=row["profile_id"], name=row["name"], platform=row["platform"],
+                      url=row["url"], mine=bool(row["mine"]), last_fetched_at=row["last_fetched_at"],
+                      created_at=row["created_at"])
 
     # ================================================================ dispatches
     # Per-platform delivery rows. Claiming is atomic: a row only moves from
