@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import time
@@ -97,7 +98,7 @@ def test_native_platforms_go_now_others_at_publish_time(world):
     assert statuses(world, row)["bluesky"] == "published" and statuses(world, row)["threads"] == "published"
     threads_job = pubs["threads"].calls[0]
     assert threads_job.media_url().startswith("https://reelay.example.com/media/")
-    assert threads_job.text.startswith("Caption number 0")
+    assert threads_job.text == "Post for 7000 #growth"   # the ticket's own Threads copy
     post = world.store.get_post(row)
     assert post.status == PostStatus.SCHEDULED and world.store.get_video(row).stage == Stage.SCHEDULED
     assert post.remote_url.endswith("YT1")  # the card's main link stays YouTube's
@@ -285,7 +286,10 @@ def test_upgrade_carries_youtube_schedules_into_dispatches(tmp_path, monkeypatch
     monkeypatch.setattr(store_module, "SCHEMA_VERSION", 1)
     old = store_module.Store(tmp_path / "old.db")
     profile = old.create_profile("Lydia", tmp_path)
-    row = old.save_video(profile.id, VideoItem(platform="TikTok", video_id="1", url="u"))
+    old.conn.execute("INSERT INTO videos (profile_id, platform, video_id, data, updated_at) VALUES (?, ?, ?, ?, ?)",
+                     (profile.id, "TikTok", "1", json.dumps(VideoItem(platform="TikTok", video_id="1", url="u")
+                                                            .to_record()), "now"))
+    row = old.conn.execute("SELECT id FROM videos").fetchone()[0]
     old.conn.execute(
         "INSERT INTO posts (video_row, title, status, publish_at, remote_id, remote_url, updated_at) "
         "VALUES (?, 'Old', 'scheduled', '2026-12-01T16:00:00Z', 'YTold', 'https://youtube.com/shorts/YTold', 'now')",

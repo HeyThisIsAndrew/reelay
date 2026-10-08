@@ -83,9 +83,15 @@ def run() -> int:
             store.close()
         return "serves OpenAPI 3.1"
 
+    def help_page():
+        from .gui.help_page import HELP_FILE
+        text = HELP_FILE.read_text(encoding="utf-8")
+        assert text.startswith("# Reelay Help"), "help.md is missing or damaged"
+        return f"{len(text.splitlines())} lines, offline"
+
     for name, fn in (("yt-dlp", ytdlp), ("TikTok impersonation", impersonation), ("ffmpeg", ffmpeg),
                      ("Keychain", keychain), ("Database", database), ("Qt image plugins", qt),
-                     ("Agent API server", agent_api)):
+                     ("Agent API server", agent_api), ("Help page", help_page)):
         check(name, fn)
 
     ok = all(passed for _, passed, _ in checks)

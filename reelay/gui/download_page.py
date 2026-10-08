@@ -39,6 +39,7 @@ from .thumbnails import ThumbnailCache
 from .workers import CallWorker, DetailsWorker, DownloadWorker, FetchWorker
 
 log = logging.getLogger("reelay")
+OWN_CONTENT = "Own content"
 
 
 def fmt_speed(bps) -> str:
@@ -257,6 +258,7 @@ class DownloadPage(QWidget):
         for key, label in QUALITY_LABELS.items():
             self.quality.addItem(label, key)
         tip(self.quality, "Video quality to download. Best is the original quality the platform keeps.")
+        self.quality.setSizeAdjustPolicy(QComboBox.AdjustToContents)
         row2.addWidget(self.quality)
         row2.addSpacing(12)
         row2.addWidget(tip(muted("Use browser sign-in"), "Borrow your sign-in from a web browser"))
@@ -289,17 +291,19 @@ class DownloadPage(QWidget):
 
         bar2 = QHBoxLayout()
         bar2.setSpacing(10)
-        bar2.addWidget(tip(muted("Name files"), "How downloaded video files are named"))
+        name_label = tip(muted("Name files"), "How downloaded video files are named")
+        name_label.setMinimumHeight(32)
+        bar2.addWidget(name_label, 0, Qt.AlignTop)
         self.naming = NamingPicker()
         bar2.addWidget(self.naming, 1)
         self.autoname_btn = QToolButton(text="Suggest Names  ▾")
         self.autoname_btn.setPopupMode(QToolButton.InstantPopup)
         tip(self.autoname_btn, "Fill in a short name for videos from the first words of their captions")
-        bar2.addWidget(self.autoname_btn)
+        bar2.addWidget(self.autoname_btn, 0, Qt.AlignTop)
         self.apply_btn = QPushButton("Rename Files…")
         tip(self.apply_btn, "Rename videos you've already downloaded so they match the naming choice. "
                             "You'll see every change before anything is renamed.")
-        bar2.addWidget(self.apply_btn)
+        bar2.addWidget(self.apply_btn, 0, Qt.AlignTop)
         ll.addLayout(bar2)
 
         self.table = VideoTable(self._toggle_selected)
@@ -321,7 +325,7 @@ class DownloadPage(QWidget):
         hh.setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         hh.setStretchLastSection(False)
         # Fixed-width data columns; the three text columns share the rest.
-        widths = {Col.CHECK: 34, Col.COVER: 50, Col.DATE: 86, Col.LENGTH: 58, Col.VIEWS: 62, Col.STATUS: 112}
+        widths = {Col.CHECK: 34, Col.COVER: 50, Col.DATE: 86, Col.LENGTH: 72, Col.VIEWS: 64, Col.STATUS: 132}
         for col, w in widths.items():
             hh.setSectionResizeMode(col, QHeaderView.Fixed)
             self.table.setColumnWidth(col, w)
@@ -740,7 +744,8 @@ class DownloadPage(QWidget):
         url = channel_url(view.account)
         self._begin_fetch(f"Listing {view.name}'s videos from YouTube…")
         self.account_fetch = CallWorker(lambda: youtube_items(client.list_channel_videos()), parent=self)
-        self.account_fetch.succeeded.connect(lambda items: self._on_fetched([url], items, []))
+        self.account_fetch.succeeded.connect(lambda items: self._on_fetched([url], items, [],
+                                                                            authorization=OWN_CONTENT))
         self.account_fetch.failed.connect(lambda message: self._on_fetched([url], [], [(view.name, message)]))
         self.account_fetch.start()
 
@@ -782,8 +787,16 @@ class DownloadPage(QWidget):
             if other.kind == "saved" and normalize_url(other.url) == target:
                 self.source_service.remove(other.source_id)
 
+    def _authorization_for(self, urls: list[str]) -> str | None:
+        """Provenance: links to this profile's own accounts (saved as "mine", or a
+        connected channel) are recorded as own content. Anything else is left
+        unrecorded for the person to fill in on the ticket."""
+        own = {normalize_url(v.url) for v in self.source_service.display_sources(self.profile.id)
+               if (v.mine or v.account is not None) and v.url}
+        return OWN_CONTENT if urls and all(normalize_url(u) in own for u in urls) else None
+
     def _on_fetched(self, urls: list[str], items: list[VideoItem], errors: list[tuple[str, str]],
-                    source_id: int | None = None) -> None:
+                    source_id: int | None = None, authorization: str | None = None) -> None:
         self.fetch_btn.setEnabled(True)
         self.fetch_btn.setText("List Videos")
         for chip in self._chips():
@@ -805,7 +818,8 @@ class DownloadPage(QWidget):
         held = [i for i in self.model.items() if not i.is_downloaded and not downloadable_by_default(i)]
         if held:  # private / scheduled YouTube videos need the owner's login cookies
             self.model.set_checked([i.key for i in held], False)
-        self.store.save_videos(self.profile.id, self.model.items())
+        self.store.save_videos(self.profile.id, self.model.items(),
+                               authorization=authorization or self._authorization_for(urls))
         new = sum(1 for i in self.model.items() if not i.is_downloaded)
         note = (f" {len(held)} private or scheduled video{'s are' if len(held) != 1 else ' is'} left unticked: "
                 "downloading those needs “Use browser sign-in” set to a browser signed into that channel.") if held else ""

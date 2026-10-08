@@ -17,8 +17,8 @@ from datetime import datetime, timedelta
 from PySide6.QtCore import QDateTime, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QGuiApplication
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDateTimeEdit, QFrame, QHBoxLayout, QLabel, QLineEdit,
-                               QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QStackedWidget,
-                               QVBoxLayout, QWidget)
+                               QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QSizePolicy,
+                               QStackedWidget, QVBoxLayout, QWidget)
 
 from ..models import Account, Platform, Post, PostStatus, Privacy, Stage
 from ..pipeline import Card
@@ -32,6 +32,7 @@ from .table_model import fmt_count, fmt_date, fmt_duration
 from .theme import set_prop
 from .tips import tip
 from .thumbnails import ThumbnailCache
+from .ticket_widgets import PublishingHistory, ReadinessHeader, TicketDetails
 
 PRIVACY_LABELS = {Privacy.PUBLIC: "Public", Privacy.UNLISTED: "Unlisted", Privacy.PRIVATE: "Private"}
 
@@ -57,7 +58,7 @@ BLOCKS: list[tuple[str, str, bool, str]] = [
     ("bluesky_text", "BLUESKY POST", True, "Leave empty to use the title (and the description, if it fits)"),
     ("threads_text", "THREADS POST", True, "Leave empty to use the title (and the description, if it fits)"),
     ("facebook_text", "FACEBOOK POST", True, "Leave empty to use the YouTube description"),
-    ("hashtags", "HASHTAGS FOR EVERY PLATFORM", False, "#growth #healing"),
+    ("hashtags", "HASHTAGS (ALL PLATFORMS)", False, "#growth #healing"),
 ]
 
 BLOCK_TIPS = {
@@ -85,8 +86,10 @@ class CopyBlock(QWidget):
         lay.setContentsMargins(0, 4, 0, 0)
         lay.setSpacing(4)
         head = QHBoxLayout()
-        head.addWidget(tip(_section(label), BLOCK_TIPS.get(key, "")))
-        head.addStretch()
+        title = tip(_section(label), BLOCK_TIPS.get(key, ""))
+        title.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)   # clips rather than widening the panel
+        title.setMinimumWidth(60)
+        head.addWidget(title, 1)
         self.counter = QLabel()
         self.counter.setProperty("faint", True)
         head.addWidget(self.counter)
@@ -132,6 +135,10 @@ class PostPanel(QFrame):
     uploadRequested = Signal(object, bool)    # Post, add #Shorts
     cancelUploadRequested = Signal(int)       # video row id
     connectRequested = Signal()
+    ticketFieldCommitted = Signal(int, str, object)   # video row id, field, value
+    markPostedRequested = Signal(int)                 # video row id
+    unmarkRequested = Signal(int)                     # manual post id
+    revisionsRequested = Signal(int)                  # video row id
 
     def __init__(self, thumbs: ThumbnailCache, parent=None):
         super().__init__(parent)
@@ -141,6 +148,8 @@ class PostPanel(QFrame):
         self.card: Card | None = None
         self.accounts: list[Account] = []
         self.enabled: frozenset[str] = frozenset({Platform.YOUTUBE})
+        self.readiness_for = None   # callable(Post) -> Readiness, set by the Board
+        self._readiness_timer = QTimer(self, singleShot=True, interval=200, timeout=self._refresh_readiness)
 
         self.stack = QStackedWidget()
         empty = QWidget()
@@ -191,6 +200,11 @@ class PostPanel(QFrame):
         head.addSpacing(10)
         head.addLayout(hv, 1)
         lay.addLayout(head)
+
+        # ---- is it ready to leave the building?
+        lay.addSpacing(8)
+        self.readiness_header = ReadinessHeader()
+        lay.addWidget(self.readiness_header)
 
         # status box for uploading / scheduled / published posts
         self.status_box = QFrame(objectName="Card")
@@ -256,8 +270,10 @@ class PostPanel(QFrame):
         crow = QHBoxLayout()
         crow.setContentsMargins(0, 0, 0, 0)
         self.account = tip(QComboBox(), "Which of your connected YouTube channels gets the video")
+        self.account.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.account.setMinimumContentsLength(10)
         crow.addWidget(self.account, 1)
-        self.connect_btn = tip(QPushButton("Connect a Channel…"), "Go to Accounts to connect a YouTube channel")
+        self.connect_btn = tip(QPushButton("Connect…"), "Go to Accounts to connect a YouTube channel")
         self.connect_btn.clicked.connect(self.connectRequested.emit)
         crow.addWidget(self.connect_btn)
         self.channel_row = QWidget()
@@ -308,6 +324,19 @@ class PostPanel(QFrame):
         arow.addWidget(self.upload_btn, 1)
         lay.addSpacing(4)
         lay.addLayout(arow)
+
+        # ---- the ticket's own fields, and where it has gone
+        lay.addSpacing(12)
+        self.details = TicketDetails()
+        self.details.fieldCommitted.connect(
+            lambda key, value: self.card and self.ticketFieldCommitted.emit(self.card.id, key, value))
+        lay.addWidget(self.details)
+        lay.addSpacing(10)
+        self.history = PublishingHistory()
+        self.history.markRequested.connect(lambda: self.card and self.markPostedRequested.emit(self.card.id))
+        self.history.unmarkRequested.connect(self.unmarkRequested.emit)
+        self.history.revisionsRequested.connect(lambda: self.card and self.revisionsRequested.emit(self.card.id))
+        lay.addWidget(self.history)
         lay.addStretch()
         scroll.setWidget(body)
         return scroll
@@ -373,6 +402,23 @@ class PostPanel(QFrame):
         self._sync_platforms()
         self._update_counts()
         self._sync_status()
+        self.readiness_header.set_readiness(card.readiness)
+
+    def set_ticket(self, others: list[tuple[int, str]], history: dict) -> None:
+        """The ticket fields and publishing history for the card on show."""
+        if self.card is None:
+            return
+        self.details.set_ticket(self.card.row.ticket, self.card.id, others)
+        self.history.set_history(history)
+
+    def _refresh_readiness(self) -> None:
+        """Live checklist while editing (debounced; nothing is saved)."""
+        if self.card is None or self.readiness_for is None or self._locked():
+            return
+        try:
+            self.readiness_header.set_readiness(self.readiness_for(self.collect()))
+        except Exception:  # noqa: BLE001 — a preview must never break editing
+            pass
 
     def _targets(self) -> list[str]:
         return [p for p, box in self.platform_boxes.items() if box.isChecked() and p in self.enabled]
@@ -382,6 +428,7 @@ class PostPanel(QFrame):
         for widget in (self.channel_label, self.channel_row, self.privacy, self.shorts, self.kids):
             widget.setVisible(youtube)
         self._sync_when()
+        self._readiness_timer.start()
 
     def _update_counts(self) -> None:
         b = self.blocks
@@ -413,6 +460,7 @@ class PostPanel(QFrame):
                     and not b[key].text():
                 text, over = "empty", False
             b[key].set_count(text, over)
+        self._readiness_timer.start()
 
     def _copy(self, block: CopyBlock) -> None:
         """Copy a block; empty platform blocks copy what Reelay would use instead."""

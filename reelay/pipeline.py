@@ -30,9 +30,11 @@ from typing import Callable, Protocol
 from .accounts import YOUTUBE, AccountService
 from .library import Library
 from .media import MediaLinks, public_base_url
-from .models import (Account, Dispatch, DispatchStatus, Platform, Post, PostStatus, Profile, Stage, VideoItem,
+from .models import (MANUAL_PLATFORMS, TICKET_FIELDS, Account, ContentType, Dispatch,
+                     DispatchStatus, ManualPost, Platform, Post, PostStatus, Profile, Stage, Ticket, VideoItem,
                      VideoRow)
 from .platform_text import COPY_FIELDS, resolve_text, text_problem
+from .readiness import Readiness, evaluate
 from .publishers.base import PermanentError, PublishJob
 from .publishing import (DESCRIPTION_MAX_BYTES, MIN_SCHEDULE_LEAD, TAGS_MAX_CHARS, TITLE_MAX, build_resource,
                          default_post, humanize_name, parse_utc, reconcile, validate_post)
@@ -44,7 +46,14 @@ log = logging.getLogger("reelay")
 
 LOCKED_MESSAGE = "Scheduled and published videos are managed on their platforms; they can't be moved back."
 COPY_TEXT_FIELDS = ("tiktok_text", "instagram_text", "bluesky_text", "threads_text", "facebook_text", "hashtags")
-EDITABLE_FIELDS = ("title", "description", "tags", "target_platforms", *COPY_TEXT_FIELDS)
+POST_FIELDS = ("title", "description", "tags", "target_platforms", *COPY_TEXT_FIELDS)
+# Ticket fields people and agents may edit (provenance included: it can be corrected;
+# imported_at is set by Reelay when the video comes in).
+EDITABLE_TICKET_FIELDS = tuple(f for f in TICKET_FIELDS if f != "imported_at")
+EDITABLE_FIELDS = (*POST_FIELDS, *EDITABLE_TICKET_FIELDS)
+TICKET_TEXT_MAX = {"transcript": 200_000, "thumbnail_path": 1024, "topic": 200, "keywords": 1000, "creator": 200,
+                   "source_url": 2048, "authorization": 200}
+DATE_FIELDS = ("original_publish_date",)
 FACEBOOK_MAX_LEAD = timedelta(days=182)
 THREADS_MAX_SECONDS = 300
 HEARTBEAT_SECONDS = 30
@@ -55,7 +64,7 @@ class PipelineError(Exception):
 
     Codes: not_found, invalid_post, invalid_field, invalid_stage, invalid_time,
     invalid_platform, platform_disabled, locked, needs_upload, already_scheduled,
-    already_uploading."""
+    already_uploading, ticket_not_ready."""
 
     def __init__(self, message: str, code: str = "invalid", problems: list[str] | None = None):
         super().__init__(message)
@@ -81,6 +90,7 @@ class Card:
     progress: float | None = None   # upload percent while uploading
     queued: bool = False
     dispatches: list[Dispatch] = field(default_factory=list)
+    readiness: Readiness | None = None
 
     @property
     def id(self) -> int:
@@ -103,6 +113,20 @@ class SyncPlan:
     jobs: list[tuple[object, list[str]]]   # (YouTube client, remote video ids)
     problems: list[str]
     dispatches: dict[str, Dispatch] = field(default_factory=dict)   # remote id → YouTube dispatch
+
+
+@dataclass
+class HistoryEntry:
+    """One line of a ticket's publishing history: what went where, when, how."""
+    platform: str
+    method: str              # "automatic" (Reelay posted it) | "manual" (marked as posted)
+    status: str              # dispatch status, or "posted" for manual posts
+    at: str | None           # when it went (or goes) live; for pending posts, when it's due
+    url: str = ""
+    error: str = ""
+    note: str = ""
+    origin: str = ""
+    id: int | None = None    # dispatch id or manual post id
 
 
 @dataclass
@@ -196,7 +220,16 @@ class Pipeline:
         post = self.store.get_post(row.id)
         return Card(row=row, post=post, account=accounts.get(post.account_id) if post else None,
                     progress=self.uploads.progress_of(row.id), queued=self.uploads.is_queued(row.id),
-                    dispatches=self.store.dispatches_for(row.id))
+                    dispatches=self.store.dispatches_for(row.id), readiness=self._readiness(row, post))
+
+    # ================================================================ readiness
+    def _readiness(self, row: VideoRow, post: Post | None = None, targets: list[str] | None = None) -> Readiness:
+        post = post or self.post_or_default(row)[0]
+        return evaluate(post, self.enabled_platforms(), self.video_path(row), row.item.duration, targets)
+
+    def readiness(self, row_id: int, post: Post | None = None) -> Readiness:
+        """Per-platform checklist for the ticket (as saved, or as `post` is edited)."""
+        return self._readiness(self._row(row_id), post)
 
     # ================================================================ moving cards
     def ensure_post(self, row_id: int) -> Post:
@@ -260,27 +293,111 @@ class Pipeline:
         return post
 
     def update_metadata(self, row_id: int, changes: dict) -> Post:
-        """Apply a partial edit (title, description, tags, target_platforms,
-        bluesky_text, threads_text). Everything is validated before anything is
-        written; one write per call. Raises PipelineError."""
+        """Apply a partial edit: post copy (title, description, tags,
+        target_platforms, per-platform text, hashtags) and/or ticket fields
+        (transcript, topic, provenance…). Everything is validated before anything
+        is written; one transaction per call, logged as revisions. Raises
+        PipelineError."""
         unknown = sorted(set(changes) - set(EDITABLE_FIELDS))
         if unknown:
             raise PipelineError(f"These fields can't be edited: {', '.join(unknown)}.", "invalid_field")
         row = self._row(row_id)
-        if any(d.status in DispatchStatus.ACTIVE + (DispatchStatus.PUBLISHED,)
-               for d in self.store.dispatches_for(row_id)) or row.stage == Stage.PUBLISHED:
+        post_changes = {k: v for k, v in changes.items() if k in POST_FIELDS}
+        ticket_changes = {k: v for k, v in changes.items() if k in EDITABLE_TICKET_FIELDS}
+        if post_changes and (any(d.status in DispatchStatus.ACTIVE + (DispatchStatus.PUBLISHED,)
+                                 for d in self.store.dispatches_for(row_id)) or row.stage == Stage.PUBLISHED):
             raise PipelineError("This video is already scheduled or published; its details were sent to the "
                                 "platforms and can't be changed here.", "locked")
         post, _saved = self.post_or_default(row)
-        problems = metadata_problems(changes)
+        problems = metadata_problems(post_changes) + self.ticket_problems(row, ticket_changes)
         if problems:
             raise PipelineError("Those changes aren't valid.", "invalid_post", problems)
-        updates = dict(changes)
+        updates = dict(post_changes)
         if "tags" in updates:
             updates["tags"] = [t.strip().lstrip("#") for t in updates["tags"]]
         if "target_platforms" in updates:
             updates["target_platforms"] = list(dict.fromkeys(updates["target_platforms"]))
-        return self.store.save_post(replace(post, **updates))
+        edited = replace(post, **updates) if updates else None
+        self.store.update_ticket(row_id, normalize_ticket(ticket_changes), post=edited)
+        return self.store.get_post(row_id) or post
+
+    def update_ticket(self, row_id: int, changes: dict) -> Ticket:
+        """Edit ticket fields only (allowed at any stage: they aren't sent to platforms)."""
+        unknown = sorted(set(changes) - set(EDITABLE_TICKET_FIELDS))
+        if unknown:
+            raise PipelineError(f"These fields can't be edited: {', '.join(unknown)}.", "invalid_field")
+        row = self._row(row_id)
+        problems = self.ticket_problems(row, changes)
+        if problems:
+            raise PipelineError("Those changes aren't valid.", "invalid_post", problems)
+        return self.store.update_ticket(row_id, normalize_ticket(changes))
+
+    def ticket_problems(self, row: VideoRow, changes: dict) -> list[str]:
+        problems = []
+        for key, value in changes.items():
+            if value is None:
+                continue
+            if key == "derived_from":
+                if not isinstance(value, int) or isinstance(value, bool):
+                    problems.append("derived_from must be a video id or null.")
+                elif value == row.id:
+                    problems.append("A video can't be derived from itself.")
+                else:
+                    parent = self.store.get_video(value)
+                    if parent is None or parent.profile_id != row.profile_id:
+                        problems.append(f"derived_from: no video {value} in this profile.")
+                continue
+            if not isinstance(value, str):
+                problems.append(f"{key} must be text or null.")
+            elif key == "content_type" and value not in ContentType.ALL:
+                problems.append(f"content_type must be one of: {', '.join(ContentType.ALL)}.")
+            elif key in DATE_FIELDS and _parse_aware(value) is None and value.strip():
+                problems.append(f"{key} must be an ISO 8601 date and time with a timezone, "
+                                "e.g. 2026-10-02T15:00:00Z.")
+            elif key in TICKET_TEXT_MAX and len(value) > TICKET_TEXT_MAX[key]:
+                problems.append(f"{key} is {len(value):,} characters; the limit is {TICKET_TEXT_MAX[key]:,}.")
+        return problems
+
+    # ================================================================ publishing history
+    def mark_posted(self, row_id: int, platform: str, posted_at: str | datetime | None = None, url: str = "",
+                    note: str = "", now: datetime | None = None) -> ManualPost:
+        """Record that the video was posted to `platform` by hand (copy-paste)."""
+        now = now or datetime.now(timezone.utc)
+        self._row(row_id)
+        if platform not in MANUAL_PLATFORMS:
+            raise PipelineError(f"Unknown platform “{platform}”. Use one of: {', '.join(MANUAL_PLATFORMS)}.",
+                                "invalid_platform")
+        when = now if posted_at is None else _parse_aware(posted_at)
+        if when is None:
+            raise PipelineError("posted_at must be an ISO 8601 time with a timezone.", "invalid_time")
+        if when > now + timedelta(minutes=5):
+            raise PipelineError("posted_at is in the future; mark it as posted once it's live.", "invalid_time")
+        url = (url or "").strip()
+        if url and not url.startswith(("http://", "https://")):
+            raise PipelineError("url must start with http:// or https://.", "invalid_post")
+        return self.store.add_manual_post(ManualPost(video_row=row_id, platform=platform, posted_at=utc_iso(when),
+                                                     url=url, note=(note or "").strip()[:500]))
+
+    def unmark_posted(self, manual_id: int) -> None:
+        self.store.delete_manual_post(manual_id)
+
+    def publishing_history(self, row_id: int) -> dict[str, list[HistoryEntry]]:
+        """Every platform's publishing history for one ticket, automatic and
+        manual together, oldest first. Platforms with nothing yet are omitted."""
+        self._row(row_id)
+        history: dict[str, list[HistoryEntry]] = {}
+        for d in self.store.dispatches_for(row_id):
+            at = d.publish_at or (d.updated_at if d.status == DispatchStatus.PUBLISHED else d.due_at)
+            history.setdefault(d.platform, []).append(HistoryEntry(
+                platform=d.platform, method="automatic", status=d.status, at=at, url=d.remote_url, error=d.error,
+                id=d.id))
+        for m in self.store.manual_posts(row_id):
+            history.setdefault(m.platform, []).append(HistoryEntry(
+                platform=m.platform, method="manual", status="posted", at=m.posted_at, url=m.url, note=m.note,
+                origin=m.origin, id=m.id))
+        for entries in history.values():
+            entries.sort(key=lambda e: e.at or "")
+        return {p: history[p] for p in MANUAL_PLATFORMS if p in history}
 
     # ================================================================ scheduling
     def upload_problems(self, post: Post) -> list[str]:
@@ -380,12 +497,17 @@ class Pipeline:
 
     def schedule(self, row_id: int, scheduled_at: str | datetime | None = None, platforms: list[str] | None = None,
                  add_shorts: bool | None = None, post: Post | None = None,
-                 now: datetime | None = None) -> ScheduleResult:
+                 now: datetime | None = None, force: bool = False) -> ScheduleResult:
         """Schedule (or publish now) a video to its target platforms.
 
         scheduled_at: timezone-aware time; omitted → the card's saved time if it
         has one, else publish as soon as possible. platforms: overrides the
-        card's target_platforms for this request. Raises PipelineError."""
+        card's target_platforms for this request.
+
+        The Ready gate: if any platform being scheduled isn't ready (see
+        readiness.py), nothing is scheduled and PipelineError(ticket_not_ready)
+        lists the problems, unless force=True. Cards that were already Scheduled
+        or Published before the gate existed are exempt. Raises PipelineError."""
         now = now or datetime.now(timezone.utc)
         row = self._row(row_id)
         base, _saved = (post, True) if post is not None else self.post_or_default(row)
@@ -427,12 +549,21 @@ class Pipeline:
         if self.uploads.progress_of(row_id) is not None:
             raise PipelineError("This video is already uploading.", "already_uploading")
 
+        gated = not force and not row.ready_gate_exempt
+        readiness = self._readiness(row, base, targets)
+        not_ready = readiness.problems(targets) if gated else []
         problems = self.schedule_problems(base, targets, row, now)
-        if problems:
+        if problems or not_ready:
             current = self.store.get_post(row_id)
             if post is not None and (current is None or current.status in (PostStatus.DRAFT, PostStatus.FAILED)):
                 self.store.save_post(replace(post, status=PostStatus.DRAFT))  # keep what was typed
-            raise PipelineError("This post can't be scheduled yet.", "invalid_post", problems)
+        if problems:   # force can't help with these: report everything at once
+            raise PipelineError("This post can't be scheduled yet.", "invalid_post",
+                                list(dict.fromkeys(problems + not_ready)))
+        if not_ready:
+            names = ", ".join(Platform.LABELS[p] for p in readiness.blocking)
+            raise PipelineError(f"This ticket isn't ready for {names}. Fix the problems listed, or schedule "
+                                "anyway with force.", "ticket_not_ready", not_ready)
 
         now_iso = utc_iso(now)
         add_shorts = self.add_shorts_default() if add_shorts is None else add_shorts
@@ -462,10 +593,10 @@ class Pipeline:
             self.on_scheduled()
         return ScheduleResult(self.store.get_post(row_id), self.store.dispatches_for(row_id), manual)
 
-    def start_upload(self, post: Post, add_shorts: bool | None = None) -> Post:
+    def start_upload(self, post: Post, add_shorts: bool | None = None, force: bool = False) -> Post:
         """The desktop Board's Schedule button: schedule the post as edited to its
         enabled platforms (the rest stay copy-paste tickets)."""
-        return self.schedule(post.video_row, add_shorts=add_shorts, post=post).post
+        return self.schedule(post.video_row, add_shorts=add_shorts, post=post, force=force).post
 
     def queue_position(self, dispatch: Dispatch) -> int | None:
         """YouTube: place in the upload queue (0 = uploading now). Others: place
@@ -687,6 +818,20 @@ class Pipeline:
             library.write_manifest(items, [profile.last_source])
         except OSError as exc:
             log.warning("Couldn't update library files in %s: %s", folder, exc)
+
+
+def normalize_ticket(changes: dict) -> dict:
+    """Trim text, store blank text as null, and dates as ISO 8601 UTC."""
+    out = {}
+    for key, value in changes.items():
+        if isinstance(value, str):
+            value = value if key == "transcript" else value.strip()
+            if not value.strip():
+                value = None
+            elif key in DATE_FIELDS:
+                value = utc_iso(_parse_aware(value))
+        out[key] = value
+    return out
 
 
 def _parse_aware(value: str | datetime) -> datetime | None:

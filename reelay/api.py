@@ -37,8 +37,8 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from . import __version__
 from .accounts import YOUTUBE, AccountService
 from .media import MediaLinks, public_base_url
-from .models import Platform, Profile, Stage
-from .pipeline import Card, Pipeline, PipelineError
+from .models import MANUAL_PLATFORMS, ContentType, Platform, Profile, Stage
+from .pipeline import Card, HistoryEntry, Pipeline, PipelineError
 from .flags import env_var
 from .platform_text import (BLUESKY_MAX_GRAPHEMES, FACEBOOK_MAX_CHARS, INSTAGRAM_MAX_CHARS, INSTAGRAM_MAX_HASHTAGS,
                             THREADS_MAX_CHARS, TIKTOK_MAX_CHARS)
@@ -56,13 +56,16 @@ StageName = Literal["backlog", "staging", "scheduled", "published"]
 PublicationStatus = Literal["pending", "dispatching", "scheduled", "published", "failed"]
 Visibility = Literal["public", "unlisted", "private"]
 SourcePlatform = Literal["tiktok", "instagram", "youtube"]
+ManualPlatformName = Literal["youtube", "tiktok", "instagram", "bluesky", "threads", "facebook"]
+ContentTypeName = Literal["short", "long-form", "clip", "other"]
+assert set(MANUAL_PLATFORMS) == set(ManualPlatformName.__args__) and set(ContentType.ALL) == set(ContentTypeName.__args__)
 
 # PipelineError code → HTTP status
 STATUS_FOR_CODE = {
     "not_found": 404,
     "locked": 409, "already_scheduled": 409, "already_uploading": 409, "needs_upload": 409,
     "invalid_post": 422, "invalid_field": 422, "invalid_stage": 422, "invalid_time": 422,
-    "invalid_platform": 422, "platform_disabled": 422, "invalid": 422,
+    "invalid_platform": 422, "platform_disabled": 422, "invalid": 422, "ticket_not_ready": 422,
 }
 
 
@@ -70,7 +73,8 @@ STATUS_FOR_CODE = {
 class ErrorBody(BaseModel):
     detail: str = Field(description="What went wrong, in plain words.")
     code: str | None = Field(None, description="Stable machine-readable error code, e.g. 'unauthorized', "
-                                               "'not_found', 'invalid_post', 'already_scheduled', 'locked'.")
+                                               "'not_found', 'invalid_post', 'ticket_not_ready', "
+                                               "'already_scheduled', 'locked'.")
     problems: list[str] | None = Field(None, description="Every individual problem found, when there are several.")
 
 
@@ -81,6 +85,11 @@ ERRORS = {
     409: {"model": ErrorBody, "description": "Conflicts with the video's current state (already scheduled)."},
     422: {"model": ErrorBody, "description": "Invalid input; nothing was changed."},
 }
+SCHEDULE_422 = {"model": ErrorBody, "description": (
+    "Nothing was scheduled. code=ticket_not_ready: the ticket isn't ready for one or more of the platforms being "
+    "scheduled (`problems` lists each one, prefixed with the platform, e.g. \"Bluesky: Write the Bluesky post "
+    "…\"). Fix them with PATCH /v1/videos/{video_id}, or repeat the request with ?force=true to schedule anyway. "
+    "Other codes (invalid_post, invalid_time, platform_disabled, invalid_platform) can't be forced.")}
 
 
 class ProfileRef(BaseModel):
@@ -136,6 +145,55 @@ class Publication(BaseModel):
     updated_at: datetime
 
 
+class ReadinessCheck(BaseModel):
+    id: str = Field(description="What is checked: title, description, tags, bluesky_text, threads_text, "
+                                "facebook_text, length or video.")
+    label: str
+    state: Literal["pass", "warn"]
+    message: str = Field(description="What's fine, or what to fix, in plain words.")
+
+
+class PlatformReadinessOut(BaseModel):
+    state: Literal["ready", "not_ready", "not_checked"] = Field(
+        description="not_checked = automatic posting to this platform is off, so it's posted by hand and never "
+                    "blocks.")
+    ready: bool = Field(description="False only when state is not_ready.")
+    auto_post: bool
+    checks: list[ReadinessCheck] = Field(description="Empty when not_checked.")
+
+
+class TicketFields(BaseModel):
+    transcript: str | None = None
+    thumbnail_path: str | None = Field(None, description="Local path of the cover image.")
+    content_type: ContentTypeName | None = None
+    topic: str | None = None
+    keywords: str | None = None
+    creator: str | None = Field(None, description="Brand or person the content belongs to.")
+    original_publish_date: datetime | None = Field(None, description="When the content was first published (UTC).")
+    derived_from: int | None = Field(None, description="Id of the video this one was cut from; becomes null if "
+                                                       "that video is deleted.")
+
+
+class Provenance(BaseModel):
+    source_platform: str | None = Field(None, description="Platform the video was imported from.")
+    source_url: str | None = Field(None, description="Link to the original post.")
+    imported_at: datetime | None = Field(None, description="When the video was brought into Reelay (UTC).")
+    authorization: str | None = Field(None, description="The right to use it, e.g. \"Own content\" or "
+                                                        "\"Managed account\". null = not recorded.")
+
+
+class HistoryItem(BaseModel):
+    method: Literal["automatic", "manual"] = Field(description="automatic = posted by Reelay; manual = posted by "
+                                                               "hand and marked as posted.")
+    status: str = Field(description="For automatic: pending, dispatching, scheduled, published or failed. For "
+                                    "manual: posted.")
+    at: datetime | None = Field(None, description="When it went (or goes) live, UTC.")
+    url: str | None = None
+    error: str | None = None
+    note: str | None = None
+    id: int = Field(description="Job id (automatic) or manual post id (manual).")
+
+
 class Video(BaseModel):
     id: int = Field(description="Video id used by the other endpoints.")
     profile: str = Field(description="Profile (creator) the video belongs to.")
@@ -158,6 +216,15 @@ class Video(BaseModel):
     file_available: bool = Field(description="Whether the video file exists on disk.")
     publications: list[Publication] = Field(description="Per-platform publishing status (empty until scheduled).")
     source: SourceInfo
+    ready: bool = Field(description="READY: at least one of the video's target platforms is ready (platforms with "
+                                    "automatic posting off count as ready). Scheduling refuses platforms that "
+                                    "aren't (422 ticket_not_ready) unless forced.")
+    readiness: dict[PlatformName, PlatformReadinessOut] = Field(description="Checklist per target platform.")
+    ticket: TicketFields
+    provenance: Provenance
+    publishing_history: dict[ManualPlatformName, list[HistoryItem]] = Field(
+        description="What went where, when and how: automatic posts and manual ones, oldest first, per platform. "
+                    "Platforms with no history are omitted.")
     updated_at: datetime | None = None
 
 
@@ -193,6 +260,43 @@ class VideoPatch(BaseModel):
                                                         "null clears it.")
     hashtags: str | None = Field(None, description="Shared hashtag block for the card, e.g. \"#growth #healing\". "
                                                    "null clears it.")
+    transcript: str | None = Field(None, description="Full transcript. null clears it. Ticket fields like this "
+                                                     "can be edited at any stage.")
+    thumbnail_path: str | None = Field(None, description="Local path of the cover image.")
+    content_type: ContentTypeName | None = None
+    topic: str | None = Field(None, max_length=200)
+    keywords: str | None = Field(None, max_length=1000)
+    creator: str | None = Field(None, max_length=200, description="Brand or person name.")
+    original_publish_date: AwareDatetime | None = Field(None, description="ISO 8601 with a timezone.")
+    source_platform: SourcePlatform | None = None
+    source_url: str | None = Field(None, max_length=2048)
+    authorization: str | None = Field(None, max_length=200, description="e.g. \"Own content\", \"Managed account\".")
+    derived_from: int | None = Field(None, description="Id of the video this one was cut from (same profile), or "
+                                                       "null.")
+
+
+class RevisionOut(BaseModel):
+    id: int
+    at: datetime
+    origin: str = Field(description="Who made the change: local = the Reelay app, api = an agent through this API.")
+    field: str
+    old_value: str | None = Field(None, description="Previous value (lists as JSON text).")
+    new_value: str | None = None
+
+
+class RevisionsResponse(BaseModel):
+    video_id: int
+    revisions: list[RevisionOut] = Field(description="Every logged change to the ticket, newest first.")
+
+
+class ManualPostCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    platform: ManualPlatformName
+    posted_at: AwareDatetime | None = Field(None, description="When it went live; omit for now. Can't be in the "
+                                                              "future.")
+    url: str | None = Field(None, max_length=2048, description="Link to the live post, if known.")
+    note: str | None = Field(None, max_length=500)
 
 
 class ScheduleRequest(BaseModel):
@@ -314,8 +418,9 @@ def create_app(store: Store, pipeline: Pipeline, accounts: AccountService, token
     app = FastAPI(
         title="Reelay Agent API",
         version=__version__,
-        description="Read a creator's video board, apply approved metadata edits, and schedule posts to YouTube, "
-                    "Bluesky, Threads and Facebook. All /v1 routes need `Authorization: Bearer <token>`. Changes "
+        description="Read a creator's video board (each video is a content ticket with a readiness checklist), "
+                    "apply approved edits, record manual posts, and schedule posts to YouTube, Bluesky, Threads and "
+                    "Facebook. All /v1 routes need `Authorization: Bearer <token>`. Changes "
                     "show up immediately on the Reelay desktop board.",
         docs_url=None, redoc_url=None,
     )
@@ -388,6 +493,19 @@ def create_app(store: Store, pipeline: Pipeline, accounts: AccountService, token
             publications=[Publication(platform=d.platform, status=d.status, publish_at=parse_utc(d.publish_at),
                                       url=d.remote_url or None, error=d.error or None, attempts=d.attempts,
                                       updated_at=parse_utc(d.updated_at)) for d in card.dispatches],
+            ready=card.readiness.ready if card.readiness else True,
+            readiness={name: PlatformReadinessOut(state=r.state, ready=r.ready, auto_post=r.auto_post,
+                                                  checks=[ReadinessCheck(id=c.id, label=c.label, state=c.state,
+                                                                         message=c.message) for c in r.checks])
+                       for name, r in (card.readiness.platforms.items() if card.readiness else [])},
+            ticket=TicketFields(**{f: getattr(row.ticket, f) for f in TicketFields.model_fields
+                                   if f != "original_publish_date"},
+                                original_publish_date=parse_utc(row.ticket.original_publish_date)),
+            provenance=Provenance(source_platform=row.ticket.source_platform, source_url=row.ticket.source_url,
+                                  imported_at=parse_utc(row.ticket.imported_at),
+                                  authorization=row.ticket.authorization),
+            publishing_history={p: [to_history(e) for e in entries]
+                                for p, entries in pipeline.publishing_history(row.id).items()},
             source=SourceInfo(platform=item.platform, url=item.url, caption=item.description, hook=item.hook,
                               uploaded_on=f"{date[:4]}-{date[4:6]}-{date[6:]}" if len(date) == 8 else None,
                               creator=item.uploader or None,
@@ -395,6 +513,10 @@ def create_app(store: Store, pipeline: Pipeline, accounts: AccountService, token
                                           comments=item.comment_count, duration_seconds=item.duration)),
             updated_at=parse_utc(row.updated_at),
         )
+
+    def to_history(e: HistoryEntry) -> HistoryItem:
+        return HistoryItem(method=e.method, status=e.status, at=parse_utc(e.at), url=e.url or None,
+                           error=e.error or None, note=e.note or None, id=e.id)
 
     def video_by_id(video_id: int) -> Video:
         try:
@@ -441,11 +563,16 @@ def create_app(store: Store, pipeline: Pipeline, accounts: AccountService, token
                summary="Update a video's post metadata", responses={k: ERRORS[k] for k in (401, 404, 409, 422)},
                **v1)
     def update_video(video_id: int, patch: VideoPatch) -> Video:
-        """Partial update of the card's copy: title, description, tags, target_platforms, tiktok_text,
-        instagram_text, bluesky_text, threads_text, facebook_text and hashtags. Everything is validated first; if
-        anything is invalid nothing is written (422). Over-limit text is rejected, never shortened. Returns the
-        updated video."""
+        """Partial update of the ticket: its copy (title, description, tags, target_platforms, tiktok_text,
+        instagram_text, bluesky_text, threads_text, facebook_text, hashtags) and its fields (transcript,
+        thumbnail_path, content_type, topic, keywords, creator, original_publish_date, source_platform, source_url,
+        authorization, derived_from). Everything is validated first; if anything is invalid nothing is written
+        (422). Over-limit text is rejected, never shortened. Copy can't change once the video is scheduled or
+        published (409); ticket fields can. Each changed field is logged (GET /v1/videos/{video_id}/revisions).
+        Returns the updated video."""
         changes = patch.model_dump(exclude_unset=True)
+        if "original_publish_date" in changes and changes["original_publish_date"] is not None:
+            changes["original_publish_date"] = changes["original_publish_date"].isoformat()
         if not changes:
             raise ApiError(422, "Send at least one field to change.", "invalid_request")
         with store.origin("api"):
@@ -457,17 +584,22 @@ def create_app(store: Store, pipeline: Pipeline, accounts: AccountService, token
 
     @app.post("/v1/videos/{video_id}/schedule", response_model=ScheduleResponse, operation_id="scheduleVideo",
               summary="Schedule or publish a video to its platforms",
-              responses={k: ERRORS[k] for k in (401, 404, 409, 422)}, **v1)
-    def schedule_video(video_id: int, request: ScheduleRequest | None = None) -> ScheduleResponse:
+              responses={**{k: ERRORS[k] for k in (401, 404, 409)}, 422: SCHEDULE_422}, **v1)
+    def schedule_video(video_id: int, request: ScheduleRequest | None = None,
+                       force: bool = Query(False, description="true schedules even if the ticket isn't ready "
+                                                              "(skips the Ready gate). Platform rules that would make "
+                                                              "the post fail still apply.")) -> ScheduleResponse:
         """Queues automatic posting through Reelay's pipeline. YouTube uploads join the app's upload queue (one at
         a time) and are scheduled on YouTube. Bluesky, Threads and Facebook post automatically only when enabled
-        (see GET /v1/platforms auto_post); otherwise their copy is posted by hand. 409 if any requested platform is
-        already scheduled or published."""
+        (see GET /v1/platforms auto_post); otherwise their copy is posted by hand. The Ready gate refuses any
+        platform whose checklist isn't passing (422 ticket_not_ready, see the video's `readiness`) unless
+        force=true. 409 if any requested platform is already scheduled or published."""
         request = request or ScheduleRequest()
         with store.origin("api"):
             try:
                 result = pipeline.schedule(video_id, scheduled_at=request.scheduled_at,
-                                           platforms=list(request.platforms) if request.platforms else None)
+                                           platforms=list(request.platforms) if request.platforms else None,
+                                           force=force)
             except PipelineError as exc:
                 raise pipeline_error(exc) from None
         targets = [d.platform for d in result.dispatches
@@ -478,6 +610,31 @@ def create_app(store: Store, pipeline: Pipeline, accounts: AccountService, token
         row = store.get_video(video_id)
         return ScheduleResponse(video_id=video_id, stage=row.stage, scheduled_at=parse_utc(result.post.publish_at),
                                 target_platforms=targets, manual_platforms=result.manual, jobs=jobs)
+
+    @app.get("/v1/videos/{video_id}/revisions", response_model=RevisionsResponse, operation_id="getRevisions",
+             summary="A ticket's change history", responses={k: ERRORS[k] for k in (401, 404, 422)}, **v1)
+    def get_revisions(video_id: int) -> RevisionsResponse:
+        """Every saved change to the ticket's copy and fields: when, who (local app or api), which field, and the
+        old and new values. Newest first. Typing isn't logged, only saves."""
+        if store.get_video(video_id) is None:
+            raise ApiError(404, f"No video with id {video_id}.", "not_found")
+        return RevisionsResponse(video_id=video_id, revisions=[
+            RevisionOut(id=r.id, at=parse_utc(r.at), origin=r.origin, field=r.field, old_value=r.old_value,
+                        new_value=r.new_value) for r in store.revisions(video_id)])
+
+    @app.post("/v1/videos/{video_id}/manual-posts", response_model=HistoryItem, status_code=201,
+              operation_id="markPosted", summary="Record that a video was posted by hand",
+              responses={k: ERRORS[k] for k in (401, 404, 422)}, **v1)
+    def mark_posted(video_id: int, body: ManualPostCreate) -> HistoryItem:
+        """For the copy-paste workflow: record that the video went out on a platform, so its publishing history is
+        complete. Doesn't post anything or move the card."""
+        with store.origin("api"):
+            try:
+                manual = pipeline.mark_posted(video_id, body.platform, body.posted_at, body.url or "", body.note or "")
+            except PipelineError as exc:
+                raise pipeline_error(exc) from None
+        return HistoryItem(method="manual", status="posted", at=parse_utc(manual.posted_at), url=manual.url or None,
+                           note=manual.note or None, id=manual.id)
 
     @app.get("/v1/platforms", response_model=PlatformsResponse, operation_id="getPlatforms",
              summary="Which platforms are connected for a profile", tags=["platforms"],

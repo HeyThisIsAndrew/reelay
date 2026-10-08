@@ -19,7 +19,7 @@ TOKEN = SECRETS["agent"]
 @pytest.fixture
 def api(tmp_path, monkeypatch):
     disable_publishing(monkeypatch)  # the shipped default: only YouTube posts automatically
-    world = make_world(tmp_path, monkeypatch)
+    world = make_world(tmp_path, monkeypatch, ready=False)   # suggested drafts only, nothing saved
     media = MediaLinks()
     world.pipeline.media = media
     server = ApiServer(create_app(world.store, world.pipeline, world.accounts, lambda: TOKEN, media),
@@ -218,6 +218,7 @@ def test_schedule_validation(api):
 def test_schedule_other_platforms_need_accounts_then_follow_due_times(api, monkeypatch):
     enable_publishing(monkeypatch, Platform.BLUESKY, Platform.FACEBOOK)
     vid, when = api.world.rows[1], future(3)
+    api.patch(f"/v1/videos/{vid}", json={"bluesky_text": "Letting go 🦋", "facebook_text": "Letting go."})
     r = api.post(f"/v1/videos/{vid}/schedule", json={"scheduled_at": when.isoformat(), "platforms": ["bluesky"]})
     assert r.status_code == 422 and "Connect a Bluesky account" in str(r.json())
     connect_platform(api.world.accounts, api.world.profile.id, Platform.BLUESKY)
@@ -237,6 +238,7 @@ def test_threads_requires_public_url(api, monkeypatch):
     monkeypatch.delenv("REELAY_PUBLIC_URL", raising=False)
     connect_platform(api.world.accounts, api.world.profile.id, Platform.THREADS)
     vid = api.world.rows[0]
+    api.patch(f"/v1/videos/{vid}", json={"threads_text": "Letting go"})
     r = api.post(f"/v1/videos/{vid}/schedule", json={"platforms": ["threads"]})
     assert r.status_code == 422 and "REELAY_PUBLIC_URL" in str(r.json())
     api.world.store.set_setting("public_url", "https://reelay.example.com")
@@ -348,6 +350,7 @@ def test_env_override_enables_a_platform(api, monkeypatch):
     monkeypatch.setenv("REELAY_PUBLISH_BLUESKY", "1")
     info = {p["platform"]: p for p in api.get("/v1/platforms", params={"profile": "Lydia Livingood"}).json()["platforms"]}
     assert info["bluesky"]["auto_post"] is True
+    api.patch(f"/v1/videos/{api.world.rows[0]}", json={"bluesky_text": "Letting go"})
     r = api.post(f"/v1/videos/{api.world.rows[0]}/schedule", json={"platforms": ["bluesky"]})
     assert r.status_code == 200 and r.json()["jobs"][0]["platform"] == "bluesky"
 

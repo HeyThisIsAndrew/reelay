@@ -52,7 +52,9 @@ def test_contract_covers_every_endpoint_with_auth_and_errors():
                 ("/v1/videos/{video_id}/schedule", "post"): {"200", "401", "404", "409", "422"},
                 ("/v1/platforms", "get"): {"200", "400", "401", "422"},
                 ("/v1/sources", "get"): {"200", "400", "401", "422"},
-                ("/v1/sources", "post"): {"201", "400", "401", "422"}}
+                ("/v1/sources", "post"): {"201", "400", "401", "422"},
+                ("/v1/videos/{video_id}/revisions", "get"): {"200", "401", "404", "422"},
+                ("/v1/videos/{video_id}/manual-posts", "post"): {"201", "401", "404", "422"}}
     for (path, method), statuses in expected.items():
         op = contract["paths"][path][method]
         assert set(op["responses"]) == statuses, (path, method)
@@ -65,4 +67,20 @@ def test_contract_covers_every_endpoint_with_auth_and_errors():
     assert patch["additionalProperties"] is False
     assert set(patch["properties"]) == {"title", "description", "tags", "target_platforms", "tiktok_text",
                                         "instagram_text", "bluesky_text", "threads_text", "facebook_text",
-                                        "hashtags"}
+                                        "hashtags", "transcript", "thumbnail_path", "content_type", "topic",
+                                        "keywords", "creator", "original_publish_date", "source_platform",
+                                        "source_url", "authorization", "derived_from"}   # never imported_at
+
+
+def test_contract_documents_the_ready_gate():
+    """Agents must be able to handle the Ready gate from the contract alone."""
+    contract = yaml.safe_load(CONTRACT_PATH.read_text(encoding="utf-8"))
+    schedule = contract["paths"]["/v1/videos/{video_id}/schedule"]["post"]
+    force = next(p for p in schedule["parameters"] if p["name"] == "force")
+    assert force["in"] == "query" and force["schema"]["type"] == "boolean" and force["schema"]["default"] is False
+    assert "ticket_not_ready" in schedule["responses"]["422"]["description"]
+    assert "force=true" in schedule["responses"]["422"]["description"]
+    video = contract["components"]["schemas"]["Video"]
+    assert {"ready", "readiness", "ticket", "provenance", "publishing_history"} <= set(video["required"])
+    states = contract["components"]["schemas"]["PlatformReadinessOut"]["properties"]["state"]["enum"]
+    assert states == ["ready", "not_ready", "not_checked"]

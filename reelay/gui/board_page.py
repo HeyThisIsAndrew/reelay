@@ -14,7 +14,7 @@ from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath, Q
 from PySide6.QtWidgets import (QAbstractItemView, QFrame, QHBoxLayout, QLabel, QListView, QMessageBox,
                                QPushButton, QSplitter, QStyle, QStyledItemDelegate, QVBoxLayout, QWidget)
 
-from ..models import Post, PostStatus, Profile, Stage
+from ..models import Platform, Post, PostStatus, Profile, Stage
 from ..pipeline import Card, Pipeline, PipelineError
 from ..store import Change
 from ..text import clock, local_text
@@ -206,12 +206,16 @@ class CardDelegate(QStyledItemDelegate):
             return f"⚠ {post.error}", p.danger
         if not item.is_downloaded:
             return "⚠ Video file missing", p.danger
+        readiness = card.readiness
+        if readiness is not None and readiness.blocking:
+            names = ", ".join(Platform.LABELS.get(n, n) for n in readiness.blocking)
+            return (f"⚠ Not ready for {names}" if readiness.ready else f"⚠ NOT READY · {names}"), p.danger
         if card.row.stage == Stage.STAGING:
             if post and post.account_id and card.account:
                 when = f" · {local_text(post.publish_at)}" if post.publish_at else ""
-                return f"Draft for {card.account.display_name}{when}", p.text2
-            return "Draft · pick a channel", p.text2
-        return "Ready to stage", p.text3
+                return f"✓ Ready · {card.account.display_name}{when}", p.text2
+            return "✓ Ready · pick a channel", p.text2
+        return "✓ Ready · not started", p.text3
 
 
 class BoardColumn(QFrame):
@@ -341,11 +345,16 @@ class BoardPage(QWidget):
         self.panel.uploadRequested.connect(self._request_upload)
         self.panel.cancelUploadRequested.connect(self.pipeline.cancel_upload)
         self.panel.connectRequested.connect(self.openAccounts.emit)
+        self.panel.readiness_for = lambda post: self.pipeline.readiness(post.video_row, post)
+        self.panel.ticketFieldCommitted.connect(self._commit_ticket_field)
+        self.panel.markPostedRequested.connect(self._mark_posted)
+        self.panel.unmarkRequested.connect(self._unmark_posted)
+        self.panel.revisionsRequested.connect(self._show_revisions)
         split = QSplitter(Qt.Horizontal)
         split.addWidget(cols)
         split.addWidget(self.panel)
         split.setStretchFactor(0, 1)
-        split.setSizes([1000, 360])
+        split.setSizes([960, 400])
         split.setChildrenCollapsible(False)
         outer.addWidget(split, 1)
         self.thumbs.loaded.connect(lambda _k: [c.view.viewport().update() for c in self.columns.values()])
@@ -394,6 +403,46 @@ class BoardPage(QWidget):
     def _show_card(self, card: Card) -> None:
         self.panel.show_card(card, self.pipeline.youtube_accounts(self.profile.id),
                              self.pipeline.add_shorts_default())
+        others = sorted(((c.id, c.title) for c in self.cards.values()), key=lambda t: t[1].lower())
+        self.panel.set_ticket(others, self.pipeline.publishing_history(card.id))
+
+    # ---------------------------------------------------------------- ticket fields & history
+    def _commit_ticket_field(self, row_id: int, key: str, value) -> None:
+        """A field was left (blur) or chosen: one logical commit, logged as a revision."""
+        try:
+            self.pipeline.update_ticket(row_id, {key: value})
+        except PipelineError as exc:
+            self.panel.show_errors(exc.problems)
+            self._status(str(exc))
+            return
+        self.panel.show_errors([])
+
+    def _mark_posted(self, row_id: int) -> None:
+        from .ticket_widgets import MarkPostedDialog
+        post = self.store.get_post(row_id)
+        manual = [p for p in ("tiktok", "instagram") if not post or p not in post.target_platforms]
+        dialog = MarkPostedDialog(self, default_platform=manual[0] if manual else "tiktok")
+        if dialog.exec() != MarkPostedDialog.Accepted:
+            return
+        values = dialog.values()
+        try:
+            self.pipeline.mark_posted(row_id, **values)
+        except PipelineError as exc:
+            QMessageBox.warning(self, "Mark as Posted", str(exc))
+            return
+        self._status(f"Marked as posted to {values['platform'].capitalize().replace('Tiktok', 'TikTok')}.")
+        self.reload()
+
+    def _unmark_posted(self, manual_id: int) -> None:
+        if QMessageBox.question(self, "Remove Record", "Remove this “posted by hand” record? The post itself "
+                                                       "isn't touched.") == QMessageBox.Yes:
+            self.pipeline.unmark_posted(manual_id)
+            self.reload()
+
+    def _show_revisions(self, row_id: int) -> None:
+        from .ticket_widgets import RevisionDialog
+        titles = {c.id: c.title for c in self.cards.values()}
+        RevisionDialog(self.store.revisions(row_id), self, titles).exec()
 
     def _on_select(self, column: BoardColumn, index) -> None:
         if not index.isValid():
@@ -474,17 +523,45 @@ class BoardPage(QWidget):
             self.panel.show_errors(problems)
             self._status("Fix the highlighted details, then upload again.")
             return
-        if QMessageBox.question(self, "Upload to YouTube", self.pipeline.describe_upload(post)) != QMessageBox.Yes:
+        force = False
+        targets, _manual = self.pipeline.auto_targets(post)
+        row = self.store.get_video(post.video_row)
+        not_ready = [] if row is None or row.ready_gate_exempt else \
+            self.pipeline.readiness(post.video_row, post).problems(targets)
+        if not_ready:
+            if not self._confirm_not_ready(not_ready):
+                self.pipeline.save_post(post)  # keep what was typed
+                self.reload()
+                self.panel.show_errors(not_ready)
+                self._status("Not scheduled: the ticket isn't ready yet.")
+                return
+            force = True
+        if QMessageBox.question(self, "Schedule", self.pipeline.describe_upload(post)) != QMessageBox.Yes:
             self.pipeline.save_post(post)
             self.reload()
             return
         try:
-            self.pipeline.start_upload(post, add_shorts)
+            self.pipeline.start_upload(post, add_shorts, force=force)
         except PipelineError as exc:
-            self.panel.show_errors(exc.problems)
-            return
-        self._status("Uploading to YouTube…")
+            if exc.code == "ticket_not_ready" and self._confirm_not_ready(exc.problems):
+                try:
+                    self.pipeline.start_upload(post, add_shorts, force=True)
+                except PipelineError as again:
+                    self.panel.show_errors(again.problems)
+                    return
+            else:
+                self.panel.show_errors(exc.problems)
+                return
+        self.panel.show_errors([])
+        self._status("Scheduled." if Platform.YOUTUBE not in targets else "Uploading to YouTube…")
         self.reload()
+
+    def _confirm_not_ready(self, problems: list[str]) -> bool:
+        """The Ready gate in the app: show the checklist, schedule only on an explicit yes."""
+        text = ("This ticket isn't ready to post automatically:\n\n" + "\n".join(f"• {p}" for p in problems)
+                + "\n\nSchedule it anyway? Choose No to go back and fix it.")
+        return QMessageBox.question(self, "Ticket Not Ready", text,
+                                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No) == QMessageBox.Yes
 
     def _on_upload_progress(self, row_id: int, pct: float) -> None:
         card = self.cards.get(row_id)

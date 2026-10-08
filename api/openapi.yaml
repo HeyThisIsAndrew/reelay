@@ -4,10 +4,10 @@
 openapi: 3.1.0
 info:
   title: Reelay Agent API
-  description: 'Read a creator''s video board, apply approved metadata edits, and schedule posts to YouTube, Bluesky,
-    Threads and Facebook. All /v1 routes need `Authorization: Bearer <token>`. Changes show up immediately on the
-    Reelay desktop board.'
-  version: 0.5.0
+  description: 'Read a creator''s video board (each video is a content ticket with a readiness checklist), apply
+    approved edits, record manual posts, and schedule posts to YouTube, Bluesky, Threads and Facebook. All /v1 routes
+    need `Authorization: Bearer <token>`. Changes show up immediately on the Reelay desktop board.'
+  version: 0.6.0
 paths:
   /v1/board:
     get:
@@ -98,13 +98,19 @@ paths:
       tags:
       - videos
       summary: Update a video's post metadata
-      description: 'Partial update of the card''s copy: title, description, tags, target_platforms, tiktok_text,
+      description: 'Partial update of the ticket: its copy (title, description, tags, target_platforms, tiktok_text,
 
-        instagram_text, bluesky_text, threads_text, facebook_text and hashtags. Everything is validated first; if
+        instagram_text, bluesky_text, threads_text, facebook_text, hashtags) and its fields (transcript,
 
-        anything is invalid nothing is written (422). Over-limit text is rejected, never shortened. Returns the
+        thumbnail_path, content_type, topic, keywords, creator, original_publish_date, source_platform, source_url,
 
-        updated video.'
+        authorization, derived_from). Everything is validated first; if anything is invalid nothing is written
+
+        (422). Over-limit text is rejected, never shortened. Copy can''t change once the video is scheduled or
+
+        published (409); ticket fields can. Each changed field is logged (GET /v1/videos/{video_id}/revisions).
+
+        Returns the updated video.'
       operationId: updateVideo
       security:
       - HTTPBearer: []
@@ -162,10 +168,11 @@ paths:
 
         a time) and are scheduled on YouTube. Bluesky, Threads and Facebook post automatically only when enabled
 
-        (see GET /v1/platforms auto_post); otherwise their copy is posted by hand. 409 if any requested platform
-        is
+        (see GET /v1/platforms auto_post); otherwise their copy is posted by hand. The Ready gate refuses any
 
-        already scheduled or published.'
+        platform whose checklist isn''t passing (422 ticket_not_ready, see the video''s `readiness`) unless
+
+        force=true. 409 if any requested platform is already scheduled or published.'
       operationId: scheduleVideo
       security:
       - HTTPBearer: []
@@ -176,6 +183,17 @@ paths:
         schema:
           type: integer
           title: Video Id
+      - name: force
+        in: query
+        required: false
+        schema:
+          type: boolean
+          description: true schedules even if the ticket isn't ready (skips the Ready gate). Platform rules that
+            would make the post fail still apply.
+          default: false
+          title: Force
+        description: true schedules even if the ticket isn't ready (skips the Ready gate). Platform rules that would
+          make the post fail still apply.
       requestBody:
         content:
           application/json:
@@ -205,6 +223,104 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
           description: Conflicts with the video's current state (already scheduled).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: 'Nothing was scheduled. code=ticket_not_ready: the ticket isn''t ready for one or more of
+            the platforms being scheduled (`problems` lists each one, prefixed with the platform, e.g. "Bluesky:
+            Write the Bluesky post …"). Fix them with PATCH /v1/videos/{video_id}, or repeat the request with ?force=true
+            to schedule anyway. Other codes (invalid_post, invalid_time, platform_disabled, invalid_platform) can''t
+            be forced.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+  /v1/videos/{video_id}/revisions:
+    get:
+      tags:
+      - videos
+      summary: A ticket's change history
+      description: 'Every saved change to the ticket''s copy and fields: when, who (local app or api), which field,
+        and the
+
+        old and new values. Newest first. Typing isn''t logged, only saves.'
+      operationId: getRevisions
+      security:
+      - HTTPBearer: []
+      parameters:
+      - name: video_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Video Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RevisionsResponse'
+        '401':
+          description: Missing or invalid bearer token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: No video with that id.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Invalid input; nothing was changed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+  /v1/videos/{video_id}/manual-posts:
+    post:
+      tags:
+      - videos
+      summary: Record that a video was posted by hand
+      description: 'For the copy-paste workflow: record that the video went out on a platform, so its publishing
+        history is
+
+        complete. Doesn''t post anything or move the card.'
+      operationId: markPosted
+      security:
+      - HTTPBearer: []
+      parameters:
+      - name: video_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Video Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ManualPostCreate'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HistoryItem'
+        '401':
+          description: Missing or invalid bearer token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: No video with that id.
           content:
             application/json:
               schema:
@@ -435,8 +551,8 @@ components:
           - type: string
           - type: 'null'
           title: Code
-          description: Stable machine-readable error code, e.g. 'unauthorized', 'not_found', 'invalid_post', 'already_scheduled',
-            'locked'.
+          description: Stable machine-readable error code, e.g. 'unauthorized', 'not_found', 'invalid_post', 'ticket_not_ready',
+            'already_scheduled', 'locked'.
         problems:
           anyOf:
           - items:
@@ -449,6 +565,88 @@ components:
       required:
       - detail
       title: ErrorBody
+    HistoryItem:
+      properties:
+        method:
+          type: string
+          enum:
+          - automatic
+          - manual
+          title: Method
+          description: automatic = posted by Reelay; manual = posted by hand and marked as posted.
+        status:
+          type: string
+          title: Status
+          description: 'For automatic: pending, dispatching, scheduled, published or failed. For manual: posted.'
+        at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: At
+          description: When it went (or goes) live, UTC.
+        url:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Url
+        error:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Error
+        note:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Note
+        id:
+          type: integer
+          title: Id
+          description: Job id (automatic) or manual post id (manual).
+      type: object
+      required:
+      - method
+      - status
+      - id
+      title: HistoryItem
+    ManualPostCreate:
+      properties:
+        platform:
+          type: string
+          enum:
+          - youtube
+          - tiktok
+          - instagram
+          - bluesky
+          - threads
+          - facebook
+          title: Platform
+        posted_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Posted At
+          description: When it went live; omit for now. Can't be in the future.
+        url:
+          anyOf:
+          - type: string
+            maxLength: 2048
+          - type: 'null'
+          title: Url
+          description: Link to the live post, if known.
+        note:
+          anyOf:
+          - type: string
+            maxLength: 500
+          - type: 'null'
+          title: Note
+      additionalProperties: false
+      type: object
+      required:
+      - platform
+      title: ManualPostCreate
     Overrides:
       properties:
         tiktok_text:
@@ -555,6 +753,37 @@ components:
       - auto_post
       - accounts
       title: PlatformInfo
+    PlatformReadinessOut:
+      properties:
+        state:
+          type: string
+          enum:
+          - ready
+          - not_ready
+          - not_checked
+          title: State
+          description: not_checked = automatic posting to this platform is off, so it's posted by hand and never
+            blocks.
+        ready:
+          type: boolean
+          title: Ready
+          description: False only when state is not_ready.
+        auto_post:
+          type: boolean
+          title: Auto Post
+        checks:
+          items:
+            $ref: '#/components/schemas/ReadinessCheck'
+          type: array
+          title: Checks
+          description: Empty when not_checked.
+      type: object
+      required:
+      - state
+      - ready
+      - auto_post
+      - checks
+      title: PlatformReadinessOut
     PlatformsResponse:
       properties:
         profile:
@@ -583,6 +812,35 @@ components:
       - id
       - name
       title: ProfileRef
+    Provenance:
+      properties:
+        source_platform:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Source Platform
+          description: Platform the video was imported from.
+        source_url:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Source Url
+          description: Link to the original post.
+        imported_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Imported At
+          description: When the video was brought into Reelay (UTC).
+        authorization:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+          description: The right to use it, e.g. "Own content" or "Managed account". null = not recorded.
+      type: object
+      title: Provenance
     Publication:
       properties:
         platform:
@@ -687,6 +945,83 @@ components:
       - status
       - due_at
       title: QueueJob
+    ReadinessCheck:
+      properties:
+        id:
+          type: string
+          title: Id
+          description: 'What is checked: title, description, tags, bluesky_text, threads_text, facebook_text, length
+            or video.'
+        label:
+          type: string
+          title: Label
+        state:
+          type: string
+          enum:
+          - pass
+          - warn
+          title: State
+        message:
+          type: string
+          title: Message
+          description: What's fine, or what to fix, in plain words.
+      type: object
+      required:
+      - id
+      - label
+      - state
+      - message
+      title: ReadinessCheck
+    RevisionOut:
+      properties:
+        id:
+          type: integer
+          title: Id
+        at:
+          type: string
+          format: date-time
+          title: At
+        origin:
+          type: string
+          title: Origin
+          description: 'Who made the change: local = the Reelay app, api = an agent through this API.'
+        field:
+          type: string
+          title: Field
+        old_value:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Old Value
+          description: Previous value (lists as JSON text).
+        new_value:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: New Value
+      type: object
+      required:
+      - id
+      - at
+      - origin
+      - field
+      title: RevisionOut
+    RevisionsResponse:
+      properties:
+        video_id:
+          type: integer
+          title: Video Id
+        revisions:
+          items:
+            $ref: '#/components/schemas/RevisionOut'
+          type: array
+          title: Revisions
+          description: Every logged change to the ticket, newest first.
+      type: object
+      required:
+      - video_id
+      - revisions
+      title: RevisionsResponse
     ScheduleRequest:
       properties:
         scheduled_at:
@@ -952,6 +1287,60 @@ components:
           title: Duration Seconds
       type: object
       title: Stats
+    TicketFields:
+      properties:
+        transcript:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Transcript
+        thumbnail_path:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Thumbnail Path
+          description: Local path of the cover image.
+        content_type:
+          anyOf:
+          - type: string
+            enum:
+            - short
+            - long-form
+            - clip
+            - other
+          - type: 'null'
+          title: Content Type
+        topic:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Topic
+        keywords:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Keywords
+        creator:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Creator
+          description: Brand or person the content belongs to.
+        original_publish_date:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Original Publish Date
+          description: When the content was first published (UTC).
+        derived_from:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Derived From
+          description: Id of the video this one was cut from; becomes null if that video is deleted.
+      type: object
+      title: TicketFields
     Video:
       properties:
         id:
@@ -1054,6 +1443,45 @@ components:
           description: Per-platform publishing status (empty until scheduled).
         source:
           $ref: '#/components/schemas/SourceInfo'
+        ready:
+          type: boolean
+          title: Ready
+          description: 'READY: at least one of the video''s target platforms is ready (platforms with automatic
+            posting off count as ready). Scheduling refuses platforms that aren''t (422 ticket_not_ready) unless
+            forced.'
+        readiness:
+          additionalProperties:
+            $ref: '#/components/schemas/PlatformReadinessOut'
+          propertyNames:
+            enum:
+            - youtube
+            - bluesky
+            - threads
+            - facebook
+          type: object
+          title: Readiness
+          description: Checklist per target platform.
+        ticket:
+          $ref: '#/components/schemas/TicketFields'
+        provenance:
+          $ref: '#/components/schemas/Provenance'
+        publishing_history:
+          additionalProperties:
+            items:
+              $ref: '#/components/schemas/HistoryItem'
+            type: array
+          propertyNames:
+            enum:
+            - youtube
+            - tiktok
+            - instagram
+            - bluesky
+            - threads
+            - facebook
+          type: object
+          title: Publishing History
+          description: 'What went where, when and how: automatic posts and manual ones, oldest first, per platform.
+            Platforms with no history are omitted.'
         updated_at:
           anyOf:
           - type: string
@@ -1077,6 +1505,11 @@ components:
       - file_available
       - publications
       - source
+      - ready
+      - readiness
+      - ticket
+      - provenance
+      - publishing_history
       title: Video
     VideoPatch:
       properties:
@@ -1146,6 +1579,82 @@ components:
           - type: 'null'
           title: Hashtags
           description: 'Shared hashtag block for the card, e.g. "#growth #healing". null clears it.'
+        transcript:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Transcript
+          description: Full transcript. null clears it. Ticket fields like this can be edited at any stage.
+        thumbnail_path:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Thumbnail Path
+          description: Local path of the cover image.
+        content_type:
+          anyOf:
+          - type: string
+            enum:
+            - short
+            - long-form
+            - clip
+            - other
+          - type: 'null'
+          title: Content Type
+        topic:
+          anyOf:
+          - type: string
+            maxLength: 200
+          - type: 'null'
+          title: Topic
+        keywords:
+          anyOf:
+          - type: string
+            maxLength: 1000
+          - type: 'null'
+          title: Keywords
+        creator:
+          anyOf:
+          - type: string
+            maxLength: 200
+          - type: 'null'
+          title: Creator
+          description: Brand or person name.
+        original_publish_date:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Original Publish Date
+          description: ISO 8601 with a timezone.
+        source_platform:
+          anyOf:
+          - type: string
+            enum:
+            - tiktok
+            - instagram
+            - youtube
+          - type: 'null'
+          title: Source Platform
+        source_url:
+          anyOf:
+          - type: string
+            maxLength: 2048
+          - type: 'null'
+          title: Source Url
+        authorization:
+          anyOf:
+          - type: string
+            maxLength: 200
+          - type: 'null'
+          title: Authorization
+          description: e.g. "Own content", "Managed account".
+        derived_from:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Derived From
+          description: Id of the video this one was cut from (same profile), or null.
       additionalProperties: false
       type: object
       title: VideoPatch

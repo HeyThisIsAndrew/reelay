@@ -27,12 +27,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterable, Iterator
 
-from .models import (Account, Dispatch, DispatchStatus, Post, PostStatus, Profile, Source, Stage, VideoItem,
-                     VideoRow)
+from .models import (TICKET_FIELDS, Account, Dispatch, DispatchStatus, ManualPost, Post, PostStatus, Profile,
+                     Revision, Source, Stage, Ticket, VideoItem, VideoRow)
 
 log = logging.getLogger("reelay")
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
+
+# Post fields whose edits are logical metadata commits (logged as revisions).
+# Status, remote ids and errors are publishing state, tracked by dispatches.
+REVISED_POST_FIELDS = ("title", "description", "tags", "target_platforms", "tiktok_text", "instagram_text",
+                       "bluesky_text", "threads_text", "facebook_text", "hashtags")
 
 
 @dataclass(frozen=True)
@@ -150,6 +155,53 @@ _MIGRATIONS: dict[int, str] = {
     );
     CREATE INDEX sources_by_profile ON sources (profile_id);
     """,
+    5: """
+    ALTER TABLE videos ADD COLUMN transcript TEXT;
+    ALTER TABLE videos ADD COLUMN thumbnail_path TEXT;
+    ALTER TABLE videos ADD COLUMN content_type TEXT;
+    ALTER TABLE videos ADD COLUMN topic TEXT;
+    ALTER TABLE videos ADD COLUMN keywords TEXT;
+    ALTER TABLE videos ADD COLUMN creator TEXT;
+    ALTER TABLE videos ADD COLUMN original_publish_date TEXT;
+    ALTER TABLE videos ADD COLUMN source_platform TEXT;
+    ALTER TABLE videos ADD COLUMN source_url TEXT;
+    ALTER TABLE videos ADD COLUMN imported_at TEXT;
+    ALTER TABLE videos ADD COLUMN authorization TEXT;
+    ALTER TABLE videos ADD COLUMN derived_from INTEGER REFERENCES videos(id) ON DELETE SET NULL;
+    ALTER TABLE videos ADD COLUMN ready_gate_exempt INTEGER NOT NULL DEFAULT 0;
+    -- Cards already scheduled or published keep going exactly as before.
+    UPDATE videos SET ready_gate_exempt = 1 WHERE stage IN ('scheduled', 'published');
+    -- Provenance for videos imported before v5, from what was recorded then.
+    UPDATE videos SET
+        source_platform = lower(platform),
+        source_url = NULLIF(json_extract(data, '$.url'), ''),
+        imported_at = updated_at,
+        creator = NULLIF(json_extract(data, '$.uploader'), ''),
+        original_publish_date = CASE WHEN length(json_extract(data, '$.upload_date')) = 8 THEN
+            substr(json_extract(data, '$.upload_date'), 1, 4) || '-' || substr(json_extract(data, '$.upload_date'), 5, 2)
+            || '-' || substr(json_extract(data, '$.upload_date'), 7, 2) || 'T00:00:00Z' END;
+    CREATE TABLE revisions (
+        id INTEGER PRIMARY KEY,
+        video_row INTEGER NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
+        at TEXT NOT NULL,
+        origin TEXT NOT NULL,
+        field TEXT NOT NULL,
+        old_value TEXT,
+        new_value TEXT
+    );
+    CREATE INDEX revisions_by_video ON revisions (video_row, id);
+    CREATE TABLE manual_posts (
+        id INTEGER PRIMARY KEY,
+        video_row INTEGER NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
+        platform TEXT NOT NULL,
+        posted_at TEXT NOT NULL,
+        url TEXT NOT NULL DEFAULT '',
+        note TEXT NOT NULL DEFAULT '',
+        origin TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    );
+    CREATE INDEX manual_posts_by_video ON manual_posts (video_row, posted_at);
+    """,
 }
 
 PROFILE_COLORS = ["#8a8984", "#b5835a", "#7a9a7e", "#7f8fb0", "#a77fa0", "#b07a7a", "#9a9a6a"]
@@ -157,6 +209,21 @@ PROFILE_COLORS = ["#8a8984", "#b5835a", "#7a9a7e", "#7f8fb0", "#a77fa0", "#b07a7
 
 def utcnow() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _revision_text(value) -> str | None:
+    """How a field value is written in the revision log (lists as JSON)."""
+    if value is None:
+        return None
+    if isinstance(value, (list, tuple)):
+        return json.dumps(list(value), ensure_ascii=False)
+    return str(value)
+
+
+def upload_date_iso(yyyymmdd: str) -> str | None:
+    if len(yyyymmdd or "") == 8 and yyyymmdd.isdigit():
+        return f"{yyyymmdd[:4]}-{yyyymmdd[4:6]}-{yyyymmdd[6:]}T00:00:00Z"
+    return None
 
 
 class Store:
@@ -363,19 +430,31 @@ class Store:
                        last_verified_at=row["last_verified_at"])
 
     # ================================================================ videos
-    def save_videos(self, profile_id: int, items: Iterable[VideoItem]) -> dict[str, int]:
+    def save_videos(self, profile_id: int, items: Iterable[VideoItem],
+                    authorization: str | None = None) -> dict[str, int]:
         """Insert or update videos (metadata only; stage/notes untouched).
 
-        Returns {item.key: row id}."""
+        New videos get their provenance recorded (source platform and link, when
+        they were imported, the original publish date and creator, and the
+        `authorization` the importer has). Provenance already recorded is never
+        overwritten. Returns {item.key: row id}."""
         now = utcnow()
         ids: dict[str, int] = {}
         with self.tx() as c:
             for item in items:
                 c.execute(
-                    "INSERT INTO videos (profile_id, platform, video_id, data, updated_at) VALUES (?, ?, ?, ?, ?) "
+                    "INSERT INTO videos (profile_id, platform, video_id, data, updated_at, source_platform, "
+                    "source_url, imported_at, creator, original_publish_date, authorization) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                     "ON CONFLICT(profile_id, platform, video_id) DO UPDATE SET data=excluded.data, "
-                    "updated_at=excluded.updated_at",
-                    (profile_id, item.platform, item.video_id, json.dumps(item.to_record()), now))
+                    "updated_at=excluded.updated_at, "
+                    "source_url=COALESCE(source_url, excluded.source_url), "
+                    "creator=COALESCE(creator, excluded.creator), "
+                    "original_publish_date=COALESCE(original_publish_date, excluded.original_publish_date), "
+                    "authorization=COALESCE(authorization, excluded.authorization)",
+                    (profile_id, item.platform, item.video_id, json.dumps(item.to_record()), now,
+                     item.platform.lower(), item.url or None, now, item.uploader or None,
+                     upload_date_iso(item.upload_date), authorization))
                 row = c.execute("SELECT id FROM videos WHERE profile_id=? AND platform=? AND video_id=?",
                                 (profile_id, item.platform, item.video_id)).fetchone()
                 ids[item.key] = row["id"]
@@ -427,11 +506,93 @@ class Store:
             c.execute("UPDATE videos SET notes=?, updated_at=? WHERE id=?", (notes, utcnow(), row_id))
         self._emit("video", (row_id,), self._profile_of_videos([row_id]))
 
+    def delete_video(self, row_id: int) -> None:
+        """Remove a video from the board (its post, dispatches, history and manual
+        posts go with it). Videos derived from it keep existing, unlinked."""
+        profile_id = self._profile_of_videos([row_id])
+        with self.tx() as c:
+            c.execute("DELETE FROM videos WHERE id=?", (row_id,))
+        self._emit("video", (row_id,), profile_id)
+
+    # ---------------------------------------------------------------- ticket fields
+    def update_ticket(self, row_id: int, changes: dict, post: Post | None = None) -> Ticket:
+        """Write ticket fields (and optionally the edited post) as one logical
+        commit: the update and its revision log entries share a transaction, so
+        if logging fails nothing is written."""
+        unknown = sorted(set(changes) - set(TICKET_FIELDS))
+        if unknown:
+            raise ValueError(f"unknown ticket field(s): {', '.join(unknown)}")
+        with self.tx() as c:
+            row = c.execute("SELECT * FROM videos WHERE id=?", (row_id,)).fetchone()
+            if row is None:
+                raise KeyError(row_id)
+            old = self._ticket(row)
+            diffs = [(f, getattr(old, f), v) for f, v in changes.items() if getattr(old, f) != v]
+            if diffs:
+                c.execute(f"UPDATE videos SET {', '.join(f'{f}=?' for f, _o, _n in diffs)}, updated_at=? WHERE id=?",
+                          (*[n for _f, _o, n in diffs], utcnow(), row_id))
+                self._log_revisions(c, row_id, diffs)
+            if post is not None:
+                post.updated_at = utcnow()
+                self._write_post(c, post)
+        if diffs:
+            self._emit("video", (row_id,), row["profile_id"])
+        if post is not None:
+            self._emit("post", (row_id,), row["profile_id"])
+        return self.get_video(row_id).ticket
+
+    def _log_revisions(self, c: sqlite3.Connection, video_row: int, diffs: list[tuple[str, object, object]]) -> None:
+        """Append (field, old, new) entries for one commit. Runs inside the
+        caller's transaction: an error here rolls the whole write back."""
+        at, origin = utcnow(), self._state().origin
+        c.executemany("INSERT INTO revisions (video_row, at, origin, field, old_value, new_value) "
+                      "VALUES (?, ?, ?, ?, ?, ?)",
+                      [(video_row, at, origin, f, _revision_text(o), _revision_text(n)) for f, o, n in diffs])
+
+    def revisions(self, video_row: int, limit: int = 500) -> list[Revision]:
+        """The ticket's change log, newest first."""
+        rows = self.conn.execute("SELECT * FROM revisions WHERE video_row=? ORDER BY id DESC LIMIT ?",
+                                 (video_row, limit)).fetchall()
+        return [Revision(id=r["id"], video_row=r["video_row"], at=r["at"], origin=r["origin"], field=r["field"],
+                         old_value=r["old_value"], new_value=r["new_value"]) for r in rows]
+
+    # ---------------------------------------------------------------- manual posts
+    def add_manual_post(self, post: ManualPost) -> ManualPost:
+        post.created_at = utcnow()
+        post.origin = self._state().origin
+        with self.tx() as c:
+            cur = c.execute("INSERT INTO manual_posts (video_row, platform, posted_at, url, note, origin, created_at) "
+                            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                            (post.video_row, post.platform, post.posted_at, post.url, post.note, post.origin,
+                             post.created_at))
+        post.id = cur.lastrowid
+        self._emit("video", (post.video_row,), self._profile_of_videos([post.video_row]))
+        return post
+
+    def manual_posts(self, video_row: int) -> list[ManualPost]:
+        rows = self.conn.execute("SELECT * FROM manual_posts WHERE video_row=? ORDER BY posted_at, id",
+                                 (video_row,)).fetchall()
+        return [ManualPost(id=r["id"], video_row=r["video_row"], platform=r["platform"], posted_at=r["posted_at"],
+                           url=r["url"], note=r["note"], origin=r["origin"], created_at=r["created_at"])
+                for r in rows]
+
+    def delete_manual_post(self, manual_id: int) -> None:
+        row = self.conn.execute("SELECT video_row FROM manual_posts WHERE id=?", (manual_id,)).fetchone()
+        with self.tx() as c:
+            c.execute("DELETE FROM manual_posts WHERE id=?", (manual_id,))
+        if row:
+            self._emit("video", (row["video_row"],), self._profile_of_videos([row["video_row"]]))
+
+    @staticmethod
+    def _ticket(row: sqlite3.Row) -> Ticket:
+        return Ticket(**{f: row[f] for f in TICKET_FIELDS})
+
     @staticmethod
     def _video_row(row: sqlite3.Row) -> VideoRow:
         item = VideoItem.from_record(json.loads(row["data"]))
         return VideoRow(id=row["id"], item=item, stage=row["stage"], position=row["position"], notes=row["notes"],
-                        profile_id=row["profile_id"], updated_at=row["updated_at"])
+                        profile_id=row["profile_id"], updated_at=row["updated_at"], ticket=Store._ticket(row),
+                        ready_gate_exempt=bool(row["ready_gate_exempt"]))
 
     # ================================================================ posts
     def get_post(self, video_row: int) -> Post | None:
@@ -452,8 +613,13 @@ class Store:
         self._emit("post", (post.video_row,), self._profile_of_videos([post.video_row]))
         return post
 
-    @staticmethod
-    def _write_post(c: sqlite3.Connection, post: Post) -> None:
+    def _write_post(self, c: sqlite3.Connection, post: Post) -> None:
+        old_row = c.execute("SELECT * FROM posts WHERE video_row=?", (post.video_row,)).fetchone()
+        old = self._post(old_row) if old_row else None
+        diffs = [(f, getattr(old, f) if old else None, getattr(post, f)) for f in REVISED_POST_FIELDS
+                 if (getattr(old, f) if old else None) != getattr(post, f)]
+        if old is None:   # a new ticket: only what was actually filled in
+            diffs = [d for d in diffs if d[2] not in (None, "", [])]
         values = (post.account_id, post.title, post.description, json.dumps(post.tags), post.privacy,
                   post.publish_at, int(post.made_for_kids), post.status, post.remote_id, post.remote_url,
                   post.error, post.updated_at, json.dumps(post.target_platforms), post.bluesky_text,
@@ -472,6 +638,8 @@ class Store:
             "tiktok_text=excluded.tiktok_text, instagram_text=excluded.instagram_text, "
             "facebook_text=excluded.facebook_text, hashtags=excluded.hashtags", (*values, post.video_row))
         post.id = c.execute("SELECT id FROM posts WHERE video_row=?", (post.video_row,)).fetchone()["id"]
+        if diffs:
+            self._log_revisions(c, post.video_row, diffs)
 
     def reset_interrupted_uploads(self) -> int:
         """Uploads that were running when the app quit go back to draft."""

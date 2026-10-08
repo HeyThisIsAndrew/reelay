@@ -6,7 +6,8 @@ from datetime import date
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFontMetrics, QKeyEvent
-from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit, QSizePolicy, QWidget
+from PySide6.QtWidgets import (QComboBox, QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit, QSizePolicy,
+                               QVBoxLayout, QWidget)
 
 from ..models import VideoItem
 from ..naming import DEFAULT_TEMPLATE, PRESETS, TOKENS, render_stem
@@ -29,9 +30,12 @@ class NamingPicker(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(0, 0, 0, 0)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(4)
+        lay = QHBoxLayout()
         lay.setSpacing(8)
+        outer.addLayout(lay)
         self.combo = QComboBox()
         for label, template in PRESETS:
             self.combo.addItem(label, template)
@@ -51,9 +55,11 @@ class NamingPicker(QWidget):
         self.example.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self.example.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         self.example.setMinimumWidth(120)
+        self.example.setContentsMargins(2, 0, 0, 0)
         tip(self.example, "What a file will be called with this choice, using a highlighted video "
                           "(or a sample when none is highlighted).")
-        lay.addWidget(self.example, 1)
+        lay.addStretch(1)
+        outer.addWidget(self.example)
         self._item: VideoItem | None = None
         self._loading = False
         self.combo.currentIndexChanged.connect(self._on_choice)
@@ -85,6 +91,10 @@ class NamingPicker(QWidget):
         self._item = item
         self._update_example()
 
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._update_example()
+
     def _on_choice(self) -> None:
         custom = self.combo.currentData() == CUSTOM
         self.pattern.setVisible(custom)
@@ -105,7 +115,8 @@ class NamingPicker(QWidget):
     def _update_example(self) -> None:
         name = render_stem(self.template(), self._item or _sample_item(), 1) + ".mp4"
         metrics = QFontMetrics(self.example.font())
-        self.example.setText("Example: " + metrics.elidedText(name, Qt.ElideMiddle, 360))
+        width = max(self.width(), 320) - 80   # the whole row under the choice, minus "Example: "
+        self.example.setText("Example: " + metrics.elidedText(name, Qt.ElideMiddle, width))
         self.example.setToolTip(f"Example file name: {name}")
 
 
@@ -142,5 +153,7 @@ class GrowingSearch(QPlainTextEdit):
 
     def _fit(self) -> None:
         line = QFontMetrics(self.font()).lineSpacing()
-        lines = max(1, min(3, int(self.document().size().height())))
+        content = int(self.document().size().height())
+        lines = max(1, min(3, content))
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded if content > 3 else Qt.ScrollBarAlwaysOff)
         self.setFixedHeight(line * lines + 18)

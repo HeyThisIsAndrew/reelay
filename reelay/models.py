@@ -323,6 +323,72 @@ class Source:
     created_at: str = ""
 
 
+class ContentType:
+    SHORT = "short"
+    LONG_FORM = "long-form"
+    CLIP = "clip"
+    OTHER = "other"
+    ALL = (SHORT, LONG_FORM, CLIP, OTHER)
+    LABELS = {SHORT: "Short", LONG_FORM: "Long-form", CLIP: "Clip", OTHER: "Other"}
+
+
+# Platforms a ticket can be posted to by hand (copy and paste). Automatic
+# posting is only possible to Platform.ALL.
+MANUAL_PLATFORMS = ("youtube", "tiktok", "instagram", "bluesky", "threads", "facebook")
+MANUAL_LABELS = {"youtube": "YouTube", "tiktok": "TikTok", "instagram": "Instagram", "bluesky": "Bluesky",
+                 "threads": "Threads", "facebook": "Facebook"}
+
+
+@dataclass
+class Ticket:
+    """The content ticket's own fields (schema v5). All optional.
+
+    Dates are ISO 8601 UTC strings ("2026-10-02T15:00:00Z"). Provenance
+    (source_platform, source_url, imported_at, authorization) is filled in when
+    a video is imported; derived_from points at the video this one was cut from
+    and becomes None if that video is deleted."""
+    transcript: str | None = None
+    thumbnail_path: str | None = None
+    content_type: str | None = None        # ContentType
+    topic: str | None = None
+    keywords: str | None = None
+    creator: str | None = None
+    original_publish_date: str | None = None
+    source_platform: str | None = None     # "tiktok" | "instagram" | "youtube"
+    source_url: str | None = None
+    imported_at: str | None = None
+    authorization: str | None = None       # e.g. "Own content", "Managed account"
+    derived_from: int | None = None
+
+
+TICKET_FIELDS = tuple(f.name for f in fields(Ticket))
+
+
+@dataclass
+class Revision:
+    """One logged change to a ticket field."""
+    id: int
+    video_row: int
+    at: str
+    origin: str          # "local" (the desktop app), "api" (an agent), …
+    field: str
+    old_value: str | None
+    new_value: str | None
+
+
+@dataclass
+class ManualPost:
+    """A post made by hand (copy-paste), recorded with "Mark as posted"."""
+    video_row: int
+    platform: str        # MANUAL_PLATFORMS
+    posted_at: str       # UTC
+    url: str = ""
+    note: str = ""
+    origin: str = "local"
+    id: int | None = None
+    created_at: str = ""
+
+
 @dataclass
 class VideoRow:
     """A video as stored for a profile, with its board state."""
@@ -333,3 +399,5 @@ class VideoRow:
     notes: str = ""
     profile_id: int = 0
     updated_at: str = ""
+    ticket: Ticket = field(default_factory=Ticket)
+    ready_gate_exempt: bool = False   # was already Scheduled/Published before the Ready gate existed

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""End-to-end smoke test of the Reelay agent API (v0.5.0), fully isolated.
+"""End-to-end smoke test of the Reelay agent API (v0.6.0), fully isolated.
 
 Seeds a throwaway data folder (REELAY_HOME) with videos from a library folder
 (default: lydia_archive/), starts `python -m reelay.api` on a free port with a
@@ -142,6 +142,39 @@ def main() -> int:
             status, body = call(base, "POST", f"/v1/videos/{vid}/schedule", {})
             check(status == 422 and any("YouTube channel" in p for p in body.get("problems", [])),
                   "schedule without a YouTube channel -> 422 listing the problem", f"{status} {body}")
+
+            # ---- Ticket v2: readiness, ticket fields, revisions, the Ready gate, manual posts
+            v = next(x for x in board["videos"] if x["id"] == vid)
+            check(isinstance(v.get("ready"), bool) and v["readiness"]["youtube"]["state"] in ("ready", "not_ready")
+                  and v["readiness"]["bluesky"]["state"] == "not_checked",
+                  "board has ready + per-platform readiness (flag-off platforms not checked)", json.dumps(v)[:300])
+            check(v["provenance"]["source_platform"] == "tiktok" and v["provenance"]["imported_at"]
+                  and "transcript" in v["ticket"], "board has ticket fields and provenance", str(v.get("provenance")))
+            status, body = call(base, "PATCH", f"/v1/videos/{vid}", {"topic": "identity", "content_type": "short",
+                                                                     "authorization": "Own content"})
+            check(status == 200 and body["ticket"]["topic"] == "identity"
+                  and body["provenance"]["authorization"] == "Own content", "PATCH saves ticket fields",
+                  f"{status} {body}")
+            status, body = call(base, "PATCH", f"/v1/videos/{vid}", {"imported_at": "2020-01-01T00:00:00Z"})
+            check(status == 422, "imported_at can't be edited -> 422", f"{status} {body}")
+            status, body = call(base, "GET", f"/v1/videos/{vid}/revisions")
+            fields = {(r["field"], r["origin"]) for r in body.get("revisions", [])}
+            check(status == 200 and {("topic", "api"), ("title", "api")} <= fields,
+                  "revisions log every saved change with origin api, newest first", f"{status} {body}")
+            call(base, "PATCH", f"/v1/videos/{vid}", {"description": ""})
+            status, body = call(base, "POST", f"/v1/videos/{vid}/schedule", {})
+            check(status == 422 and "YouTube: Add a description." in body.get("problems", []),
+                  "schedule lists readiness problems with the others", f"{status} {body}")
+            status, body = call(base, "POST", f"/v1/videos/{vid}/schedule?force=true", {})
+            check(status == 422 and body.get("code") == "invalid_post",
+                  "force=true never bypasses platform rules (no channel)", f"{status} {body}")
+            status, body = call(base, "POST", f"/v1/videos/{vid}/manual-posts",
+                                {"platform": "tiktok", "url": "https://www.tiktok.com/@livingood.lifestyle"})
+            check(status == 201 and body.get("method") == "manual", "mark as posted -> 201", f"{status} {body}")
+            status, board = call(base, "GET", "/v1/board?profile=Lydia%20Livingood")
+            v = next(x for x in board["videos"] if x["id"] == vid)
+            check(v["publishing_history"].get("tiktok", [{}])[0].get("status") == "posted",
+                  "publishing history shows the manual post", json.dumps(v["publishing_history"]))
 
             status, body = call(base, "GET", "/v1/sources?profile=Lydia%20Livingood")
             check(status == 200 and body["sources"] == [], "sources: none yet in a fresh profile", f"{status} {body}")

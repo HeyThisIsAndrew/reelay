@@ -169,7 +169,8 @@ def test_save_draft_moves_backlog_card_to_staging(env):
 # ------------------------------------------------------------------ uploads
 def _ready_post(env, row, **kw):
     account = env[5]
-    return Post(video_row=row, account_id=account.id, title="Ready", publish_at=FUTURE, **kw)
+    return Post(video_row=row, account_id=account.id, title="Ready",
+                description="Ready to go.", publish_at=FUTURE, **kw)
 
 
 def test_start_upload_queues_and_marks_scheduled(env):
@@ -206,7 +207,8 @@ def test_upload_completion_and_failure(env):
     post = store.get_post(rows[0])
     assert post.status == PostStatus.SCHEDULED and post.remote_url.endswith("YT9") and "Uploaded" in message
 
-    pipeline.start_upload(Post(video_row=rows[1], account_id=env[5].id, title="Now"))  # publish immediately
+    pipeline.start_upload(Post(video_row=rows[1], account_id=env[5].id, title="Now",
+                                         description="Going live now."))  # publish immediately
     uploads.finish(rows[1], True, {"id": "YT10"})
     assert store.get_video(rows[1]).stage == Stage.PUBLISHED
 

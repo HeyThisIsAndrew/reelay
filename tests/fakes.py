@@ -10,6 +10,7 @@ from reelay.accounts import AccountService
 from reelay.flags import FLAG_PLATFORMS, env_var
 from reelay.models import Account, Platform, VideoItem
 from reelay.pipeline import Pipeline
+from reelay.publishing import default_post
 from reelay.store import Store
 from reelay.tokens import MemoryTokenStore
 from reelay.youtube import OAuthClient, Tokens
@@ -77,7 +78,7 @@ class World:
 
 
 def make_world(tmp_path: Path, monkeypatch, downloaded: int = 3, fetched_only: int = 1,
-               connect: tuple[str, ...] = ()) -> World:
+               connect: tuple[str, ...] = (), ready: bool = True) -> World:
     store = Store(tmp_path / "world.db")
     tokens = MemoryTokenStore()
     accounts = AccountService(store, tokens)
@@ -106,6 +107,12 @@ def make_world(tmp_path: Path, monkeypatch, downloaded: int = 3, fetched_only: i
     pipeline = Pipeline(store, accounts, uploads, instance_id="this-run")
     for platform in connect:
         connect_platform(accounts, profile.id, platform)
+    if ready:   # tickets with every platform's own copy written, so the Ready gate passes
+        for item in items[:downloaded]:
+            row = ids[item.key]
+            post = default_post(row, item, youtube.id)
+            post.bluesky_text = post.threads_text = post.facebook_text = f"Post for {item.video_id} #growth"
+            store.save_post(post)
     return World(store, tokens, accounts, uploads, pipeline, profile, youtube,
                  [ids[i.key] for i in items], folder, client)
 

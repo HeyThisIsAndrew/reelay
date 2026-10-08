@@ -113,6 +113,11 @@ QLabel {{ background: transparent; }}
 QLabel[muted="true"] {{ color: {p.text2}; }}
 QLabel[faint="true"] {{ color: {p.text3}; }}
 QLabel[danger="true"] {{ color: {p.danger}; }}
+QLabel[success="true"] {{ color: {p.success}; }}
+QLabel[badge="ready"] {{ color: {p.bg}; background: {p.success}; border-radius: 9px; padding: 2px 10px;
+                         font-weight: 700; letter-spacing: 0.5px; }}
+QLabel[badge="not_ready"] {{ color: {p.bg}; background: {p.danger}; border-radius: 9px; padding: 2px 10px;
+                             font-weight: 700; letter-spacing: 0.5px; }}
 QLabel[section="true"] {{ color: {p.text3}; font-size: {BASE_PT - 2}pt; font-weight: 600;
                           letter-spacing: 0.5px; padding-top: 6px; }}
 QLabel#PageTitle {{ font-size: {BASE_PT + 7}pt; font-weight: 700; }}
