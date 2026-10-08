@@ -1,8 +1,8 @@
-# Reelay v0.4.0: implementation report and local test handoff
+# Reelay v0.5.0: implementation report and local test handoff
 
 **For:** Meta Muse  **From:** Claude Code  **Date:** 2026-10-07
-**Repo:** `/Users/thisisandrew/Documents/UpSkill_Projects/Content_Downloader`, branch `main` at `2cd997f` (tag `v0.4.0`)
-**Installed app:** `/Applications/Reelay.app`, v0.4.0, running now
+**Repo:** `/Users/thisisandrew/Documents/UpSkill_Projects/Content_Downloader`, single branch `main` (all PRs merged, all other branches deleted)
+**Installed app:** `/Applications/Reelay.app`, v0.5.0, running now
 
 ---
 
@@ -10,45 +10,37 @@
 
 | Item | State |
 |---|---|
-| Ticket-first pivot (PR #2) | Merged to `main` (squash). CI passed on macOS, Windows and Linux. |
-| Automated tests | **136 passed**, 2 skipped (opt-in live TikTok tests) |
-| Packaged-app self-test | Passed (bundled ffmpeg, keychain, database, agent API server) |
-| API smoke test (`scripts/smoke_test_api.py`) | **23/23 checks passed** against an isolated server |
-| Local install | v0.4.0 built from the merged code (the Git trees are identical) and installed. The old app quit cleanly first. |
-| Real database | Upgraded to schema v3 on launch. Profiles: "My Channel" and "Lydia Livingood" (active, 2 videos in Backlog). No posts or dispatches exist yet. |
-| Publishing flags | All off (Bluesky, Threads, Facebook). YouTube is always on but has no channel connected. |
-| GitHub release build for `v0.4.0` | Was still running when this report was written. |
+| Branches | **One branch: `main`.** PRs #1–#4 are merged; `test-handoff` and `download-sources` are deleted locally and on GitHub. No open PRs. |
+| CI | PRs #3 and #4 passed tests on macOS, Windows and Linux before merging. |
+| Automated tests on `main` | **147 passed**, 2 skipped (opt-in live TikTok tests) |
+| API smoke test (`scripts/smoke_test_api.py`) | **28/28 checks passed** against an isolated server |
+| Packaged-app self-test | Passed |
+| Local install | v0.5.0 built from `main` and installed. The old app quit cleanly; one instance is running. The API reports v0.5.0 at `127.0.0.1:8471`. |
+| Real database | Upgraded to schema v4. Profiles: "My Channel" and **"Lydia Livingood" (active)**, which has 2 downloaded videos in Backlog and 1 saved source: "Lydia's TikTok" (`https://www.tiktok.com/@livingood.lifestyle`, marked mine). No posts, no dispatches, no connected accounts. |
+| Publishing flags | Bluesky, Threads and Facebook are off. YouTube is always on, but no channel is connected. |
 
 ---
 
-## 2. What was implemented (against your pivot prompt)
+## 2. What's in the build (by release)
 
-| Requirement | Done | Where |
-|---|---|---|
-| 1. Flags `publish.bluesky`, `publish.threads`, `publish.facebook`, default OFF, env overrides `REELAY_PUBLISH_<PLATFORM>` | ✅ | `reelay/flags.py`. The env var wins (`1`/`true`/`on` → on; `0`/`false`/`off` → off; anything else is ignored). Then the setting `publish.<platform>` (Settings → Automatic posting), then off. YouTube is unchanged and always on. |
-| 2. Gate publishers in Services; dispatcher harmless with an empty set; disabled platform → 422 "platform not enabled"; GUI hides disabled targets | ✅ | `reelay/services.py` builds publishers from `default_publishers()` filtered by the flags, read **once at startup**, so the dispatcher and scheduling always agree. The dispatcher only claims platforms it has a publisher for, so items for a disabled platform stay `pending`, untouched. API: `422 {"code": "platform_disabled"}`. GUI: the Auto-post checkboxes show only enabled platforms. |
-| 3. Ticket UI: copy blocks with copy button, live count, reject over-limit on save | ✅ | `reelay/gui/post_panel.py`. Blocks: YouTube title/description/tags, TikTok, Instagram, Bluesky, Threads, Facebook, Hashtags. Counts use each platform's rules. Over-limit saves are refused with nothing written. The YouTube title field's `maxLength` was removed: it silently cut pasted text. |
-| 4. Keep schema, publishers, tests, dispatcher, API, token, contract | ✅ | No files deleted, and no test removed. The only publisher change is a one-line Facebook edit (it uses `facebook_text` when set). |
-| 5. README: flags, enabling, ticket workflow, Facebook native scheduling, Bluesky/Threads need Reelay awake | ✅ | README → "Automatic posting", "Board (content tickets)" and the API examples, re-run against the headless server. |
-| 6. Tests for flags | ✅ | `tests/test_dispatcher.py`, `tests/test_api.py`, `tests/test_gui.py`, `tests/test_publishers.py`. 12 new tests. |
+**v0.5.0: download sources (PR #4)**
+- **Saved sources** per profile (new `sources` table, schema v4): name, platform (TikTok, Instagram, YouTube), URL, "mine".
+  - **Manage them** from the Download page: **Save as Source…**, or the **⋯** menu on a source (Rename, mark as mine, Remove).
+  - **One-click Fetch** runs the original fetch-and-choose flow and records `last_fetched_at`.
+  - **Duplicates are allowed.** The Download page merges them by normalized URL; the first-saved name wins.
+- **Connected YouTube channels** are sources too. They're listed through the YouTube Data API (uploads playlist, paginated), with no link needed. Private and scheduled videos are shown, labeled "Private on YouTube" / "Scheduled on YouTube", and left unticked: downloading them needs Login cookies from the owner's browser.
+- **TikTok and Instagram own accounts** are saved sources marked mine. Accounts stays about publishing only.
+- **The Download page shows two doors.** **Download from** lists the sources (accounts first), then the paste field, labeled "Paste any public profile link, yours or someone else's", with Save as Source and Fetch Videos. A note explains that downloading pulls videos in, while posting pushes them out to accounts connected under Accounts.
+- **API:** `GET /v1/sources` and `POST /v1/sources` (201). The contract was regenerated and the contract test extended; existing endpoints are unchanged.
 
-### Decisions taken with the user before building
-1. **Schema v3 (additive only).** New columns `posts.tiktok_text`, `instagram_text`, `facebook_text`, `hashtags`. Your prompt said "keep the schema as-is", but the copy blocks need somewhere to live. Nothing existing changed. The v1 → v3 upgrade is tested and ran on the real database.
-2. **The API exposes the new copy.** PATCH and `GET /v1/board` include `tiktok_text`, `instagram_text`, `facebook_text` and `hashtags`. `GET /v1/platforms` adds `auto_post`. `api/openapi.yaml` was regenerated, and the contract test passes.
-3. **Disabled targets.** `POST /schedule` **without** `platforms` schedules only the card's enabled targets and returns the rest as `manual_platforms`. With an explicit disabled platform it returns `422 platform_disabled`. If no enabled target is left, it also returns `422 platform_disabled`.
-4. **Hashtags** are one shared block per card.
+**v0.4.0: ticket-first (PR #2)**
+- **Copy blocks** on each card: YouTube title, description and tags; TikTok, Instagram, Bluesky, Threads and Facebook copy; shared hashtags. Each has Copy and a live count by that platform's rules, and over-limit text is rejected, never truncated.
+- **Auto-posting** to Bluesky, Threads and Facebook is behind flags (`REELAY_PUBLISH_<PLATFORM>=1` or Settings → Automatic posting; default off). Scheduling a disabled platform returns `422 platform_disabled`.
 
-### Limits enforced (validate, never truncate)
-| Block | Rule |
-|---|---|
-| YouTube title | 1–100 characters, no `<` or `>` |
-| YouTube description | ≤ 5,000 UTF-8 bytes, no `<` or `>` |
-| YouTube tags | ≤ 500 characters in total |
-| TikTok caption | ≤ 4,000 characters ⚠️ from model knowledge, not checked against current docs |
-| Instagram caption | ≤ 2,200 characters and ≤ 30 hashtags ⚠️ same caveat |
-| Bluesky text | ≤ 300 graphemes **and** ≤ 3,000 UTF-8 bytes (from the `app.bsky.feed.post` schema) |
-| Threads text | ≤ 500 characters, with emoji counted as their UTF-8 byte length (from the Threads docs) |
-| Facebook text | ≤ 63,206 characters ⚠️ same caveat |
+**v0.3.0: agent API and dispatcher (PR #1)**
+- The **FastAPI agent API** (bearer token in the Keychain), the **multi-platform dispatcher**, and the **Bluesky, Threads and Facebook publishers** (dormant).
+
+**Smoke test and this report (PR #3)**, extended for v0.5.0 in a direct commit to `main`.
 
 ---
 
@@ -57,21 +49,22 @@
 | What | Value |
 |---|---|
 | App | `/Applications/Reelay.app` (ad-hoc signed, arm64) |
-| Database | `~/Library/Application Support/Reelay/reelay.db` (SQLite, schema 3) |
+| Database | `~/Library/Application Support/Reelay/reelay.db` (SQLite, schema 4) |
 | Logs | `~/Library/Logs/Reelay/app.log` |
-| Agent API | `http://127.0.0.1:8471` (loopback only), OpenAPI at `/openapi.json` |
-| Agent token | macOS Keychain, service `Reelay`, account `agent_api_token`. Read it with `security find-generic-password -s Reelay -a agent_api_token -w` (macOS may ask once to allow access), or copy it from **Settings → Agent API → Copy Token**. |
-| Lydia's library | `lydia_archive/` in the repo (2 downloaded TikToks with metadata) |
+| Agent API | `http://127.0.0.1:8471` (loopback only); OpenAPI at `/openapi.json` |
+| Agent token | Keychain, service `Reelay`, account `agent_api_token`. Read it with `security find-generic-password -s Reelay -a agent_api_token -w` (macOS may ask once), or **Settings → Agent API → Copy Token**. |
+| Lydia's library folder | `lydia_archive/` in the repo |
 | Env vars | `REELAY_HOME`, `REELAY_HOST`, `REELAY_PORT`, `REELAY_API_TOKEN`, `REELAY_API_DISABLED`, `REELAY_PUBLIC_URL`, `REELAY_PUBLISH_BLUESKY` / `_THREADS` / `_FACEBOOK`, `REELAY_DISPATCH_INTERVAL`, `REELAY_DISPATCH_STALE_SECONDS`, `REELAY_BUNDLED_FFMPEG` |
 
 ---
 
 ## 4. Safety rules for testing
 
-- **Prefer isolated runs.** `REELAY_HOME=<temp folder>` gives a separate database, logs and cache. `REELAY_API_TOKEN=<value>` keeps the keychain out of it. `REELAY_PORT=<port>` avoids clashing with the running app on 8471.
-- **Writes to the real app change Lydia's real tickets.** `PATCH /v1/videos/{id}` against `127.0.0.1:8471` edits her cards. Only do read-only calls against the real instance unless the user says otherwise.
-- **Nothing can post anywhere today.** No YouTube channel, Bluesky, Threads or Facebook account is connected, and the three flags are off. Don't connect real accounts or turn flags on as part of testing without the user's go-ahead: turning a flag on plus connecting an account makes posting real.
-- **Don't run** `pytest --run-network`. It downloads from TikTok, which is fine but slow and unnecessary.
+- **Prefer isolated runs.** Use `REELAY_HOME=<temp folder>`, `REELAY_API_TOKEN=<value>` and `REELAY_PORT=<other port>`; the smoke test does all three.
+- **Writes against the real app change Lydia's real data.** Against `127.0.0.1:8471`, `PATCH /v1/videos/{id}` edits her tickets and `POST /v1/sources` adds to her sources. Do only read-only calls there unless the user approves.
+- **Nothing can post anywhere:** no accounts are connected and the flags are off. Don't connect real accounts or turn flags on without the user's go-ahead.
+- **Fetching on the real app is safe but uses the network.** The "Lydia's TikTok" Fetch button lists her ~174 TikToks; the list is saved to her profile, and nothing downloads until **Download** is clicked.
+- Don't run `pytest --run-network`.
 
 ---
 
@@ -83,18 +76,19 @@ All commands run from the repo root.
 ```bash
 .venv/bin/python -m pytest -q
 ```
-Expected: `136 passed, 2 skipped`.
+Expected: `147 passed, 2 skipped`.
 
 ### 5.2 Isolated API smoke test (about 20 seconds)
 ```bash
 .venv/bin/python scripts/smoke_test_api.py
 ```
-Expected: `23/23 checks passed`. It seeds a temporary home from `lydia_archive/`, starts `python -m reelay.api` on a free port with a throwaway token, and checks:
+Expected: `28/28 checks passed`. It covers:
 - **Auth:** 401 without a token or with a wrong one.
 - **Board:** a missing profile gives 400; a valid one returns every copy block.
-- **PATCH:** saves the copy blocks, rejects each over-limit case and an unknown field with 422, writes nothing when it rejects, and returns 404 for an unknown video.
-- **Schedule:** a disabled platform gives 422 `platform_disabled`, a past time gives 422, and no YouTube channel gives 422 listing the problem.
-- **Platforms:** only YouTube has `auto_post: true`, and no secrets appear.
+- **PATCH:** saves the copy blocks, rejects each over-limit case and an unknown field with 422 while writing nothing, and returns 404 for an unknown video.
+- **Schedule:** rejections for a disabled platform, a past time, and no YouTube channel.
+- **Sources:** none to start; POST saves one (201) with a default name; the same URL can be saved twice; an unsupported URL gives 422; GET lists both as stored.
+- **Platforms:** only YouTube auto-posts, and no secrets appear.
 - **Shutdown:** SIGINT stops it cleanly, the port is released, and the token never reaches the log.
 
 ### 5.3 Packaged-app self-test
@@ -103,52 +97,53 @@ REELAY_BUNDLED_FFMPEG=1 /Applications/Reelay.app/Contents/MacOS/Reelay --self-te
 ```
 Expected: 7 PASS lines and `Self-test passed`.
 
-### 5.4 GUI checklist (the running app, read-only)
+### 5.4 GUI checklist (the running app)
 
 | # | Action | Expected |
 |---|---|---|
-| G1 | Open Reelay | It opens on **Lydia Livingood**; the sidebar shows an "LL" avatar. |
-| G2 | **Board** | Backlog has 2 cards: "all my designs are hand drawn…" (Sep 29, 0:08) and "the loneliness in the middle…" (Oct 2, 0:47). |
-| G3 | Click a card | The right panel shows copy blocks: YouTube Title / Description / Tags, TikTok, Instagram, Bluesky, Threads, Facebook, Hashtags. Each has a counter and a **Copy** button. |
-| G4 | Click **Copy** on an empty Bluesky block | The clipboard gets the title plus the description, if that fits in 300 characters. The panel says "Copied bluesky text (N characters)". |
-| G5 | Type 301 characters in Bluesky text | The counter shows `301/300` in red. |
-| G6 | Click **Save Draft** with an over-limit block | A red error lists the problem. The text stays as typed (not cut), and nothing is saved. Fix it and save: the error clears and the card moves to Staging. |
-| G7 | **Auto-post** section | Only **YouTube** is offered. The note reads "Bluesky, Threads, Facebook: copy-paste only (automatic posting is off)." |
-| G8 | **Settings → Automatic posting** | Three unchecked switches. Ticking one adds "(restart to apply)". **Untick it again** afterwards. |
-| G9 | **Settings → Agent API** | "Running at http://127.0.0.1:8471…" and "Token is stored in your system keychain…". |
-| G10 | **Accounts** | Bluesky, Threads and Facebook cards each say "Copy-paste only (turn on in Settings or REELAY_PUBLISH_…=1)". |
-| G11 | Theme | **View → Theme** or Settings switches between Light, Dark and Black live. |
+| G1 | Open Reelay | It opens on **Lydia Livingood** (an "LL" avatar). |
+| G2 | **Download** page, top | The heading **Download from**, followed by the note "Downloading pulls videos in from these sources. Posting pushes videos out to the accounts you connect under Accounts." |
+| G3 | Source chips | One chip: **Lydia's TikTok · TikTok · mine**, with **Fetch** and **⋯**. |
+| G4 | Paste field | Labeled "Paste any public profile link, yours or someone else's (or several video links)", with **Save as Source…** and **Fetch Videos** beside it. |
+| G5 | Click **Fetch** on Lydia's TikTok *(network; read-only)* | The paste field fills with her URL, the status shows fetching, and then about 174 videos are listed. The 2 already downloaded show "✓ Downloaded"; the rest are ticked "Ready". **Don't click Download** unless the user wants all of them. |
+| G6 | **⋯ → Rename…** on the chip, then rename it back | The chip label updates straight away. |
+| G7 | Paste `https://www.tiktok.com/@livingood.lifestyle/` and **Save as Source…** | It saves a duplicate, and the page still shows one chip (hover: "Saved 2 times"). Clean up with **⋯ → Remove**, which removes both copies; then re-add "Lydia's TikTok" (mine) to restore the starting state. |
+| G8 | **Board** → click a card | The ticket editor shows copy blocks with counters and Copy buttons. Auto-post offers only YouTube, with the note "Bluesky, Threads, Facebook: copy-paste only". |
+| G9 | Type 301 characters in Bluesky text and click **Save Draft** | The counter shows `301/300` in red, the error lists the problem, and nothing is saved or cut. |
+| G10 | **Settings** | Under Automatic posting, three switches are off. Under Agent API: "Running at http://127.0.0.1:8471…". |
+| G11 | **Accounts** | The YouTube setup steps, then Bluesky, Threads and Facebook cards saying "Copy-paste only (…)". |
 
-⚠️ Saving a draft in G6 writes a draft post for that card in the real database (it's the normal user flow). Do it only if the user is fine with Lydia's card holding test copy, or edit the text back afterwards.
+⚠️ G6, G7 and G9 write to the real database: these are the normal user flows. Undo them as described, or skip them if the user prefers.
 
-### 5.5 Flag enablement (isolated, no posting possible)
+### 5.5 Isolated sources and flags (no posting possible)
 ```bash
-REELAY_HOME=/tmp/reelay-flagtest REELAY_PORT=8482 REELAY_API_TOKEN=t REELAY_PUBLISH_BLUESKY=1 \
+REELAY_HOME=/tmp/reelay-test REELAY_PORT=8482 REELAY_API_TOKEN=t REELAY_PUBLISH_BLUESKY=1 \
   /Applications/Reelay.app/Contents/MacOS/Reelay
 ```
-Expected:
-- **Log:** `/tmp/reelay-flagtest/logs/app.log` says "Automatic posting is off for: facebook, threads".
-- **API:** `curl -s "http://127.0.0.1:8482/v1/platforms?profile=My%20Channel" -H "Authorization: Bearer t"` shows `bluesky.auto_post: true`.
-- **GUI:** Settings shows the Bluesky switch as "(REELAY_PUBLISH_BLUESKY=1)", greyed out.
-- **Close:** quit that window afterwards.
-
-No account is connected in that home, so nothing can post.
+Then:
+```bash
+curl -s -X POST "http://127.0.0.1:8482/v1/sources?profile=My%20Channel" -H "Authorization: Bearer t" \
+  -H "Content-Type: application/json" -d '{"url": "https://www.instagram.com/livingood.lifestyle/"}'
+```
+Expected: `201`, `"name": "@livingood.lifestyle on Instagram"`, and the chip appears on that window's Download page. `GET /v1/platforms?profile=My%20Channel` shows `bluesky.auto_post: true`. Quit that window afterwards.
 
 ### 5.6 Read-only checks against the real app
 ```bash
 TOKEN=$(security find-generic-password -s Reelay -a agent_api_token -w)
 ```
 ```bash
-curl -s "http://127.0.0.1:8471/v1/board?profile=Lydia%20Livingood" -H "Authorization: Bearer $TOKEN"
+curl -s "http://127.0.0.1:8471/v1/sources?profile=Lydia%20Livingood" -H "Authorization: Bearer $TOKEN"
 ```
 ```bash
-curl -s "http://127.0.0.1:8471/v1/platforms?profile=Lydia%20Livingood" -H "Authorization: Bearer $TOKEN"
+curl -s "http://127.0.0.1:8471/v1/board?profile=Lydia%20Livingood" -H "Authorization: Bearer $TOKEN"
 ```
-Expected: board `total: 2`, both `stage: "backlog"`, `draft_saved: false`, every override `null`. Platforms: YouTube `auto_post: true`, the others `false`, all `connected: false`.
+Expected:
+- **Sources:** one saved source, "Lydia's TikTok", with `kind: "saved"`, `platform: "tiktok"` and `mine: true`.
+- **Board:** `total: 2`, both in `backlog`.
 
 ---
 
-## 6. Error catalogue (all bodies are `{"detail", "code", "problems"?}`)
+## 6. Error catalogue (bodies are `{"detail", "code", "problems"?}`)
 
 | Situation | Status | `code` |
 |---|---|---|
@@ -156,27 +151,30 @@ Expected: board `total: 2`, both `stage: "backlog"`, `draft_saved: false`, every
 | Missing or unknown `profile` | 400 | `profile_required` / `unknown_profile` |
 | Unknown video id | 404 | `not_found` |
 | PATCH unknown field, wrong type, empty body | 422 | `invalid_request` |
-| PATCH over a platform limit | 422 | `invalid_post` (`problems` lists each) |
+| PATCH over a platform limit | 422 | `invalid_post` |
 | PATCH a scheduled or published video | 409 | `locked` |
 | Schedule a disabled platform, or no enabled targets left | 422 | `platform_disabled` |
-| Schedule with a past, naive or too-soon (< 10 min) time | 422 | `invalid_time` / `invalid_request` / `invalid_post` |
-| Schedule when setup is missing (channel, file, credentials) | 422 | `invalid_post` |
-| Schedule a platform that's already scheduled or published | 409 | `already_scheduled` |
+| Schedule with a past, naive or too-soon time | 422 | `invalid_time` / `invalid_request` / `invalid_post` |
+| Schedule when setup is missing | 422 | `invalid_post` |
+| Schedule an already scheduled or published platform | 409 | `already_scheduled` |
+| POST /v1/sources with an unsupported URL | 422 | `invalid_source` |
+| POST /v1/sources with an extra field or an over-long name | 422 | `invalid_request` |
 
 ---
 
 ## 7. Not verified / known limitations
 
-1. **No real platform post has ever been made.** YouTube, Bluesky, Threads and Facebook publishers are verified only against fakes and the platforms' documented flows.
-2. **TikTok, Instagram and Facebook copy limits** come from model knowledge, not checked against current platform docs.
-3. **The GitHub `v0.4.0` release build** (`.dmg` and Windows `.exe`) was still running when this report was written.
-4. **The local app is ad-hoc signed.** macOS may ask again for Keychain access after each rebuild.
-5. **Flags apply only after a restart** (by design: the dispatcher and scheduling must agree).
-6. **Threads user tokens expire after 60 days** and aren't refreshed automatically yet.
-7. **Auto-merge is disabled** in the GitHub repository settings, so PRs are merged by hand.
+1. **No real platform post** has ever been made: YouTube, Bluesky, Threads and Facebook are verified only against fakes.
+2. **The YouTube channel source** has only run against a fake API session (no channel is connected). It costs about 2 quota units per 50 videos.
+3. **The TikTok, Instagram and Facebook copy limits** come from model knowledge, not checked against current docs.
+4. **There's no API endpoint to rename or delete a source** (the spec asked only for GET and POST). That's GUI only for now.
+5. **A saved YouTube link that duplicates a connected channel** is merged into the channel's chip and can't be removed from the GUI (an edge case).
+6. **The app is ad-hoc signed** (Keychain prompts may come back after rebuilds). **Flags apply after a restart.** **Threads tokens aren't auto-refreshed.**
+7. **GitHub auto-merge is disabled** in the repository settings.
 
 ## 8. Suggestions for the next prompt
 
-- **Per-platform "Mark as posted"** on a card (TikTok, Instagram and so on). Copy-paste is now the main workflow, so this is how the board tracks what went out where. It adds no background machinery.
-- **Checking the three copy limits** marked ⚠️ against current docs, or the user's Google Sheet.
-- **A one-time import from the Google Sheet** (CSV export, mapped to copy blocks per video) to finish replacing the Sheets workflow.
+- **Per-platform "Mark as posted"** on cards, to track the manual copy-paste workflow.
+- **`PATCH` / `DELETE /v1/sources/{id}`**, so agents can rename and remove sources.
+- **A one-time import from the user's Google Sheet** (CSV) into the copy blocks.
+- **Checking the three copy limits** marked as unverified.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""End-to-end smoke test of the Reelay agent API, fully isolated.
+"""End-to-end smoke test of the Reelay agent API (v0.5.0), fully isolated.
 
 Seeds a throwaway data folder (REELAY_HOME) with videos from a library folder
 (default: lydia_archive/), starts `python -m reelay.api` on a free port with a
@@ -142,6 +142,22 @@ def main() -> int:
             status, body = call(base, "POST", f"/v1/videos/{vid}/schedule", {})
             check(status == 422 and any("YouTube channel" in p for p in body.get("problems", [])),
                   "schedule without a YouTube channel -> 422 listing the problem", f"{status} {body}")
+
+            status, body = call(base, "GET", "/v1/sources?profile=Lydia%20Livingood")
+            check(status == 200 and body["sources"] == [], "sources: none yet in a fresh profile", f"{status} {body}")
+            status, body = call(base, "POST", "/v1/sources?profile=Lydia%20Livingood",
+                                {"url": "https://www.tiktok.com/@livingood.lifestyle", "mine": True})
+            check(status == 201 and body.get("name") == "@livingood.lifestyle on TikTok" and body.get("mine")
+                  and body.get("platform") == "tiktok", "POST /v1/sources saves a source (201)", f"{status} {body}")
+            status, body = call(base, "POST", "/v1/sources?profile=Lydia%20Livingood",
+                                {"url": "tiktok.com/@livingood.lifestyle/", "name": "Duplicate"})
+            check(status == 201, "saving the same URL twice is allowed", f"{status} {body}")
+            status, body = call(base, "POST", "/v1/sources?profile=Lydia%20Livingood", {"url": "https://vimeo.com/x"})
+            check(status == 422 and body.get("code") == "invalid_source", "unsupported source URL -> 422",
+                  f"{status} {body}")
+            status, body = call(base, "GET", "/v1/sources?profile=Lydia%20Livingood")
+            check(status == 200 and len(body["sources"]) == 2, "GET /v1/sources lists both as stored",
+                  f"{status} {body}")
 
             status, body = call(base, "GET", "/v1/platforms?profile=Lydia%20Livingood")
             info = {p["platform"]: p for p in body.get("platforms", [])}
