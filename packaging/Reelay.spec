@@ -18,6 +18,7 @@ from reelay import __version__  # noqa: E402
 
 datas = [
     (str(ROOT / "packaging" / "assets" / "icon.png"), "packaging/assets"),
+    (str(ROOT / "reelay" / "gui" / "help.md"), "reelay/gui"),
 ]
 binaries = []
 hiddenimports = []

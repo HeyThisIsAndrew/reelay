@@ -105,7 +105,7 @@ def test_fetch_name_download_and_manifest(app_window, qtbot, monkeypatch):
     newest = sorted(page.model.items(), key=lambda i: i.upload_date, reverse=True)[:2]
     page.model.set_checked([i.key for i in newest], True)
     page.model.set_custom_names({i.key: f"name {i.video_id}" for i in newest})
-    page.template.setEditText("{date}_{custom}")
+    page.naming.set_template("{date}_{custom}")
     assert page.model.planned_filename(newest[0]) == "20261010_name 1000.mp4"
 
     fake_download(monkeypatch)
@@ -133,7 +133,7 @@ def test_rename_applies_new_template_to_files(app_window, qtbot, monkeypatch):
     from reelay.gui import download_page
     monkeypatch.setattr(download_page.RenamePreviewDialog, "exec", lambda self: download_page.RenamePreviewDialog.Accepted)
     page.model.set_custom_names({i.key: f"clip-{i.video_id}" for i in page.model.items()})
-    page.template.setEditText("{custom}")
+    page.naming.set_template("{custom}")
     page._apply_names()
     folder = Path(window.profile.output_folder)
     assert sorted(p.name for p in folder.glob("*.mp4")) == ["clip-1000.mp4", "clip-1001.mp4"]
@@ -323,7 +323,7 @@ def test_ticket_offers_only_enabled_platforms(app_window, monkeypatch):
     panel, _row = open_ticket(window, store, monkeypatch)
     visible = {p for p, box in panel.platform_boxes.items() if not box.isHidden()}
     assert visible == {"youtube"}
-    assert "Bluesky, Threads, Facebook: copy-paste only" in panel.manual_note.text()
+    assert "Bluesky, Threads, Facebook: automatic posting is off" in panel.manual_note.text()
     assert not panel.manual_note.isHidden()
 
 
@@ -333,7 +333,7 @@ def test_copy_buttons_and_live_counts(app_window, monkeypatch):
     clipboard = QApplication.clipboard()
     panel.blocks["tiktok_text"].set_text("letting go 🦋 #growth")
     panel.blocks["tiktok_text"].copy_btn.click()
-    assert clipboard.text() == "letting go 🦋 #growth" and "Copied tiktok caption" in panel.copied.text()
+    assert clipboard.text() == "letting go 🦋 #growth" and "Copied the tiktok caption" in panel.copied.text()
     panel.blocks["bluesky_text"].copy_btn.click()  # empty → what Reelay would post
     assert clipboard.text() == "Letting go\n\nA note on growth."
     panel.blocks["facebook_text"].copy_btn.click()  # empty → the description

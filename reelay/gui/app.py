@@ -58,6 +58,8 @@ def create_window(app: QApplication, store: Store, tokens: TokenStore, start_ser
     """Build the main window. start_services=True also starts the dispatcher and
     agent API (the real app does; tests don't)."""
     apply_theme(app, store.get_setting("theme", "dark"))
+    from . import tips
+    tips.install(app, store)
     from .main_window import MainWindow
     services = Services(store, tokens)
     window = MainWindow(services)

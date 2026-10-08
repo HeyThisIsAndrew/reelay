@@ -1,15 +1,15 @@
-"""Accounts page: Google API setup, connected YouTube channels, channel schedule,
-and what's needed for TikTok / Instagram."""
+"""Accounts page: where videos go OUT. Guided setup for YouTube (your own Google
+project, then one-click "Sign in with Google"), Bluesky (App Password),
+Threads and Facebook (your own Meta app), and honest notes on TikTok and
+Instagram."""
 
 from __future__ import annotations
 
-import threading
-import webbrowser
 from datetime import datetime
 
 from PySide6.QtCore import Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import (QComboBox, QFileDialog, QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
+from PySide6.QtWidgets import (QComboBox, QFileDialog, QFrame, QHBoxLayout, QHeaderView, QLabel,
                                QMessageBox,
                                QPushButton, QScrollArea, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
@@ -22,26 +22,10 @@ from ..publishing import parse_utc
 from ..store import Store
 from ..youtube import OAuthClient, YouTubeError, watch_url
 from .post_panel import local_text
+from .setup_dialogs import GoogleSignInDialog, TokenSetupDialog, YouTubeSetupWizard
 from .theme import set_prop
+from .tips import tip
 from .workers import CallWorker
-
-SETUP_STEPS = (
-    "<ol style='margin-left:-18px'>"
-    "<li>Open the Google Cloud Console and create a project (any name, e.g. “Reelay”).</li>"
-    "<li>Under <b>APIs &amp; Services → Library</b>, enable <b>YouTube Data API v3</b>.</li>"
-    "<li>Under <b>OAuth consent screen</b>, choose <b>External</b>, fill in the app name and your email, "
-    "and add every Google account you'll connect as a <b>test user</b>.</li>"
-    "<li>Under <b>Credentials → Create credentials → OAuth client ID</b>, pick <b>Desktop app</b>, then "
-    "<b>Download JSON</b>.</li>"
-    "<li>Click <b>Import client_secret.json</b> below and choose that file.</li></ol>"
-)
-CAVEATS = (
-    "Good to know: while your Google project is in <b>Testing</b> mode, Google signs you out every 7 days "
-    "(just reconnect). Videos uploaded through a project that hasn't passed YouTube's free "
-    "<a href='https://support.google.com/youtube/contact/yt_api_form'>API compliance audit</a> stay "
-    "<b>private</b>, so scheduled videos won't go public until that audit is approved."
-)
-
 
 def _label(text: str, prop: str | None = None, rich: bool = False) -> QLabel:
     lab = QLabel(text)
@@ -70,8 +54,6 @@ class AccountsPage(QWidget):
         self.setObjectName("Page")
         self.store, self.service = store, accounts
         self.profile: Profile | None = None
-        self.signin_worker: CallWorker | None = None
-        self.signin_cancel: threading.Event | None = None
         self.schedule_worker: CallWorker | None = None
         self._build_ui()
 
@@ -96,6 +78,8 @@ class AccountsPage(QWidget):
         head = QHBoxLayout()
         head.addWidget(QLabel("YouTube", objectName="DetailTitle"))
         head.addStretch()
+        self.auto_label = _label("Automatic posting and scheduling", "faint")
+        head.addWidget(self.auto_label)
         self.creds_label = _label("", "faint")
         head.addWidget(self.creds_label)
         yl.addLayout(head)
@@ -103,18 +87,21 @@ class AccountsPage(QWidget):
         self.setup_box = QWidget()
         sl = QVBoxLayout(self.setup_box)
         sl.setContentsMargins(0, 0, 0, 0)
-        sl.addWidget(_label("One-time setup: Reelay talks to YouTube through your own free Google API "
-                            "project, so your channels and quota stay yours.", "muted"))
-        sl.addWidget(_label(SETUP_STEPS, rich=True))
+        sl.setSpacing(10)
+        sl.addWidget(_label("Google requires apps like Reelay to connect through a free Google Cloud project that "
+                            "you own. Reelay walks you through it, once (about five minutes). After that, "
+                            "connecting a channel is a single “Sign in with Google”.", "muted"))
         srow = QHBoxLayout()
-        console = QPushButton("Open Google Cloud Console")
-        console.clicked.connect(lambda: QDesktopServices.openUrl(
-            QUrl("https://console.cloud.google.com/apis/library/youtube.googleapis.com")))
-        self.import_btn = QPushButton("Import client_secret.json…")
-        set_prop(self.import_btn, "primary")
-        self.import_btn.clicked.connect(self._import_client)
-        srow.addWidget(console)
-        srow.addWidget(self.import_btn)
+        self.setup_btn = QPushButton("Set Up YouTube…")
+        set_prop(self.setup_btn, "primary")
+        tip(self.setup_btn, "A step-by-step guide to creating your Google project and client ID")
+        self.setup_btn.clicked.connect(self._setup_youtube)
+        self.have_id_btn = QPushButton("I Already Have a Client ID…")
+        set_prop(self.have_id_btn, "flat")
+        tip(self.have_id_btn, "Skip straight to pasting a client ID and secret (or loading the JSON file)")
+        self.have_id_btn.clicked.connect(lambda: self._setup_youtube(paste=True))
+        srow.addWidget(self.setup_btn)
+        srow.addWidget(self.have_id_btn)
         srow.addStretch()
         sl.addLayout(srow)
         yl.addWidget(self.setup_box)
@@ -126,24 +113,25 @@ class AccountsPage(QWidget):
         self.accounts_list.setSpacing(6)
         cl.addLayout(self.accounts_list)
         crow = QHBoxLayout()
-        self.connect_btn = QPushButton("Connect YouTube Channel")
+        self.connect_btn = QPushButton("Sign in with Google")
         set_prop(self.connect_btn, "primary")
+        tip(self.connect_btn, "Connect a YouTube channel to this profile by signing in with its Google account")
         self.connect_btn.clicked.connect(self._connect)
-        self.cancel_connect_btn = QPushButton("Cancel Sign-in")
-        self.cancel_connect_btn.clicked.connect(self._cancel_connect)
-        self.cancel_connect_btn.hide()
-        replace_creds = QPushButton("Change API Credentials…")
+        replace_creds = QPushButton("Change Google Setup…")
         set_prop(replace_creds, "flat")
-        replace_creds.clicked.connect(self._import_client)
+        tip(replace_creds, "Use a different Google client ID and secret")
+        replace_creds.clicked.connect(lambda: self._setup_youtube(paste=True))
         crow.addWidget(self.connect_btn)
-        crow.addWidget(self.cancel_connect_btn)
         crow.addStretch()
         crow.addWidget(replace_creds)
         cl.addLayout(crow)
         self.connect_status = _label("", "muted")
         cl.addWidget(self.connect_status)
         yl.addWidget(self.connected_box)
-        yl.addWidget(_label(CAVEATS, "faint", rich=True))
+        yl.addWidget(_label("While your Google project is in <b>Testing</b>, Google signs you out every 7 days "
+                            "(just sign in again). Uploads stay <b>private</b> until the project passes YouTube's "
+                            "free <a href='https://support.google.com/youtube/contact/yt_api_form'>API compliance "
+                            "audit</a>, so scheduled videos won't go public before then.", "faint", rich=True))
         self.body.addWidget(yt)
 
         # ---- channel schedule
@@ -154,7 +142,9 @@ class AccountsPage(QWidget):
         self.schedule_account = QComboBox()
         self.schedule_account.setMinimumWidth(220)
         shead.addWidget(self.schedule_account)
+        tip(self.schedule_account, "Which connected channel to show")
         self.load_schedule_btn = QPushButton("Load from YouTube")
+        tip(self.load_schedule_btn, "Read this channel's latest uploads from YouTube. Nothing is changed.")
         self.load_schedule_btn.clicked.connect(self._load_schedule)
         shead.addWidget(self.load_schedule_btn)
         scl.addLayout(shead)
@@ -178,21 +168,23 @@ class AccountsPage(QWidget):
             self.platform_cards[spec.platform] = card
             self.body.addWidget(card)
 
-        # ---- not yet supported
-        for name, text in (
-            ("TikTok", "Posting isn't available yet. TikTok's Content Posting API requires registering a TikTok "
-                       "developer app and passing TikTok's audit; until then, API uploads can only be "
-                       "posted as private (“Only me”). Downloading from TikTok already works on the "
-                       "Download page."),
-            ("Instagram", "Posting isn't available yet. Publishing Reels requires an Instagram Professional "
-                          "(Creator or Business) account linked to a Facebook Page, and a Meta app that "
-                          "passes App Review."),
+        # ---- TikTok / Instagram: honest status
+        for name, status, text in (
+            ("TikTok", "Copy and paste",
+             "Reelay can't post to TikTok for you. TikTok only allows automatic posting from developer apps "
+             "it has reviewed and approved; without that approval, an app can only send private (“Only me”) "
+             "posts or drafts. Copy the TikTok caption from a ticket and post in the TikTok app. Downloading "
+             "your TikTok videos works on the Download page."),
+            ("Instagram", "Copy and paste",
+             "Reelay can't post to Instagram for you yet. Instagram requires a Professional (Creator or Business) "
+             "account linked to a Facebook Page, and a Meta developer app that passes App Review. Copy the "
+             "Instagram caption from a ticket and post in the Instagram app."),
         ):
             card, lay = _card()
             row = QHBoxLayout()
             row.addWidget(QLabel(name, objectName="DetailTitle"))
             row.addStretch()
-            row.addWidget(_label("Not available yet", "faint"))
+            row.addWidget(_label(status, "faint"))
             lay.addLayout(row)
             lay.addWidget(_label(text, "muted"))
             self.body.addWidget(card)
@@ -201,8 +193,8 @@ class AccountsPage(QWidget):
     # ---------------------------------------------------------------- state
     def set_profile(self, profile: Profile) -> None:
         self.profile = profile
-        self.subtitle.setText(f"Channels that {profile.name} publishes to. Each profile has its own accounts, "
-                              "so you can keep creators separate.")
+        self.subtitle.setText(f"Where {profile.name}'s videos go out. (Videos come in on the Download page.) "
+                              "Each profile has its own accounts, so creators stay separate.")
         self.schedule.clear()
         self.refresh()
 
@@ -210,7 +202,7 @@ class AccountsPage(QWidget):
         client = self.service.oauth_client()
         self.setup_box.setVisible(client is None)
         self.connected_box.setVisible(client is not None)
-        self.creds_label.setText(f"API client …{client.client_id.split('.')[0][-8:]}" if client else "")
+        self.creds_label.setText("Google setup done" if client else "")
 
         while self.accounts_list.count():
             w = self.accounts_list.takeAt(0).widget()
@@ -218,7 +210,8 @@ class AccountsPage(QWidget):
                 w.deleteLater()
         accounts = self.store.list_accounts(self.profile.id, YOUTUBE) if self.profile else []
         if not accounts:
-            self.accounts_list.addWidget(_label("No channels connected to this profile yet.", "faint"))
+            self.accounts_list.addWidget(_label("No channels connected to this profile yet. Click "
+                                                "“Sign in with Google” to add one.", "faint"))
         for acc in accounts:
             row = QFrame()
             rl = QHBoxLayout(row)
@@ -229,9 +222,9 @@ class AccountsPage(QWidget):
             rl.addWidget(QLabel(f"<b>{acc.display_name}</b>  <span style='opacity:.6'>{acc.handle}</span>"))
             rl.addStretch()
             if self.service.load_tokens(acc) is None:
-                warn = _label("Signed out: reconnect", "danger")
+                warn = _label("Signed out: click Sign in with Google again", "danger")
                 rl.addWidget(warn)
-            remove = QPushButton("Disconnect")
+            remove = tip(QPushButton("Disconnect"), "Remove this channel from the profile. Videos on YouTube stay.")
             set_prop(remove, "flat")
             remove.clicked.connect(lambda _=False, a=acc: self._disconnect(a))
             rl.addWidget(remove)
@@ -246,8 +239,22 @@ class AccountsPage(QWidget):
         self.load_schedule_btn.setEnabled(bool(accounts))
 
     # ---------------------------------------------------------------- actions
+    def _setup_youtube(self, paste: bool = False) -> None:
+        wizard = YouTubeSetupWizard(self)
+        if paste:
+            wizard.jump_to_paste()
+        if wizard.exec() != YouTubeSetupWizard.Accepted or wizard.client is None:
+            return
+        self._save_client(wizard.client)
+
+    def _save_client(self, client: OAuthClient) -> None:
+        self.service.set_oauth_client(client)
+        self.connect_status.setText("Google setup saved. Now click “Sign in with Google” to connect a channel.")
+        self.refresh()
+
     def _import_client(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "Choose client_secret.json", "", "JSON (*.json)")
+        """Load a downloaded client_secret JSON file directly (also offered inside the wizard)."""
+        path, _ = QFileDialog.getOpenFileName(self, "Choose the client_secret file", "", "JSON (*.json)")
         if not path:
             return
         try:
@@ -255,27 +262,15 @@ class AccountsPage(QWidget):
         except (ValueError, OSError) as exc:
             QMessageBox.warning(self, "Couldn't use that file", str(exc))
             return
-        self.service.set_oauth_client(client)
-        self.connect_status.setText("API credentials saved. Now connect a channel.")
-        self.refresh()
+        self._save_client(client)
 
     def _connect(self) -> None:
         oauth = self.service.oauth_client()
-        if oauth is None or not self.profile or (self.signin_worker and self.signin_worker.isRunning()):
+        if oauth is None or not self.profile:
             return
-        self.signin_cancel = threading.Event()
-        self.signin_worker = CallWorker(self.service.sign_in, oauth, webbrowser.open, self.signin_cancel, parent=self)
-        self.signin_worker.succeeded.connect(self._on_signed_in)
-        self.signin_worker.failed.connect(self._on_signin_failed)
-        self.signin_worker.finished.connect(self._signin_done)
-        self.connect_btn.setEnabled(False)
-        self.cancel_connect_btn.show()
-        self.connect_status.setText("Finish signing in with Google in your browser, then pick the channel to connect…")
-        self.signin_worker.start()
-
-    def _cancel_connect(self) -> None:
-        if self.signin_cancel:
-            self.signin_cancel.set()
+        dialog = GoogleSignInDialog(self.service.sign_in, oauth, self)
+        dialog.signedIn.connect(self._on_signed_in)
+        dialog.exec()
 
     def _on_signed_in(self, result) -> None:
         channel, tokens = result
@@ -283,13 +278,6 @@ class AccountsPage(QWidget):
         self.connect_status.setText(f"Connected {account.display_name}.")
         self.refresh()
         self.accountsChanged.emit()
-
-    def _on_signin_failed(self, message: str) -> None:
-        self.connect_status.setText(message)
-
-    def _signin_done(self) -> None:
-        self.connect_btn.setEnabled(True)
-        self.cancel_connect_btn.hide()
 
     def _disconnect(self, account) -> None:
         answer = QMessageBox.question(self, "Disconnect Channel",
@@ -338,9 +326,6 @@ class AccountsPage(QWidget):
     def shutdown(self) -> None:
         for card in self.platform_cards.values():
             card.shutdown()
-        self._cancel_connect()
-        if self.signin_worker:
-            self.signin_worker.wait(2000)
 
 
 # ====================================================================== other platforms
@@ -355,18 +340,14 @@ class PlatformSpec:
 PLATFORM_SPECS = (
     PlatformSpec(Platform.BLUESKY, (("handle", "Handle (e.g. lydia.bsky.social)", False),
                                     ("app_password", "App Password", True)),
-                 "Create an App Password in Bluesky → Settings → Privacy and security → App passwords. Don't use "
-                 "your main password. Video posting needs a verified email on the account.", BlueskyPublisher),
-    PlatformSpec(Platform.THREADS, (("access_token", "Threads user access token", True),),
-                 "Needs a Meta developer app with the Threads use case and the threads_basic + "
-                 "threads_content_publish permissions (approved through App Review to post for accounts you "
-                 "don't own). Generate a long-lived user access token (valid 60 days, then refresh it). Videos "
-                 "are fetched by Meta from your Cloudflare Tunnel, so also set the Public URL in Settings.",
-                 ThreadsPublisher),
+                 "Connect with a Bluesky App Password: a separate password just for Reelay that you can revoke "
+                 "any time. Bluesky doesn't offer a sign-in page for apps.", BlueskyPublisher),
+    PlatformSpec(Platform.THREADS, (("access_token", "Threads access token", True),),
+                 "Threads only lets apps post through a Meta developer app you own, so connecting means pasting "
+                 "a token from that app. The guide walks you through it.", ThreadsPublisher),
     PlatformSpec(Platform.FACEBOOK, (("page_id", "Page ID", False), ("page_access_token", "Page access token", True)),
-                 "Needs a Meta developer app with pages_manage_posts, pages_read_engagement and pages_show_list "
-                 "(App Review for Pages you don't manage). Use a long-lived Page access token from someone who can "
-                 "create content on the Page.", FacebookPublisher),
+                 "Facebook only lets apps post to Pages through a Meta developer app you own, so connecting means "
+                 "pasting a Page token from that app. The guide walks you through it.", FacebookPublisher),
 )
 
 
@@ -391,19 +372,13 @@ class PlatformCard(QFrame):
         self.list.setSpacing(4)
         lay.addLayout(self.list)
         row = QHBoxLayout()
-        self.inputs: dict[str, QLineEdit] = {}
-        for key, label, password in spec.fields:
-            edit = QLineEdit()
-            edit.setPlaceholderText(label)
-            if password:
-                edit.setEchoMode(QLineEdit.Password)
-            edit.setAttribute(Qt.WA_MacShowFocusRect, False)
-            self.inputs[key] = edit
-            row.addWidget(edit, 1)
-        self.connect_btn = QPushButton("Connect")
+        self.connect_btn = QPushButton(f"Connect {Platform.LABELS[spec.platform]}…")
         set_prop(self.connect_btn, "primary")
-        self.connect_btn.clicked.connect(self._connect)
+        tip(self.connect_btn, "Step-by-step setup. Reelay checks the details with "
+                              f"{Platform.LABELS[spec.platform]} before saving anything.")
+        self.connect_btn.clicked.connect(self._open_setup)
         row.addWidget(self.connect_btn)
+        row.addStretch()
         lay.addLayout(row)
         self.status = _label("", "muted")
         lay.addWidget(self.status)
@@ -411,8 +386,10 @@ class PlatformCard(QFrame):
     def refresh(self) -> None:
         from ..flags import env_var, publishing_enabled
         on = publishing_enabled(self.spec.platform, self.page.store)
-        self.flag_label.setText("Automatic posting on" if on else
-                                f"Copy-paste only (turn on in Settings or {env_var(self.spec.platform)}=1)")
+        self.flag_label.setText("Automatic posting on" if on else "Copy and paste (automatic posting is off)")
+        tip(self.flag_label, "Automatic posting is on: Reelay posts scheduled videos here for you." if on else
+            "Reelay won't post here on its own. Turn on automatic posting in Settings "
+            f"(or set {env_var(self.spec.platform)}=1).")
         while self.list.count():
             w = self.list.takeAt(0).widget()
             if w:
@@ -428,11 +405,11 @@ class PlatformCard(QFrame):
             rl.addWidget(QLabel(f"<b>{acc.display_name}</b>  <span style='opacity:.6'>{acc.handle}</span>"))
             rl.addStretch()
             if not self.page.service.has_credentials(acc):
-                rl.addWidget(_label("Credential missing: reconnect", "danger"))
+                rl.addWidget(_label("Sign-in details missing: connect again", "danger"))
             else:
                 checked = local_text(acc.last_verified_at) if acc.last_verified_at else "never"
-                rl.addWidget(_label(f"Last verified: {checked}", "faint"))
-                verify = QPushButton("Verify")
+                rl.addWidget(_label(f"Last checked: {checked}", "faint"))
+                verify = tip(QPushButton("Check Connection"), "Make sure the saved details still work. Nothing is posted.")
                 set_prop(verify, "flat")
                 verify.clicked.connect(lambda _=False, a=acc: self._verify(a))
                 rl.addWidget(verify)
@@ -445,28 +422,17 @@ class PlatformCard(QFrame):
     def _busy(self) -> bool:
         return bool(self.worker and self.worker.isRunning())
 
-    def _connect(self) -> None:
+    def _open_setup(self) -> None:
         if self._busy() or not self.page.profile:
             return
-        secret = {key: edit.text().strip() for key, edit in self.inputs.items()}
-        missing = [label for key, label, _ in self.spec.fields if not secret[key]]
-        if missing:
-            self.status.setText(f"Fill in: {', '.join(missing)}.")
-            return
-        self.status.setText("Checking with " + Platform.LABELS[self.spec.platform] + "…")
-        self.connect_btn.setEnabled(False)
-        self.worker = CallWorker(self.spec.publisher().verify, secret, parent=self)
-        self.worker.succeeded.connect(lambda identity, s=secret: self._connected(identity, s))
-        self.worker.failed.connect(self.status.setText)
-        self.worker.finished.connect(lambda: self.connect_btn.setEnabled(True))
-        self.worker.start()
+        dialog = TokenSetupDialog(self.spec.platform, self.spec.fields, self.spec.publisher().verify, self)
+        dialog.connected.connect(self._connected)
+        dialog.exec()
 
     def _connected(self, identity: dict, secret: dict) -> None:
         if self.spec.platform == Platform.THREADS:
             secret = {**secret, "user_id": identity["external_id"]}
         account = self.page.service.connect_platform(self.page.profile.id, self.spec.platform, identity, secret)
-        for edit in self.inputs.values():
-            edit.clear()
         self.status.setText(f"Connected {account.display_name}.")
         self.refresh()
 
@@ -477,7 +443,8 @@ class PlatformCard(QFrame):
         self.status.setText(f"Checking {account.display_name}…")
         self.worker = CallWorker(self.spec.publisher().verify, secret, parent=self)
         self.worker.succeeded.connect(lambda _identity: (self.page.store.mark_verified(account.id),
-                                                         self.status.setText(f"{account.display_name} works."),
+                                                         self.status.setText(f"{account.display_name} is connected "
+                                                                             "and working."),
                                                          self.refresh()))
         self.worker.failed.connect(self.status.setText)
         self.worker.start()

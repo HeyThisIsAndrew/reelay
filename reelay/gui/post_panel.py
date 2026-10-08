@@ -30,6 +30,7 @@ from ..text import clock, local_text, short_title  # noqa: F401 (re-exported)
 from .detail_panel import CoverView
 from .table_model import fmt_count, fmt_date, fmt_duration
 from .theme import set_prop
+from .tips import tip
 from .thumbnails import ThumbnailCache
 
 PRIVACY_LABELS = {Privacy.PUBLIC: "Public", Privacy.UNLISTED: "Unlisted", Privacy.PRIVATE: "Private"}
@@ -48,16 +49,30 @@ def _count(used: int, limit: int, unit: str = "") -> tuple[str, bool]:
 # Copy blocks: key → (label, multi-line, placeholder). Keys are Post fields,
 # except "tags" (a list, edited as comma-separated text).
 BLOCKS: list[tuple[str, str, bool, str]] = [
-    ("title", "YOUTUBE TITLE", False, "Title"),
-    ("description", "YOUTUBE DESCRIPTION", True, "Description"),
-    ("tags", "YOUTUBE TAGS", False, "comma, separated, tags"),
-    ("tiktok_text", "TIKTOK CAPTION", True, "Empty: Copy gives the description."),
-    ("instagram_text", "INSTAGRAM CAPTION", True, "Empty: Copy gives the description."),
-    ("bluesky_text", "BLUESKY TEXT", True, "Empty: the title (plus the description if it fits)."),
-    ("threads_text", "THREADS TEXT", True, "Empty: the title (plus the description if it fits)."),
-    ("facebook_text", "FACEBOOK TEXT", True, "Empty: the description."),
-    ("hashtags", "HASHTAGS", False, "#growth #healing"),
+    ("title", "YOUTUBE TITLE", False, "The video's title on YouTube"),
+    ("description", "YOUTUBE DESCRIPTION", True, "What viewers read under the video"),
+    ("tags", "YOUTUBE TAGS", False, "Search words, separated by commas"),
+    ("tiktok_text", "TIKTOK CAPTION", True, "Leave empty to use the YouTube description"),
+    ("instagram_text", "INSTAGRAM CAPTION", True, "Leave empty to use the YouTube description"),
+    ("bluesky_text", "BLUESKY POST", True, "Leave empty to use the title (and the description, if it fits)"),
+    ("threads_text", "THREADS POST", True, "Leave empty to use the title (and the description, if it fits)"),
+    ("facebook_text", "FACEBOOK POST", True, "Leave empty to use the YouTube description"),
+    ("hashtags", "HASHTAGS FOR EVERY PLATFORM", False, "#growth #healing"),
 ]
+
+BLOCK_TIPS = {
+    "title": "Up to 100 characters. Shown on YouTube and used as the starting point for other platforms.",
+    "description": "Up to 5,000 bytes (emoji count as several). Also the fallback caption for TikTok, "
+                   "Instagram and Facebook.",
+    "tags": "Words that help people find the video in YouTube search. Up to 500 characters in total.",
+    "tiktok_text": "Up to 4,000 characters. Copy it and paste it into TikTok when you post.",
+    "instagram_text": "Up to 2,200 characters and 30 hashtags. Copy it and paste it into Instagram when you post.",
+    "bluesky_text": "Up to 300 characters. Emoji and accented letters each count once, but the post must also "
+                    "stay under 3,000 bytes.",
+    "threads_text": "Up to 500 characters. Emoji count as several characters on Threads.",
+    "facebook_text": "Up to 63,206 characters.",
+    "hashtags": "One set of hashtags you can add to any platform's text.",
+}
 
 
 class CopyBlock(QWidget):
@@ -70,14 +85,14 @@ class CopyBlock(QWidget):
         lay.setContentsMargins(0, 4, 0, 0)
         lay.setSpacing(4)
         head = QHBoxLayout()
-        head.addWidget(_section(label))
+        head.addWidget(tip(_section(label), BLOCK_TIPS.get(key, "")))
         head.addStretch()
         self.counter = QLabel()
         self.counter.setProperty("faint", True)
         head.addWidget(self.counter)
         self.copy_btn = QPushButton("Copy")
         set_prop(self.copy_btn, "flat")
-        self.copy_btn.setToolTip("Copy to the clipboard")
+        tip(self.copy_btn, "Copy this text so you can paste it into the app or website")
         self.copy_btn.clicked.connect(lambda: on_copy(self))
         head.addWidget(self.copy_btn)
         lay.addLayout(head)
@@ -89,6 +104,9 @@ class CopyBlock(QWidget):
             self.editor = QLineEdit()
             self.editor.textChanged.connect(lambda _t: on_change())
         self.editor.setPlaceholderText(placeholder)
+        tip(self.editor, BLOCK_TIPS.get(key, ""))
+        tip(self.counter, "How much of the platform's limit this text uses. Red means it's too long; "
+                          "Reelay never cuts your text.")
         lay.addWidget(self.editor)
 
     def text(self) -> str:
@@ -184,11 +202,11 @@ class PostPanel(QFrame):
         self.upload_bar.setTextVisible(False)
         self.upload_bar.setRange(0, 1000)
         brow = QHBoxLayout()
-        self.open_btn = QPushButton("Open on YouTube")
+        self.open_btn = tip(QPushButton("Open on YouTube"), "Watch this video on YouTube")
         self.open_btn.clicked.connect(self._open_remote)
-        self.studio_btn = QPushButton("Edit in Studio")
+        self.studio_btn = tip(QPushButton("Edit in YouTube Studio"), "Change this video's details in YouTube Studio")
         self.studio_btn.clicked.connect(self._open_studio)
-        self.cancel_btn = QPushButton("Cancel Upload")
+        self.cancel_btn = tip(QPushButton("Cancel Upload"), "Stop uploading this video. Nothing is posted.")
         set_prop(self.cancel_btn, "danger")
         self.cancel_btn.clicked.connect(lambda: self.card and self.cancelUploadRequested.emit(self.card.id))
         for b in (self.open_btn, self.studio_btn, self.cancel_btn):
@@ -216,11 +234,13 @@ class PostPanel(QFrame):
         fl = QVBoxLayout(self.form)
         fl.setContentsMargins(0, 8, 0, 0)
         fl.setSpacing(6)
-        fl.addWidget(_section("AUTO-POST"))
+        fl.addWidget(tip(_section("POST AUTOMATICALLY TO"),
+                         "Reelay posts to the ticked platforms for you. Everything else, you copy and paste "
+                         "from the text above."))
         self.platform_row = QHBoxLayout()
         self.platform_boxes: dict[str, QCheckBox] = {}
         for platform in Platform.ALL:
-            box = QCheckBox(Platform.LABELS[platform])
+            box = tip(QCheckBox(Platform.LABELS[platform]), f"Let Reelay post this video to {Platform.LABELS[platform]}")
             box.toggled.connect(self._sync_platforms)
             self.platform_boxes[platform] = box
             self.platform_row.addWidget(box)
@@ -231,30 +251,30 @@ class PostPanel(QFrame):
         self.manual_note.setWordWrap(True)
         fl.addWidget(self.manual_note)
 
-        self.channel_label = _section("YOUTUBE CHANNEL")
+        self.channel_label = tip(_section("YOUTUBE CHANNEL"), "Which of your connected channels gets the video")
         fl.addWidget(self.channel_label)
         crow = QHBoxLayout()
         crow.setContentsMargins(0, 0, 0, 0)
-        self.account = QComboBox()
+        self.account = tip(QComboBox(), "Which of your connected YouTube channels gets the video")
         crow.addWidget(self.account, 1)
-        self.connect_btn = QPushButton("Connect…")
+        self.connect_btn = tip(QPushButton("Connect a Channel…"), "Go to Accounts to connect a YouTube channel")
         self.connect_btn.clicked.connect(self.connectRequested.emit)
         crow.addWidget(self.connect_btn)
         self.channel_row = QWidget()
         self.channel_row.setLayout(crow)
         fl.addWidget(self.channel_row)
 
-        fl.addWidget(_section("VISIBILITY & TIMING"))
-        self.privacy = QComboBox()
+        fl.addWidget(tip(_section("WHO CAN SEE IT, AND WHEN"), "Choose who can watch it on YouTube and when it goes live"))
+        self.privacy = tip(QComboBox(), "Public: anyone. Unlisted: only people with the link. Private: only you.")
         for key, label in PRIVACY_LABELS.items():
             self.privacy.addItem(label, key)
         fl.addWidget(self.privacy)
-        self.when = QComboBox()
+        self.when = tip(QComboBox(), "Post right away, or pick a date and time")
         self.when.addItem("Publish as soon as it's uploaded", "now")
         self.when.addItem("Schedule for a date and time", "schedule")
         self.when.currentIndexChanged.connect(self._sync_when)
         fl.addWidget(self.when)
-        self.publish_at = QDateTimeEdit()
+        self.publish_at = tip(QDateTimeEdit(), "When the video goes live, in your local time")
         self.publish_at.setCalendarPopup(True)
         self.publish_at.setDisplayFormat("ddd MMM d, yyyy   h:mm AP")
         fl.addWidget(self.publish_at)
@@ -263,8 +283,10 @@ class PostPanel(QFrame):
         self.sched_note.setWordWrap(True)
         fl.addWidget(self.sched_note)
 
-        self.shorts = QCheckBox("Add #Shorts to the description")
-        self.kids = QCheckBox("Made for kids")
+        self.shorts = tip(QCheckBox("Add #Shorts to the description"),
+                          "Helps YouTube treat a vertical video under 3 minutes as a Short")
+        self.kids = tip(QCheckBox("Made for kids"), "Required by YouTube if the video is made for children. "
+                                                    "Comments and some features are turned off.")
         fl.addSpacing(4)
         fl.addWidget(self.shorts)
         fl.addWidget(self.kids)
@@ -277,9 +299,9 @@ class PostPanel(QFrame):
         lay.addWidget(self.errors)
 
         arow = QHBoxLayout()
-        self.save_btn = QPushButton("Save Draft")
+        self.save_btn = tip(QPushButton("Save Changes"), "Save this ticket without posting anything")
         self.save_btn.clicked.connect(lambda: self.saveRequested.emit(self.collect()))
-        self.upload_btn = QPushButton("Schedule")
+        self.upload_btn = tip(QPushButton("Schedule"), "Hand the video to the ticked platforms at the chosen time")
         set_prop(self.upload_btn, "primary")
         self.upload_btn.clicked.connect(lambda: self.uploadRequested.emit(self.collect(), self.shorts.isChecked()))
         arow.addWidget(self.save_btn)
@@ -297,8 +319,10 @@ class PostPanel(QFrame):
         for platform, box in self.platform_boxes.items():
             box.setVisible(platform in self.enabled)
         off = [Platform.LABELS[p] for p in Platform.ALL if p not in self.enabled]
-        self.manual_note.setText(f"{', '.join(off)}: copy-paste only (automatic posting is off)." if off else "")
-        self.manual_note.setVisible(bool(off))
+        off_text = f"{', '.join(off)}: automatic posting is off (turn it on in Settings). " if off else ""
+        self.manual_note.setText(off_text + "TikTok and Instagram: copy the caption above and post in their apps. "
+                                 "(TikTok only allows automatic posting for apps it has approved.)")
+        self.manual_note.setVisible(True)
 
     def show_empty(self) -> None:
         self.card = None
@@ -407,7 +431,7 @@ class PostPanel(QFrame):
         else:
             QGuiApplication.clipboard().setText(text)
             label = next(lbl for key, lbl, _m, _p in BLOCKS if key == block.key).title()
-            self.copied.setText(f"Copied {label.lower()} ({len(text):,} characters).")
+            self.copied.setText(f"Copied the {label.lower()} ({len(text):,} characters). Paste it where you post.")
         self._copied_timer.start()
 
     def _sync_when(self) -> None:

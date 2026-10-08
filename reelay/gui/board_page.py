@@ -225,6 +225,12 @@ class BoardColumn(QFrame):
         head = QHBoxLayout()
         title = QLabel(Stage.LABELS[stage].upper())
         title.setProperty("section", True)
+        title.setToolTip({
+            Stage.BACKLOG: "Videos you've downloaded and haven't started on yet",
+            Stage.STAGING: "Videos you're writing posts for",
+            Stage.SCHEDULED: "Videos handed to platforms, waiting to go live",
+            Stage.PUBLISHED: "Videos that are live",
+        }[stage])
         self.count = QLabel("0")
         self.count.setProperty("faint", True)
         head.addWidget(title)
@@ -309,7 +315,8 @@ class BoardPage(QWidget):
         self.sync_label = QLabel()
         self.sync_label.setProperty("faint", True)
         head.addWidget(self.sync_label)
-        self.sync_btn = QPushButton("Sync with YouTube")
+        self.sync_btn = QPushButton("Check YouTube for Updates")
+        self.sync_btn.setToolTip("Ask YouTube whether scheduled videos have gone live, and move them to Published")
         self.sync_btn.clicked.connect(lambda: self.sync(force=True))
         head.addWidget(self.sync_btn)
         outer.addLayout(head)

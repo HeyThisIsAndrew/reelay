@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButt
 from ..models import Status, VideoItem
 from ..text import short_title
 from . import theme
+from .tips import tip
 from .table_model import fmt_count, fmt_date, fmt_duration
 from .thumbnails import ThumbnailCache
 
@@ -128,38 +129,45 @@ class DetailPanel(QFrame):
         lay.addWidget(self.title)
         lay.addWidget(self.meta)
 
-        lay.addWidget(_label("FILE NAME", prop="section"))
+        lay.addSpacing(6)
+        lay.addWidget(tip(_label("YOUR NAME FOR THIS VIDEO", prop="section"),
+                          "A short name you choose. It's used in the file name when Name files includes your name."))
         self.custom = QLineEdit()
-        self.custom.setPlaceholderText("Custom name, e.g. letting-go-of-who-you-were")
+        self.custom.setPlaceholderText("e.g. letting-go-of-who-you-were")
+        tip(self.custom, "Type a short name for this video. Saved automatically.")
         self.custom.setAttribute(Qt.WA_MacShowFocusRect, False)
         self.custom.textEdited.connect(self._emit_custom)
         lay.addWidget(self.custom)
         self.filename = _label(select=True)
         self.filename.setObjectName("FilenamePreview")
+        tip(self.filename, "The file name this video has (or will have) on disk")
         lay.addWidget(self.filename)
         self.file_note = _label(prop="faint")
         lay.addWidget(self.file_note)
 
-        lay.addWidget(_label("CAPTION", prop="section"))
+        lay.addSpacing(6)
+        lay.addWidget(tip(_label("CAPTION", prop="section"), "The caption from the original post"))
         self.caption = _label(select=True)
         lay.addWidget(self.caption)
 
-        self.tags_header = _label("HASHTAGS", prop="section")
+        self.tags_header = tip(_label("HASHTAGS", prop="section"), "Hashtags found in the caption")
         self.tags = _label(prop="muted", select=True)
         lay.addWidget(self.tags_header)
         lay.addWidget(self.tags)
 
-        lay.addWidget(_label("DETAILS", prop="section"))
+        lay.addSpacing(6)
+        lay.addWidget(tip(_label("DETAILS", prop="section"), "Facts about the original post"))
         self.details = _label(prop="muted", select=True)
         self.details.setTextFormat(Qt.RichText)
         lay.addWidget(self.details)
 
         lay.addSpacing(8)
-        self.open_btn = QPushButton("Open Original Post")
+        self.open_btn = tip(QPushButton("Open Original Post"), "Open the video on the platform it came from")
         self.open_btn.clicked.connect(lambda: self.item and QDesktopServices.openUrl(QUrl(self.item.url)))
-        self.play_btn = QPushButton("Play")
+        self.play_btn = tip(QPushButton("Play"), "Play the downloaded file in your video player")
         self.play_btn.clicked.connect(self._play)
-        self.reveal_btn = QPushButton("Show in Finder" if theme.IS_MAC else "Show in Explorer")
+        self.reveal_btn = tip(QPushButton("Show in Finder" if theme.IS_MAC else "Show in Explorer"),
+                              "Show the downloaded file in its folder")
         self.reveal_btn.clicked.connect(self._reveal)
         row = QHBoxLayout()
         for b in (self.play_btn, self.reveal_btn, self.open_btn):
@@ -183,13 +191,15 @@ class DetailPanel(QFrame):
         lay.addWidget(self.multi_title)
         lay.addWidget(self.multi_meta)
         lay.addSpacing(8)
-        for text, slot in (("Include in Download", lambda: self.checkSelected.emit(True)),
-                           ("Exclude from Download", lambda: self.checkSelected.emit(False)),
-                           ("Name from Captions", self.autoNameSelected.emit)):
-            b = QPushButton(text)
+        for text, slot, hint_text in (
+                ("Tick for Download", lambda: self.checkSelected.emit(True), "Download these when you click Download"),
+                ("Untick", lambda: self.checkSelected.emit(False), "Leave these out of the download"),
+                ("Suggest Names from Captions", self.autoNameSelected.emit,
+                 "Name each video from the first words of its caption")):
+            b = tip(QPushButton(text), hint_text)
             b.clicked.connect(slot)
             lay.addWidget(b)
-        hint = _label("Tip: press Space to include or exclude the selected videos.", prop="faint")
+        hint = _label("Tip: press Space to tick or untick the highlighted videos.", prop="faint")
         lay.addSpacing(6)
         lay.addWidget(hint)
         lay.addStretch()
@@ -256,7 +266,7 @@ class DetailPanel(QFrame):
         # zero-width spaces let long names wrap at _ - . instead of widening the panel
         self.filename.setText(re.sub(r"([_\-.])", "\\1\u200b", planned) if planned else "—")
         if item.is_downloaded and planned != item.filename:
-            self.file_note.setText(f"Currently “{item.filename}”. Click Apply Names to rename it.")
+            self.file_note.setText(f"Currently “{item.filename}”. Click Rename Files… to rename it.")
         elif item.is_downloaded:
             self.file_note.setText("Downloaded with this name.")
         elif item.status == Status.FAILED:

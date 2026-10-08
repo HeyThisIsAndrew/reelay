@@ -19,7 +19,7 @@ from .. import APP_NAME
 from ..downloader import QUALITY_BEST, QUALITY_LABELS
 from ..library import Library
 from ..models import Profile, Status, VideoItem
-from ..naming import DEFAULT_TEMPLATE, PRESETS, slugify
+from ..naming import DEFAULT_TEMPLATE, slugify
 from ..accounts import AccountService
 from ..platforms import is_supported_url
 from ..sources import (SourceError, SourceService, SourceView, channel_url, default_name, downloadable_by_default,
@@ -33,6 +33,8 @@ from .detail_panel import DetailPanel
 from .dialogs import RenamePreviewDialog, tokens_help_html
 from .table_model import ROW_HEIGHT, Col, CoverDelegate, VideoFilterProxy, VideoTableModel
 from .theme import set_prop
+from .tips import tip
+from .widgets import GrowingSearch, NamingPicker
 from .thumbnails import ThumbnailCache
 from .workers import CallWorker, DetailsWorker, DownloadWorker, FetchWorker
 
@@ -76,7 +78,7 @@ class VideoTable(QTableView):
 
 
 class SourceChip(QFrame):
-    """One source in "Download from": name, platform, one-click Fetch, ⋯ menu."""
+    """One source under "Bring videos in": name, platform, one-click List Videos, ⋯ menu."""
     fetchRequested = Signal(object)
     renameRequested = Signal(object)
     mineToggled = Signal(object)
@@ -96,22 +98,23 @@ class SourceChip(QFrame):
                       f"{' · ' + tag if tag else ''}</span>")
         text.setToolTip((view.url or "") + (f"\nSaved {view.duplicates + 1} times" if view.duplicates else ""))
         lay.addWidget(text)
-        self.fetch_btn = QPushButton("Fetch")
-        self.fetch_btn.setToolTip("List this source's videos (account sources use the YouTube Data API)"
-                                  if view.account else f"Fetch {view.url}")
+        self.fetch_btn = QPushButton("List Videos")
+        tip(self.fetch_btn, f"Show every video from {view.name} below, so you can choose which to download. "
+                            "Nothing is downloaded yet." + ("" if view.account else f"\nLink: {view.url}"))
         self.fetch_btn.clicked.connect(lambda: self.fetchRequested.emit(self.view))
         lay.addWidget(self.fetch_btn)
         more = QToolButton(text="⋯")
         more.setPopupMode(QToolButton.InstantPopup)
+        tip(more, "More for this source: rename it, mark it as yours, or remove it")
         menu = QMenu(more)
         if view.account:
-            menu.addAction("Manage in Accounts", self.manageRequested.emit)
+            menu.addAction("Manage This Channel in Accounts", self.manageRequested.emit)
         else:
-            menu.addAction("Rename…", lambda: self.renameRequested.emit(self.view))
+            menu.addAction("Rename This Source…", lambda: self.renameRequested.emit(self.view))
             menu.addAction("Not one of my accounts" if view.mine else "This is one of my accounts",
                            lambda: self.mineToggled.emit(self.view))
             menu.addSeparator()
-            menu.addAction("Remove", lambda: self.removeRequested.emit(self.view))
+            menu.addAction("Remove This Source", lambda: self.removeRequested.emit(self.view))
         more.setMenu(menu)
         lay.addWidget(more)
 
@@ -124,10 +127,10 @@ class SourceDialog(QDialog):
 
     def __init__(self, default: str, profile_name: str, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Save as Source")
+        self.setWindowTitle("Save This Link")
         lay = QVBoxLayout(self)
         lay.setContentsMargins(20, 18, 20, 14)
-        lay.addWidget(muted("Name"))
+        lay.addWidget(muted("Name it so you'll recognize it (it shows as a button on the Download page)"))
         self.name_edit = QLineEdit(default)
         self.name_edit.selectAll()
         lay.addWidget(self.name_edit)
@@ -185,110 +188,119 @@ class DownloadPage(QWidget):
         outer.setContentsMargins(18, 16, 18, 12)
         outer.setSpacing(12)
 
-        # ---- "Download from": the IN door
+        # ---- "Bring videos in": the IN door (Accounts is the OUT door)
+        intake = QFrame(objectName="Card")
+        il = QVBoxLayout(intake)
+        il.setContentsMargins(16, 14, 16, 14)
+        il.setSpacing(10)
         head = QHBoxLayout()
-        title = QLabel("Download from")
+        head.setSpacing(12)
+        title = QLabel("Bring videos in")
         title.setObjectName("DetailTitle")
+        tip(title, "This page copies videos into Reelay from TikTok, Instagram or YouTube. "
+                   "To post videos out, connect accounts under Accounts.")
         head.addWidget(title)
-        head.addSpacing(10)
-        self.doors_note = muted("Downloading pulls videos in from these sources. Posting pushes videos out to the "
-                                "accounts you connect under Accounts.")
+        self.doors_note = muted("Import media you own or have permission to manage. Downloading pulls videos in "
+                                "from these sources; posting pushes videos out to the accounts you connect "
+                                "under Accounts.")
         self.doors_note.setWordWrap(True)
         head.addWidget(self.doors_note, 1)
-        outer.addLayout(head)
+        il.addLayout(head)
 
         self.chip_area = QScrollArea()
         self.chip_area.setWidgetResizable(True)
         self.chip_area.setFrameShape(QFrame.NoFrame)
         self.chip_area.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.chip_area.setFixedHeight(54)
-        chip_body = QWidget(objectName="Page")
+        tip(self.chip_area, "Your saved sources. Click List Videos on one to see its videos below.")
+        chip_body = QWidget(objectName="CardBody")
         self.chip_row = QHBoxLayout(chip_body)
         self.chip_row.setContentsMargins(0, 0, 0, 0)
         self.chip_row.setSpacing(8)
         self.chip_area.setWidget(chip_body)
-        outer.addWidget(self.chip_area)
+        il.addWidget(self.chip_area)
 
-        self.paste_label = muted("Paste any public profile link, yours or someone else's (or several video links).")
-        outer.addWidget(self.paste_label)
+        self.paste_label = muted("Or paste a profile link (yours, or an account you manage), or several video links.")
+        il.addWidget(self.paste_label)
         row1 = QHBoxLayout()
         row1.setSpacing(8)
         self.url = QLineEdit(objectName="UrlField")
         self.url.setPlaceholderText("https://www.tiktok.com/@creator")
         self.url.setClearButtonEnabled(True)
         self.url.setAttribute(Qt.WA_MacShowFocusRect, False)
-        self.fetch_btn = QPushButton("Fetch Videos")
+        tip(self.url, "A TikTok, Instagram or YouTube profile link, or one or more video links separated by spaces.")
+        self.fetch_btn = QPushButton("List Videos")
         set_prop(self.fetch_btn, "primary")
         self.fetch_btn.setMinimumHeight(38)
-        self.save_source_btn = QPushButton("Save as Source…")
-        self.save_source_btn.setToolTip("Keep this link as a one-click source for this profile")
+        tip(self.fetch_btn, "Show every video from this link below. Nothing is downloaded until you click Download.")
+        self.save_source_btn = QPushButton("Save This Link…")
+        tip(self.save_source_btn, "Keep this link as a one-click source for this profile, so next time you "
+                                  "don't have to paste it")
         self.save_source_btn.setMinimumHeight(38)
         row1.addWidget(self.url, 1)
         row1.addWidget(self.save_source_btn)
         row1.addWidget(self.fetch_btn)
-        outer.addLayout(row1)
+        il.addLayout(row1)
 
         row2 = QHBoxLayout()
         row2.setSpacing(8)
-        row2.addWidget(muted("Save to"))
+        row2.addWidget(tip(muted("Save videos to"), "The folder on this Mac where downloaded videos go"))
         self.folder_btn = QPushButton()
         set_prop(self.folder_btn, "flat")
-        self.folder_btn.setToolTip("Choose where this profile's videos, metadata and manifest.md are saved")
         row2.addWidget(self.folder_btn)
-        self.open_folder_btn = QPushButton("Open")
+        self.open_folder_btn = QPushButton("Show in Finder")
+        tip(self.open_folder_btn, "Open the folder where this profile's videos are saved")
         row2.addWidget(self.open_folder_btn)
         row2.addStretch()
-        row2.addWidget(muted("Quality"))
+        row2.addWidget(tip(muted("Quality"), "Video quality to download"))
         self.quality = QComboBox()
         for key, label in QUALITY_LABELS.items():
             self.quality.addItem(label, key)
+        tip(self.quality, "Video quality to download. Best is the original quality the platform keeps.")
         row2.addWidget(self.quality)
-        row2.addSpacing(10)
-        row2.addWidget(muted("Login cookies"))
+        row2.addSpacing(12)
+        row2.addWidget(tip(muted("Use browser sign-in"), "Borrow your sign-in from a web browser"))
         self.cookies = QComboBox()
-        self.cookies.addItem("None", "")
+        self.cookies.addItem("Don't use", "")
         for b in COOKIE_BROWSERS:
             self.cookies.addItem(b.capitalize(), b)
-        self.cookies.setToolTip("Instagram usually needs this. Uses the login from that browser; "
-                                "make sure you're signed in there.")
+        tip(self.cookies, "Instagram, and private or scheduled YouTube videos, need you to be signed in. "
+                          "Reelay borrows the sign-in from the browser you pick; make sure you're signed in there. "
+                          "Your password is never seen or stored.")
         row2.addWidget(self.cookies)
-        outer.addLayout(row2)
+        il.addLayout(row2)
+        outer.addWidget(intake)
 
         list_area = QWidget(objectName="ListArea")
         ll = QVBoxLayout(list_area)
         ll.setContentsMargins(12, 12, 12, 0)
         ll.setSpacing(10)
         bar = QHBoxLayout()
-        bar.setSpacing(8)
-        self.search = QLineEdit()
-        self.search.setPlaceholderText("Search captions and names")
-        self.search.setClearButtonEnabled(True)
-        self.search.setMinimumWidth(140)
-        self.search.setMaximumWidth(220)
-        self.search.setAttribute(Qt.WA_MacShowFocusRect, False)
-        bar.addWidget(self.search)
-        self.select_btn = QToolButton(text="Select  ▾")
+        bar.setSpacing(10)
+        self.search = GrowingSearch("Search captions, your names and file names")
+        self.search.setMinimumWidth(220)
+        tip(self.search, "Filter the list. Matches captions, the names you've given videos, and file names.")
+        bar.addWidget(self.search, 2)
+        self.select_btn = QToolButton(text="Choose Videos  ▾")
         self.select_btn.setPopupMode(QToolButton.InstantPopup)
-        bar.addWidget(self.select_btn)
-        bar.addStretch()
-        bar.addWidget(muted("Naming"))
-        self.template = QComboBox()
-        self.template.setEditable(True)
-        self.template.setInsertPolicy(QComboBox.NoInsert)
-        self.template.setMinimumWidth(190)
-        for label, tmpl in PRESETS:
-            self.template.addItem(tmpl)
-            self.template.setItemData(self.template.count() - 1, label, Qt.ToolTipRole)
-        self.template.setToolTip(tokens_help_html())
-        self.template.lineEdit().setAttribute(Qt.WA_MacShowFocusRect, False)
-        bar.addWidget(self.template)
-        self.autoname_btn = QToolButton(text="Auto-Name  ▾")
-        self.autoname_btn.setPopupMode(QToolButton.InstantPopup)
-        bar.addWidget(self.autoname_btn)
-        self.apply_btn = QPushButton("Apply Names")
-        self.apply_btn.setToolTip("Rename videos you've already downloaded to match the naming template")
-        bar.addWidget(self.apply_btn)
+        tip(self.select_btn, "Tick or untick many videos at once: all, the newest few, or what your search shows")
+        bar.addWidget(self.select_btn, 0, Qt.AlignTop)
         ll.addLayout(bar)
+
+        bar2 = QHBoxLayout()
+        bar2.setSpacing(10)
+        bar2.addWidget(tip(muted("Name files"), "How downloaded video files are named"))
+        self.naming = NamingPicker()
+        bar2.addWidget(self.naming, 1)
+        self.autoname_btn = QToolButton(text="Suggest Names  ▾")
+        self.autoname_btn.setPopupMode(QToolButton.InstantPopup)
+        tip(self.autoname_btn, "Fill in a short name for videos from the first words of their captions")
+        bar2.addWidget(self.autoname_btn)
+        self.apply_btn = QPushButton("Rename Files…")
+        tip(self.apply_btn, "Rename videos you've already downloaded so they match the naming choice. "
+                            "You'll see every change before anything is renamed.")
+        bar2.addWidget(self.apply_btn)
+        ll.addLayout(bar2)
 
         self.table = VideoTable(self._toggle_selected)
         self.table.setModel(self.proxy)
@@ -350,12 +362,14 @@ class DownloadPage(QWidget):
         brow = QHBoxLayout()
         self.status = muted("")
         brow.addWidget(self.status, 1)
-        self.manifest_btn = QPushButton("Open Manifest")
+        self.manifest_btn = QPushButton("Open Video List")
+        tip(self.manifest_btn, "Open manifest.md: a table of every downloaded video with its date, caption and file")
         brow.addWidget(self.manifest_btn)
         brow.addSpacing(8)
         self.count_label = muted("")
         brow.addWidget(self.count_label)
         self.cancel_btn = QPushButton("Stop")
+        tip(self.cancel_btn, "Stop after the current video. Finished downloads are kept.")
         set_prop(self.cancel_btn, "danger")
         self.cancel_btn.setVisible(False)
         brow.addWidget(self.cancel_btn)
@@ -363,34 +377,35 @@ class DownloadPage(QWidget):
         set_prop(self.download_btn, "primary")
         self.download_btn.setMinimumHeight(36)
         self.download_btn.setMinimumWidth(190)
+        tip(self.download_btn, "Download the ticked videos into the folder above. They appear on the Board's Backlog.")
         brow.addWidget(self.download_btn)
         bl.addLayout(brow)
         outer.addLayout(bl)
 
         sel = QMenu(self)
-        sel.addAction("Include All", lambda: self._check_all(True))
-        sel.addAction("Exclude All", lambda: self._check_all(False))
+        sel.addAction("Tick All", lambda: self._check_all(True))
+        sel.addAction("Untick All", lambda: self._check_all(False))
         sel.addSeparator()
-        sel.addAction("Include Selected Rows", lambda: self._check_selected(True))
-        sel.addAction("Exclude Selected Rows", lambda: self._check_selected(False))
+        sel.addAction("Tick Highlighted Rows", lambda: self._check_selected(True))
+        sel.addAction("Untick Highlighted Rows", lambda: self._check_selected(False))
         sel.addSeparator()
-        sel.addAction("Include Only the Newest…", self._check_newest)
-        sel.addAction("Include Only Search Results", self._check_visible)
+        sel.addAction("Tick Only the Newest…", self._check_newest)
+        sel.addAction("Tick Only What the Search Shows", self._check_visible)
         self.select_btn.setMenu(sel)
 
         auto = QMenu(self)
-        auto.addAction("Name Selected from Captions", lambda: self._auto_name(selected_only=True))
-        auto.addAction("Name All Unnamed from Captions", lambda: self._auto_name(selected_only=False))
+        auto.addAction("Suggest Names for Highlighted Videos", lambda: self._auto_name(selected_only=True))
+        auto.addAction("Suggest Names for All Unnamed Videos", lambda: self._auto_name(selected_only=False))
         auto.addSeparator()
-        auto.addAction("Clear Names of Selected", self._clear_names)
+        auto.addAction("Clear Names of Highlighted Videos", self._clear_names)
         auto.addSeparator()
-        auto.addAction("Naming Tokens Help", self.show_tokens_help)
+        auto.addAction("Custom Naming Patterns (Advanced)…", self.show_tokens_help)
         self.autoname_btn.setMenu(auto)
 
     def _column_menu(self, pos) -> None:
         """Right-click the header to show or hide optional columns."""
         menu = QMenu(self)
-        for col, label in ((Col.LENGTH, "Length"), (Col.VIEWS, "Views"), (Col.CUSTOM, "Custom Name"),
+        for col, label in ((Col.LENGTH, "Length"), (Col.VIEWS, "Views"), (Col.CUSTOM, "Your Name"),
                            (Col.FILENAME, "File Name"), (Col.STATUS, "Status")):
             act = menu.addAction(label)
             act.setCheckable(True)
@@ -407,9 +422,9 @@ class DownloadPage(QWidget):
         w = QWidget()
         lay = QVBoxLayout(w)
         lay.addStretch()
-        t = QLabel("Pick a source, or paste a profile link", objectName="EmptyTitle")
+        t = QLabel("Pick a source, or paste a link", objectName="EmptyTitle")
         t.setAlignment(Qt.AlignCenter)
-        s = muted("Click Fetch on one of the sources above, or paste a TikTok, Instagram or YouTube link.\n"
+        s = muted("Click List Videos on a source above, or paste a TikTok, Instagram or YouTube link.\n"
                   "You'll see every video here first, then choose which ones to download and how to name them.")
         s.setAlignment(Qt.AlignCenter)
         s.setWordWrap(True)
@@ -429,8 +444,8 @@ class DownloadPage(QWidget):
         self.download_btn.clicked.connect(self._start_download)
         self.cancel_btn.clicked.connect(self._cancel_download)
         self.apply_btn.clicked.connect(self._apply_names)
-        self.search.textChanged.connect(self.proxy.set_query)
-        self.template.editTextChanged.connect(self._on_template)
+        self.search.textChangedTo.connect(self.proxy.set_query)
+        self.naming.templateChanged.connect(self._on_template)
         self.quality.currentIndexChanged.connect(self._save_profile_prefs)
         self.cookies.currentIndexChanged.connect(self._save_profile_prefs)
         self.model.checksChanged.connect(self._update_counts)
@@ -479,7 +494,7 @@ class DownloadPage(QWidget):
         self.quality.setCurrentIndex(max(idx, 0))
         idx = self.cookies.findData(profile.cookies_browser)
         self.cookies.setCurrentIndex(max(idx, 0))
-        self.template.setEditText(profile.template or DEFAULT_TEMPLATE)
+        self.naming.set_template(profile.template or DEFAULT_TEMPLATE)
         self.model.set_template(profile.template or DEFAULT_TEMPLATE)
         self.url.setText(profile.last_source)
         self._loading_profile = False
@@ -493,7 +508,7 @@ class DownloadPage(QWidget):
             return
         self.profile.quality = self.quality.currentData()
         self.profile.cookies_browser = self.cookies.currentData() or ""
-        self.profile.template = self.template.currentText().strip() or DEFAULT_TEMPLATE
+        self.profile.template = self.naming.template() or DEFAULT_TEMPLATE
         self.store.update_profile(self.profile)
 
     # ================================================================ helpers
@@ -539,6 +554,7 @@ class DownloadPage(QWidget):
 
     def _refresh_detail(self, *_args) -> None:
         items = self._selected_items()
+        self.naming.set_example_item(items[0] if items else None)
         if len(items) == 1:
             self.detail.show_item(items[0], self.model.planned_filename(items[0]))
         elif len(items) > 1:
@@ -547,7 +563,7 @@ class DownloadPage(QWidget):
             self.detail.show_empty()
 
     def show_tokens_help(self) -> None:
-        QMessageBox.information(self, "Naming Tokens", tokens_help_html())
+        QMessageBox.information(self, "Custom Naming Patterns", tokens_help_html())
 
     # ================================================================ folder
     def choose_folder(self) -> None:
@@ -569,7 +585,7 @@ class DownloadPage(QWidget):
         self.detail.folder = folder
         self.folder_btn.setText(self.folder_btn.fontMetrics().elidedText(
             self._short_path(folder), Qt.ElideMiddle, 380))
-        self.folder_btn.setToolTip(str(folder))
+        self.folder_btn.setToolTip(f"Videos are saved in {folder}. Click to choose a different folder.")
         self.reload()
 
     @staticmethod
@@ -657,16 +673,16 @@ class DownloadPage(QWidget):
         self._fetch_urls(urls)
 
     def _fetch_urls(self, urls: list[str], source_id: int | None = None) -> None:
-        self._begin_fetch("Fetching video list…")
+        self._begin_fetch("Listing videos…")
         self.fetch_worker = FetchWorker(urls, self._opts(), self)
-        self.fetch_worker.sourceStarted.connect(lambda u: self._set_status(f"Fetching video list from {u} …"))
+        self.fetch_worker.sourceStarted.connect(lambda u: self._set_status(f"Listing videos from {u} …"))
         self.fetch_worker.fetched.connect(lambda items, errs: self._on_fetched(urls, items, errs, source_id))
         self.fetch_worker.start()
 
     def _begin_fetch(self, message: str) -> None:
         self._stop_details()
         self.fetch_btn.setEnabled(False)
-        self.fetch_btn.setText("Fetching…")
+        self.fetch_btn.setText("Listing…")
         for chip in self._chips():
             chip.set_busy(True)
         self.progress.setRange(0, 0)
@@ -697,7 +713,7 @@ class DownloadPage(QWidget):
             chip.set_busy(self.fetching)
             self.chip_row.addWidget(chip)
         if not views:
-            hint = muted("No sources yet. Paste a profile link below and click “Save as Source…”, or connect a "
+            hint = muted("No sources yet. Paste a profile link below and click “Save This Link…”, or connect a "
                          "YouTube channel under Accounts.")
             hint.setProperty("faint", True)
             self.chip_row.addWidget(hint)
@@ -746,7 +762,7 @@ class DownloadPage(QWidget):
         self._set_status(f"Saved “{dialog.name() or default_name(url)}”. Next time it's one click above.")
 
     def _rename_source(self, view: SourceView) -> None:
-        name, ok = QInputDialog.getText(self, "Rename Source", "Name:", text=view.name)
+        name, ok = QInputDialog.getText(self, "Rename This Source", "New name for this source:", text=view.name)
         if ok:
             try:
                 self.source_service.rename(view.source_id, name)
@@ -769,7 +785,7 @@ class DownloadPage(QWidget):
     def _on_fetched(self, urls: list[str], items: list[VideoItem], errors: list[tuple[str, str]],
                     source_id: int | None = None) -> None:
         self.fetch_btn.setEnabled(True)
-        self.fetch_btn.setText("Fetch Videos")
+        self.fetch_btn.setText("List Videos")
         for chip in self._chips():
             chip.set_busy(False)
         self.progress.setRange(0, 1000)
@@ -781,7 +797,7 @@ class DownloadPage(QWidget):
             QMessageBox.warning(self, "Couldn't fetch everything",
                                 "\n\n".join(f"{u}\n{reason}" for u, reason in errors))
         if not items:
-            self._set_status("No videos found." if not errors else "Fetch failed.")
+            self._set_status("No videos found." if not errors else "Couldn't list the videos.")
             return
         self.fetched = items
         self.sources = urls
@@ -792,9 +808,9 @@ class DownloadPage(QWidget):
         self.store.save_videos(self.profile.id, self.model.items())
         new = sum(1 for i in self.model.items() if not i.is_downloaded)
         note = (f" {len(held)} private or scheduled video{'s are' if len(held) != 1 else ' is'} left unticked: "
-                "downloading those needs Login cookies from a browser signed into that channel.") if held else ""
+                "downloading those needs “Use browser sign-in” set to a browser signed into that channel.") if held else ""
         self._set_status(f"Found {len(items)} videos · {new} not downloaded yet. "
-                         "Choose which to include, name them, then click Download." + note)
+                         "Tick the ones you want, name them if you like, then click Download." + note)
         self._start_details()
 
     def _start_details(self) -> None:
@@ -855,9 +871,9 @@ class DownloadPage(QWidget):
             self._set_status("Select one or more videos first." if selected_only else "Every video already has a name.")
             return
         self.model.set_custom_names({i.key: slugify(i.hook) for i in targets if slugify(i.hook)})
-        if "{custom}" not in self.template.currentText():
-            self._set_status(f"Named {len(targets)} videos. Switch Naming to a template with {{custom}}, "
-                             "like {date}_{custom}, to use these names in the filenames.")
+        if "{custom}" not in self.naming.template():
+            self._set_status(f"Named {len(targets)} videos. To use these names in the file names, set "
+                             "Name files to “Date and your name”.")
         else:
             self._set_status(f"Named {len(targets)} videos from their captions.")
 
@@ -1025,7 +1041,7 @@ class DownloadPage(QWidget):
         self._update_counts()
         msg = f"{'Stopped' if cancelled else 'Done'}: {ok} downloaded"
         if failed:
-            msg += f", {failed} failed (hover the Status column for the reason)"
+            msg += f", {failed} failed (hover the Status column to see why)"
         self._set_status(msg + ". Downloaded videos are in the Board's Backlog.")
         self.videosChanged.emit()
         self._start_details()

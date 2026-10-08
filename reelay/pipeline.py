@@ -659,7 +659,7 @@ class Pipeline:
 
     # ================================================================ video edits
     def set_custom_name(self, row_id: int, name: str) -> VideoItem:
-        """Rename a video's custom name (the file is renamed later via Apply Names).
+        """Rename a video's custom name (the file is renamed later via Rename Files).
         Keeps the folder's metadata sidecar and manifest.md in step."""
         row = self._row(row_id)
         row.item.custom_name = name.strip()

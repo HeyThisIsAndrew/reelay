@@ -28,9 +28,20 @@ class Col(IntEnum):
 
 
 HEADERS = {
-    Col.CHECK: "", Col.COVER: "", Col.DATE: "DATE", Col.HOOK: "TITLE / HOOK",
-    Col.LENGTH: "LENGTH", Col.VIEWS: "VIEWS", Col.CUSTOM: "CUSTOM NAME",
+    Col.CHECK: "", Col.COVER: "", Col.DATE: "DATE", Col.HOOK: "CAPTION",
+    Col.LENGTH: "LENGTH", Col.VIEWS: "VIEWS", Col.CUSTOM: "YOUR NAME",
     Col.FILENAME: "FILE NAME", Col.STATUS: "STATUS",
+}
+HEADER_TIPS = {
+    Col.CHECK: "Ticked videos are downloaded when you click Download",
+    Col.COVER: "Cover image",
+    Col.DATE: "When the video was first posted",
+    Col.HOOK: "The start of the video's caption",
+    Col.LENGTH: "How long the video is",
+    Col.VIEWS: "Views on the original platform",
+    Col.CUSTOM: "Your own short name for the video. Double-click a cell (or use the side panel) to set it.",
+    Col.FILENAME: "What the file is (or will be) called on disk",
+    Col.STATUS: "Whether the video will download, is downloading, is done, or failed",
 }
 SORT_ROLE = Qt.UserRole + 1
 COVER_W, COVER_H = 34, 60
@@ -170,8 +181,8 @@ class VideoTableModel(QAbstractTableModel):
             return None
         if role == Qt.DisplayRole:
             return HEADERS[Col(section)]
-        if role == Qt.ToolTipRole and section == Col.CUSTOM:
-            return "Double-click a cell (or use the side panel) to give a video its own name."
+        if role == Qt.ToolTipRole:
+            return HEADER_TIPS.get(Col(section))
         if role == Qt.TextAlignmentRole and section in (Col.LENGTH, Col.VIEWS):
             return int(Qt.AlignRight | Qt.AlignVCenter)
         return None
@@ -250,7 +261,7 @@ class VideoTableModel(QAbstractTableModel):
     def _status_text(self, item: VideoItem) -> str:
         if item.status == Status.DOWNLOADED:
             planned = self.planned_filename(item)
-            return "✓ Rename pending" if planned and planned != item.filename else "✓ Downloaded"
+            return "✓ Name will change" if planned and planned != item.filename else "✓ Downloaded"
         if item.status == Status.DOWNLOADING:
             return f"{item.progress:.0f}%" if item.progress < 100 else "Finalizing"
         if item.status == Status.QUEUED:
@@ -259,7 +270,7 @@ class VideoTableModel(QAbstractTableModel):
             return "Failed"
         if item.availability in ("private", "scheduled"):
             return "Private on YouTube" if item.availability == "private" else "Scheduled on YouTube"
-        return "Ready" if item.checked else "Skipped"
+        return "Will download" if item.checked else "Not selected"
 
     def _sort_value(self, item: VideoItem, col: Col):
         return {
@@ -281,12 +292,12 @@ class VideoTableModel(QAbstractTableModel):
         if col == Col.STATUS and item.status == Status.FAILED:
             return item.error
         if col == Col.STATUS and item.availability in ("private", "scheduled") and not item.is_downloaded:
-            return ("Only you can see this video. Downloading it needs Login cookies from a browser "
+            return ("Only you can see this video. Downloading it needs “Use browser sign-in” set to a browser "
                     "signed into this YouTube channel.")
         if col == Col.FILENAME and item.is_downloaded and self.planned_filename(item) != item.filename:
-            return f"Currently: {item.filename}\nClick “Apply Names” to rename."
+            return f"Currently: {item.filename}\nClick “Rename Files…” to rename it."
         if col == Col.CUSTOM and not item.custom_name:
-            return "Double-click to add a custom name"
+            return "Double-click to give this video your own name"
         return None
 
     def _foreground(self, item: VideoItem, col: Col):

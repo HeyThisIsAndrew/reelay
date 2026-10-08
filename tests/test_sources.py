@@ -194,7 +194,7 @@ def test_connected_channel_is_a_source_without_a_link(page_env, qtbot, monkeypat
     assert rows["pub"].checked and not rows["priv"].checked          # private left unticked
     assert page.model._status_text(rows["priv"]) == "Private on YouTube"
     assert page.url.text() == ""                                      # no link was needed
-    assert "Login cookies" in page.status.text()
+    assert "Use browser sign-in" in page.status.text()
 
 
 def test_save_pasted_link_and_remove_with_duplicates(page_env, qtbot, monkeypatch):
@@ -219,4 +219,4 @@ def test_doors_are_explained(page_env):
     window, *_ = page_env
     page = window.download
     assert "pulls videos in" in page.doors_note.text() and "pushes videos out" in page.doors_note.text()
-    assert "yours or someone else's" in page.paste_label.text()
+    assert "account you manage" in page.paste_label.text() and "permission to manage" in page.doors_note.text()

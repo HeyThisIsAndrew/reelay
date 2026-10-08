@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import re
-from pathlib import Path
 
 from PySide6.QtCore import QRectF, QSettings, QSize, Qt, QUrl
 from PySide6.QtGui import QAction, QActionGroup, QColor, QDesktopServices, QFont, QIcon, QKeySequence, QPainter, QPixmap
@@ -15,17 +14,25 @@ from .. import APP_NAME, __version__
 from ..models import Profile
 from ..paths import cache_dir, default_library_root, log_dir
 from ..services import Services
-from . import theme
 from .accounts_page import AccountsPage
 from .board_page import BoardPage
 from .download_page import DownloadPage
+from .help_page import HelpPage
 from .settings_page import SettingsPage
 from .theme import THEMES, apply_theme, set_prop
 from .thumbnails import ThumbnailCache
+from .tips import tip
 
 log = logging.getLogger("reelay")
 
 PAGES = [("download", "Download"), ("board", "Board"), ("accounts", "Accounts"), ("settings", "Settings")]
+NAV_TIPS = {
+    "download": "Bring videos in from TikTok, Instagram or YouTube",
+    "board": "Your video tickets: write captions, check readiness, schedule and track posts",
+    "accounts": "Connect the accounts videos go out to",
+    "settings": "Appearance, automatic posting, tips and AI agents",
+    "help": "How Reelay works, step by step (works offline)",
+}
 
 
 def avatar_icon(profile: Profile, size: int = 26) -> QIcon:
@@ -67,8 +74,9 @@ class MainWindow(QMainWindow):
         self.board = BoardPage(self.pipeline, self.uploads, self.thumbs)
         self.accounts_page = AccountsPage(store, self.accounts)
         self.settings_page = SettingsPage(store, services)
+        self.help_page = HelpPage()
         self.pages = {"download": self.download, "board": self.board,
-                      "accounts": self.accounts_page, "settings": self.settings_page}
+                      "accounts": self.accounts_page, "settings": self.settings_page, "help": self.help_page}
 
         self._build_ui()
         self._build_menu()
@@ -105,7 +113,8 @@ class MainWindow(QMainWindow):
         self.profile_menu = QMenu(self)
         self.profile_menu.aboutToShow.connect(self._fill_profile_menu)
         self.profile_btn.setMenu(self.profile_menu)
-        self.profile_btn.setToolTip("Switch profile (each creator gets their own library, board and accounts)")
+        tip(self.profile_btn, "The current profile. Click to switch: each creator or channel gets their own "
+                              "videos, board and accounts.")
         sl.addWidget(self.profile_btn)
         sl.addSpacing(14)
 
@@ -117,12 +126,23 @@ class MainWindow(QMainWindow):
             set_prop(b, "nav")
             b.setCheckable(True)
             b.clicked.connect(lambda _=False, k=key: self.go(k))
+            tip(b, NAV_TIPS[key])
             self.nav.addButton(b)
             self.nav_buttons[key] = b
             sl.addWidget(b)
         sl.addStretch()
+        help_btn = QPushButton("Help")
+        set_prop(help_btn, "nav")
+        help_btn.setCheckable(True)
+        help_btn.clicked.connect(lambda: self.go("help"))
+        tip(help_btn, NAV_TIPS["help"])
+        self.nav.addButton(help_btn)
+        self.nav_buttons["help"] = help_btn
+        sl.addWidget(help_btn)
+        sl.addSpacing(6)
         foot = QLabel(f"{APP_NAME} {__version__}")
         foot.setProperty("faint", True)
+        foot.setContentsMargins(10, 0, 0, 0)
         sl.addWidget(foot)
         h.addWidget(side)
 
@@ -139,7 +159,7 @@ class MainWindow(QMainWindow):
         f.addSeparator()
         self._action(f, "Choose Output Folder…", self.download.choose_folder, QKeySequence.StandardKey.Open)
         self._action(f, "Open Output Folder", self.download.open_output_folder)
-        self._action(f, "Open Manifest", self.download.open_manifest)
+        self._action(f, "Open Video List (manifest.md)", self.download.open_manifest)
 
         v = mb.addMenu("View")
         for n, (key, label) in enumerate(PAGES, 1):
@@ -158,7 +178,9 @@ class MainWindow(QMainWindow):
         self.profiles_menu.aboutToShow.connect(lambda: self._fill_profile_menu(self.profiles_menu))
 
         hm = mb.addMenu("Help")
-        self._action(hm, "Naming Tokens", self.download.show_tokens_help)
+        self._action(hm, f"{APP_NAME} Help", lambda: self.go("help"), "Ctrl+?")
+        hm.addSeparator()
+        self._action(hm, "Custom Naming Patterns", self.download.show_tokens_help)
         self._action(hm, "Open Log Folder", lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(log_dir()))))
 
     def _action(self, menu: QMenu, text: str, slot, shortcut=None) -> QAction:
@@ -175,7 +197,8 @@ class MainWindow(QMainWindow):
         key = next(k for k, p in self.pages.items() if p is page)
         self.stack.setCurrentWidget(page)
         self.nav_buttons[key].setChecked(True)
-        self.store.set_setting("last_page", key)
+        if key != "help":
+            self.store.set_setting("last_page", key)
         if page is self.board:
             self.board.reload()
             self.board.sync()
@@ -254,7 +277,7 @@ class MainWindow(QMainWindow):
         for account in self.store.list_accounts(self.profile.id):
             self.accounts.disconnect(account)
         self.store.delete_profile(self.profile.id)
-        self.switch_profile(self.store.list_profiles()[0])
+        self.switch_profile(self.store.default_profile())
 
     # ---------------------------------------------------------------- theme
     def set_theme(self, name: str) -> None:

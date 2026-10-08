@@ -287,10 +287,15 @@ class Store:
         active = self.get_setting("active_profile")
         profile = self.get_profile(int(active)) if active.isdigit() else None
         if profile is None:
-            profiles = self.list_profiles()
-            profile = profiles[0] if profiles else self.create_profile("My Channel", default_folder)
+            profile = self.default_profile() or self.create_profile("My Channel", default_folder)
             self.set_active_profile(profile.id)
         return profile
+
+    def default_profile(self) -> Profile | None:
+        """The first profile ever made ("My Channel" on a fresh install): what
+        opens when no other profile was last used."""
+        row = self.conn.execute("SELECT * FROM profiles ORDER BY id LIMIT 1").fetchone()
+        return self._profile(row) if row else None
 
     def set_active_profile(self, profile_id: int) -> None:
         self.set_setting("active_profile", str(profile_id))
