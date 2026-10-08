@@ -1,8 +1,8 @@
-# Reelay v0.5.0: implementation report and local test handoff
+# Reelay v0.6.0: implementation report and local test handoff
 
 **For:** Meta Muse  **From:** Claude Code  **Date:** 2026-10-07
-**Repo:** `/Users/thisisandrew/Documents/UpSkill_Projects/Content_Downloader`, single branch `main` (all PRs merged, all other branches deleted)
-**Installed app:** `/Applications/Reelay.app`, v0.5.0, running now
+**Repo:** `/Users/thisisandrew/Documents/UpSkill_Projects/Content_Downloader`, single branch `main` (direct commits, no open PRs), tag `v0.6.0`
+**Installed app:** `/Applications/Reelay.app`, v0.6.0, running now
 
 ---
 
@@ -10,37 +10,55 @@
 
 | Item | State |
 |---|---|
-| Branches | **One branch: `main`.** PRs #1–#4 are merged; `test-handoff` and `download-sources` are deleted locally and on GitHub. No open PRs. |
-| CI | PRs #3 and #4 passed tests on macOS, Windows and Linux before merging. |
-| Automated tests on `main` | **147 passed**, 2 skipped (opt-in live TikTok tests) |
-| API smoke test (`scripts/smoke_test_api.py`) | **28/28 checks passed** against an isolated server |
-| Packaged-app self-test | Passed |
-| Local install | v0.5.0 built from `main` and installed. The old app quit cleanly; one instance is running. The API reports v0.5.0 at `127.0.0.1:8471`. |
-| Real database | Upgraded to schema v4. Profiles: "My Channel" and **"Lydia Livingood" (active)**, which has 2 downloaded videos in Backlog and 1 saved source: "Lydia's TikTok" (`https://www.tiktok.com/@livingood.lifestyle`, marked mine). No posts, no dispatches, no connected accounts. |
-| Publishing flags | Bluesky, Threads and Facebook are off. YouTube is always on, but no channel is connected. |
+| Branches | **One branch: `main`.** It has two new commits: `13b0bb6` (UX clarity pass) and `85ae4e9` (Ticket v2). The `v0.6.0` tag is pushed. |
+| Automated tests on `main` | **193 passed**, 2 skipped (the opt-in live TikTok tests) |
+| API smoke test (`scripts/smoke_test_api.py`) | **37/37 checks passed** against an isolated server |
+| Packaged-app self-test | Passed: 8 checks, including the new offline Help page check |
+| Local install | v0.6.0 built from `main`, installed and launched. The log shows no errors. |
+| Agent API on the real app | **Waiting on a macOS Keychain prompt.** The rebuilt app has a new ad-hoc signature, so macOS asks once more before Reelay may read `agent_api_token`. After the user clicks **Always Allow**, the API comes up on `127.0.0.1:8471`. |
+| Real database | Migrated **v4 → v5**; a backup is at `~/Library/Application Support/Reelay/reelay-backup-v4-2026-10-07.db`.<br>• **Default profile:** **My Channel** (id 1, empty) is now the active one.<br>• **"Lydia Livingood"** (id 2) is unchanged: 174 videos in Backlog, provenance backfilled, and the saved source "Lydia's TikTok".<br>• No posts, dispatches or connected accounts. |
+| Publishing flags | Bluesky, Threads and Facebook are off. YouTube is always on; no channel is connected. |
 
 ---
 
-## 2. What's in the build (by release)
+## 2. What's in the build
 
-**v0.5.0: download sources (PR #4)**
-- **Saved sources** per profile (new `sources` table, schema v4): name, platform (TikTok, Instagram, YouTube), URL, "mine".
-  - **Manage them** from the Download page: **Save as Source…**, or the **⋯** menu on a source (Rename, mark as mine, Remove).
-  - **One-click Fetch** runs the original fetch-and-choose flow and records `last_fetched_at`.
-  - **Duplicates are allowed.** The Download page merges them by normalized URL; the first-saved name wins.
-- **Connected YouTube channels** are sources too. They're listed through the YouTube Data API (uploads playlist, paginated), with no link needed. Private and scheduled videos are shown, labeled "Private on YouTube" / "Scheduled on YouTube", and left unticked: downloading them needs Login cookies from the owner's browser.
-- **TikTok and Instagram own accounts** are saved sources marked mine. Accounts stays about publishing only.
-- **The Download page shows two doors.** **Download from** lists the sources (accounts first), then the paste field, labeled "Paste any public profile link, yours or someone else's", with Save as Source and Fetch Videos. A note explains that downloading pulls videos in, while posting pushes them out to accounts connected under Accounts.
-- **API:** `GET /v1/sources` and `POST /v1/sources` (201). The contract was regenerated and the contract test extended; existing endpoints are unchanged.
+**v0.6.0, Ticket v2 (`85ae4e9`)**
+- **Schema v5 (additive).** New nullable per-video fields:
+  - `transcript`, `thumbnail_path`, `content_type` (short / long-form / clip / other), `topic`, `keywords`, `creator`, `original_publish_date`;
+  - provenance: `source_platform`, `source_url`, `imported_at`, `authorization`;
+  - `derived_from` (a foreign key with `ON DELETE SET NULL`).
 
-**v0.4.0: ticket-first (PR #2)**
-- **Copy blocks** on each card: YouTube title, description and tags; TikTok, Instagram, Bluesky, Threads and Facebook copy; shared hashtags. Each has Copy and a live count by that platform's rules, and over-limit text is rejected, never truncated.
-- **Auto-posting** to Bluesky, Threads and Facebook is behind flags (`REELAY_PUBLISH_<PLATFORM>=1` or Settings → Automatic posting; default off). Scheduling a disabled platform returns `422 platform_disabled`.
+  The migration backfills provenance from data already recorded and never invents an authorization. Cards that were already Scheduled or Published get `ready_gate_exempt = 1`.
+- **Readiness engine** (`reelay/readiness.py`). For each target platform, it checks that the platform's own copy is written, within that platform's limits, and that the video file is present.
+  - Flag-off platforms come out as `not_checked` and count as ready.
+  - The ticket is READY when any target platform is ready.
+  - Board API videos carry `ready` and `readiness`.
+- **Ready gate.**
+  - `POST /v1/videos/{id}/schedule` returns `422 ticket_not_ready` with prefixed `problems` and writes nothing.
+  - `?force=true` bypasses the gate, but never the hard platform rules: those still return `invalid_post`, together with any readiness problems.
+  - On the Board, scheduling a ticket that isn't ready shows the checklist and retries with force only after an explicit Yes.
+  - Grandfathered cards and their dispatches are untouched.
+- **Revision log** (`revisions` table).
+  - Written in the same SQLite transaction as each logical commit: a GUI field blur or save, an API PATCH, or an agent write. A logging failure rolls the write back.
+  - Typing is never logged, and neither are publishing-state saves.
+  - Readable through `GET /v1/videos/{id}/revisions` and the ticket's **Change History…**.
+- **Unified publishing history.** Dispatches and the new `manual_posts` table are combined per platform. Add records with **Mark as Posted…** in the ticket or `POST /v1/videos/{id}/manual-posts` (201). It doesn't move the card.
+- **PATCH** accepts the ticket fields. They stay editable after scheduling, while copy locks as before; `imported_at` can't be edited.
+- **Provenance on import.** The Download note now says to import media you own or have permission to manage. Imports from the profile's own sources (marked mine, or a connected channel) record `authorization = "Own content"`; other imports leave it null.
 
-**v0.3.0: agent API and dispatcher (PR #1)**
-- The **FastAPI agent API** (bearer token in the Keychain), the **multi-platform dispatcher**, and the **Bluesky, Threads and Facebook publishers** (dormant).
-
-**Smoke test and this report (PR #3)**, extended for v0.5.0 in a direct commit to `main`.
+**v0.6.0, UX clarity pass (`13b0bb6`)**
+- **Plain wording everywhere.** Download is **Bring videos in**, with **List Videos**, **Save This Link…**, **Rename This Source…**, **Use browser sign-in**, **Rename Files…** and **Open Video List**.
+- **Naming** uses a friendly picker with a live example. Patterns are under **Custom pattern…**.
+- **The search box grows** to three lines, then scrolls.
+- **Tooltips** on every control and section header. **Settings → Show helpful tips** (default on) turns them all off.
+- **Guided account setup:**
+  - **YouTube:** a five-step Google Cloud wizard (paste a client ID and secret, or load the JSON), then a **Sign in with Google** modal with progress, a way to reopen the page, and Cancel.
+  - **Bluesky:** an App Password guide.
+  - **Threads and Facebook:** own-Meta-app guides. Each verifies the details before saving.
+  - **TikTok and Instagram:** wording that's truthful about posting.
+- **Offline Help** is pinned in the sidebar (`reelay/gui/help.md`, bundled).
+- **My Channel** (the lowest-id profile) is the default.
 
 ---
 
@@ -49,22 +67,20 @@
 | What | Value |
 |---|---|
 | App | `/Applications/Reelay.app` (ad-hoc signed, arm64) |
-| Database | `~/Library/Application Support/Reelay/reelay.db` (SQLite, schema 4) |
+| Database | `~/Library/Application Support/Reelay/reelay.db` (SQLite, **schema 5**); v4 backup next to it |
 | Logs | `~/Library/Logs/Reelay/app.log` |
 | Agent API | `http://127.0.0.1:8471` (loopback only); OpenAPI at `/openapi.json` |
-| Agent token | Keychain, service `Reelay`, account `agent_api_token`. Read it with `security find-generic-password -s Reelay -a agent_api_token -w` (macOS may ask once), or **Settings → Agent API → Copy Token**. |
+| Agent token | Keychain, service `Reelay`, account `agent_api_token`, or **Settings → AI agents → Copy Access Key** |
 | Lydia's library folder | `lydia_archive/` in the repo |
-| Env vars | `REELAY_HOME`, `REELAY_HOST`, `REELAY_PORT`, `REELAY_API_TOKEN`, `REELAY_API_DISABLED`, `REELAY_PUBLIC_URL`, `REELAY_PUBLISH_BLUESKY` / `_THREADS` / `_FACEBOOK`, `REELAY_DISPATCH_INTERVAL`, `REELAY_DISPATCH_STALE_SECONDS`, `REELAY_BUNDLED_FFMPEG` |
 
 ---
 
 ## 4. Safety rules for testing
 
 - **Prefer isolated runs.** Use `REELAY_HOME=<temp folder>`, `REELAY_API_TOKEN=<value>` and `REELAY_PORT=<other port>`; the smoke test does all three.
-- **Writes against the real app change Lydia's real data.** Against `127.0.0.1:8471`, `PATCH /v1/videos/{id}` edits her tickets and `POST /v1/sources` adds to her sources. Do only read-only calls there unless the user approves.
+- **Writes against the real app change real data.** That includes PATCH, `manual-posts`, sources, and ticket fields edited in the GUI. Do only read-only calls there unless the user approves.
 - **Nothing can post anywhere:** no accounts are connected and the flags are off. Don't connect real accounts or turn flags on without the user's go-ahead.
-- **Fetching on the real app is safe but uses the network.** The "Lydia's TikTok" Fetch button lists her ~174 TikToks; the list is saved to her profile, and nothing downloads until **Download** is clicked.
-- Don't run `pytest --run-network`.
+- Don't run `pytest --run-network`. Don't answer the Keychain prompt for the user.
 
 ---
 
@@ -72,74 +88,80 @@
 
 All commands run from the repo root.
 
-### 5.1 Automated suite (about 30 seconds)
+### 5.1 Automated suite (about 75 seconds)
 ```bash
 .venv/bin/python -m pytest -q
 ```
-Expected: `147 passed, 2 skipped`.
+Expected: `193 passed, 2 skipped`. The new files:
+- `tests/test_ticket_v2.py` (30 tests):
+  - the v4→v5 migration, and that grandfathered cards keep dispatching;
+  - readiness: the ready, not-ready and flag-off cases;
+  - the 422 path, the `force` bypass, and that force can't skip platform rules;
+  - revision logs and rollback on a log failure;
+  - `derived_from` nulling;
+  - Mark as Posted and the publishing history;
+  - provenance;
+  - the API;
+  - GUI blur commits and the gate dialog;
+  - the full 8-combination flags matrix.
+- `tests/test_ux.py` (15 tests):
+  - first launch;
+  - a tooltip audit of every control;
+  - the tips switch;
+  - wording;
+  - the naming picker and the search box;
+  - the YouTube wizard and the Google sign-in modal (with cancel);
+  - the Bluesky, Threads and Facebook guides;
+  - Help.
 
 ### 5.2 Isolated API smoke test (about 20 seconds)
 ```bash
 .venv/bin/python scripts/smoke_test_api.py
 ```
-Expected: `28/28 checks passed`. It covers:
-- **Auth:** 401 without a token or with a wrong one.
-- **Board:** a missing profile gives 400; a valid one returns every copy block.
-- **PATCH:** saves the copy blocks, rejects each over-limit case and an unknown field with 422 while writing nothing, and returns 404 for an unknown video.
-- **Schedule:** rejections for a disabled platform, a past time, and no YouTube channel.
-- **Sources:** none to start; POST saves one (201) with a default name; the same URL can be saved twice; an unsupported URL gives 422; GET lists both as stored.
-- **Platforms:** only YouTube auto-posts, and no secrets appear.
-- **Shutdown:** SIGINT stops it cleanly, the port is released, and the token never reaches the log.
+Expected: `37/37 checks passed`. New in v0.6.0:
+- the board's `ready`, `readiness` (flag-off platforms come back `not_checked`), `ticket` and `provenance`;
+- PATCHing ticket fields, and a 422 for `imported_at`;
+- revisions with `origin: "api"`;
+- readiness problems listed in the schedule rejection;
+- `force=true` still refused for a missing channel;
+- `manual-posts` (201), shown in `publishing_history`.
 
 ### 5.3 Packaged-app self-test
 ```bash
-REELAY_BUNDLED_FFMPEG=1 /Applications/Reelay.app/Contents/MacOS/Reelay --self-test
+/Applications/Reelay.app/Contents/MacOS/Reelay --self-test
 ```
-Expected: 7 PASS lines and `Self-test passed`.
+Expected: 8 PASS lines (including `Help page`) and `Self-test passed`.
 
 ### 5.4 GUI checklist (the running app)
 
 | # | Action | Expected |
 |---|---|---|
-| G1 | Open Reelay | It opens on **Lydia Livingood** (an "LL" avatar). |
-| G2 | **Download** page, top | The heading **Download from**, followed by the note "Downloading pulls videos in from these sources. Posting pushes videos out to the accounts you connect under Accounts." |
-| G3 | Source chips | One chip: **Lydia's TikTok · TikTok · mine**, with **Fetch** and **⋯**. |
-| G4 | Paste field | Labeled "Paste any public profile link, yours or someone else's (or several video links)", with **Save as Source…** and **Fetch Videos** beside it. |
-| G5 | Click **Fetch** on Lydia's TikTok *(network; read-only)* | The paste field fills with her URL, the status shows fetching, and then about 174 videos are listed. The 2 already downloaded show "✓ Downloaded"; the rest are ticked "Ready". **Don't click Download** unless the user wants all of them. |
-| G6 | **⋯ → Rename…** on the chip, then rename it back | The chip label updates straight away. |
-| G7 | Paste `https://www.tiktok.com/@livingood.lifestyle/` and **Save as Source…** | It saves a duplicate, and the page still shows one chip (hover: "Saved 2 times"). Clean up with **⋯ → Remove**, which removes both copies; then re-add "Lydia's TikTok" (mine) to restore the starting state. |
-| G8 | **Board** → click a card | The ticket editor shows copy blocks with counters and Copy buttons. Auto-post offers only YouTube, with the note "Bluesky, Threads, Facebook: copy-paste only". |
-| G9 | Type 301 characters in Bluesky text and click **Save Draft** | The counter shows `301/300` in red, the error lists the problem, and nothing is saved or cut. |
-| G10 | **Settings** | Under Automatic posting, three switches are off. Under Agent API: "Running at http://127.0.0.1:8471…". |
-| G11 | **Accounts** | The YouTube setup steps, then Bluesky, Threads and Facebook cards saying "Copy-paste only (…)". |
+| G1 | Open Reelay | It opens on **My Channel** (an "MC" avatar), with an empty Download page and no sources. |
+| G2 | Switch to **Lydia Livingood** | The Download page lists 174 videos (2 downloaded), with the "Lydia's TikTok" chip showing **List Videos** and **⋯**. The Board shows the 2 downloaded ones. |
+| G3 | Hover anything | A plain-language tip. **Settings → Show helpful tips** off makes them all stop. |
+| G4 | **Download**, top | **Bring videos in**, with the note "Import media you own or have permission to manage…". |
+| G5 | **Name files** | The choice reads "Platform, date and video ID", with "Example: TikTok_….mp4" under it. Choose **Custom pattern…** to see the pattern box. |
+| G6 | **Board** → drag a Backlog card to Staging, then click it | The ticket opens with a **READY / NOT READY** badge and a ✓ / ⚠ line per target. Bluesky, Threads and Facebook say "posted by hand… not checked". |
+| G7 | Clear the YouTube description | After a moment, the header says YouTube is blocking: "Add a description." |
+| G8 | **Details and Provenance** | Shows the provenance (TikTok · original post · Imported …). Type a Topic and click away; **Change History…** shows it, newest first, by "You (Reelay app)". |
+| G9 | **Mark as Posted…** → TikTok | **Where it's been posted** lists "TikTok: posted by hand · …", with **Remove**. |
+| G10 | **Accounts** | **Set Up YouTube…** opens a 5-step guide. **Connect Bluesky…**, **Connect Threads…** and **Connect Facebook…** open guides. TikTok and Instagram say "Copy and paste" and explain why. |
+| G11 | **Help** (bottom of the sidebar) | The full guide, offline. |
 
-⚠️ G6, G7 and G9 write to the real database: these are the normal user flows. Undo them as described, or skip them if the user prefers.
+⚠️ G6–G9 write to the real database (Lydia's tickets). They're normal user flows; undo or skip them as the user prefers.
 
-### 5.5 Isolated sources and flags (no posting possible)
-```bash
-REELAY_HOME=/tmp/reelay-test REELAY_PORT=8482 REELAY_API_TOKEN=t REELAY_PUBLISH_BLUESKY=1 \
-  /Applications/Reelay.app/Contents/MacOS/Reelay
-```
-Then:
-```bash
-curl -s -X POST "http://127.0.0.1:8482/v1/sources?profile=My%20Channel" -H "Authorization: Bearer t" \
-  -H "Content-Type: application/json" -d '{"url": "https://www.instagram.com/livingood.lifestyle/"}'
-```
-Expected: `201`, `"name": "@livingood.lifestyle on Instagram"`, and the chip appears on that window's Download page. `GET /v1/platforms?profile=My%20Channel` shows `bluesky.auto_post: true`. Quit that window afterwards.
-
-### 5.6 Read-only checks against the real app
+### 5.5 Read-only checks against the real app (after the Keychain prompt is allowed)
 ```bash
 TOKEN=$(security find-generic-password -s Reelay -a agent_api_token -w)
 ```
 ```bash
-curl -s "http://127.0.0.1:8471/v1/sources?profile=Lydia%20Livingood" -H "Authorization: Bearer $TOKEN"
-```
-```bash
-curl -s "http://127.0.0.1:8471/v1/board?profile=Lydia%20Livingood" -H "Authorization: Bearer $TOKEN"
+curl -s "http://127.0.0.1:8471/v1/board?profile=Lydia%20Livingood&limit=1" -H "Authorization: Bearer $TOKEN"
 ```
 Expected:
-- **Sources:** one saved source, "Lydia's TikTok", with `kind: "saved"`, `platform: "tiktok"` and `mine: true`.
-- **Board:** `total: 2`, both in `backlog`.
+- `total: 2`: only downloaded videos are on the board; the other 172 are on the Download page;
+- `ready: true`;
+- `readiness.youtube.state: "ready"` (title and description suggested from the caption, file present);
+- `provenance.source_platform: "tiktok"`.
 
 ---
 
@@ -150,31 +172,24 @@ Expected:
 | Missing or wrong bearer token | 401 | `unauthorized` |
 | Missing or unknown `profile` | 400 | `profile_required` / `unknown_profile` |
 | Unknown video id | 404 | `not_found` |
-| PATCH unknown field, wrong type, empty body | 422 | `invalid_request` |
-| PATCH over a platform limit | 422 | `invalid_post` |
-| PATCH a scheduled or published video | 409 | `locked` |
+| PATCH unknown field (including `imported_at`), wrong type, empty body | 422 | `invalid_request` |
+| PATCH over a limit, bad `content_type` / date / `derived_from` | 422 | `invalid_post` |
+| PATCH copy on a scheduled or published video (ticket fields are fine) | 409 | `locked` |
+| **Schedule a platform whose ticket isn't ready** | **422** | **`ticket_not_ready`** (retry with `?force=true`) |
 | Schedule a disabled platform, or no enabled targets left | 422 | `platform_disabled` |
 | Schedule with a past, naive or too-soon time | 422 | `invalid_time` / `invalid_request` / `invalid_post` |
-| Schedule when setup is missing | 422 | `invalid_post` |
+| Schedule when setup is missing (force can't skip it) | 422 | `invalid_post` |
 | Schedule an already scheduled or published platform | 409 | `already_scheduled` |
+| Mark as posted: unknown platform / future time / non-http URL | 422 | `invalid_request` / `invalid_time` / `invalid_post` |
 | POST /v1/sources with an unsupported URL | 422 | `invalid_source` |
-| POST /v1/sources with an extra field or an over-long name | 422 | `invalid_request` |
 
 ---
 
 ## 7. Not verified / known limitations
 
-1. **No real platform post** has ever been made: YouTube, Bluesky, Threads and Facebook are verified only against fakes.
-2. **The YouTube channel source** has only run against a fake API session (no channel is connected). It costs about 2 quota units per 50 videos.
-3. **The TikTok, Instagram and Facebook copy limits** come from model knowledge, not checked against current docs.
-4. **There's no API endpoint to rename or delete a source** (the spec asked only for GET and POST). That's GUI only for now.
-5. **A saved YouTube link that duplicates a connected channel** is merged into the channel's chip and can't be removed from the GUI (an edge case).
-6. **The app is ad-hoc signed** (Keychain prompts may come back after rebuilds). **Flags apply after a restart.** **Threads tokens aren't auto-refreshed.**
-7. **GitHub auto-merge is disabled** in the repository settings.
-
-## 8. Suggestions for the next prompt
-
-- **Per-platform "Mark as posted"** on cards, to track the manual copy-paste workflow.
-- **`PATCH` / `DELETE /v1/sources/{id}`**, so agents can rename and remove sources.
-- **A one-time import from the user's Google Sheet** (CSV) into the copy blocks.
-- **Checking the three copy limits** marked as unverified.
+1. **No real platform sign-in or post has been made.** Google, Bluesky and Meta sign-ins, and every publish, are verified only against fakes, because they need the user's own credentials.
+2. **The Google Cloud console links** are current paths, but Google reorganizes that console often. The wizard text names each screen, so it still makes sense if a link moves.
+3. **Readiness covers copy and media, not scheduling setup.** A connected account, a public URL and the schedule time are still checked at schedule time, as `invalid_post`.
+4. **Deleting a video** exists in the store (`delete_video`) but has no GUI or API action yet; `derived_from` nulling is tested at the store level.
+5. **TikTok, Instagram and Facebook copy limits** come from model knowledge and haven't been checked against current docs.
+6. **The app is ad-hoc signed**, so Keychain prompts return after every rebuild. Flags apply after a restart. Threads tokens aren't refreshed automatically.
