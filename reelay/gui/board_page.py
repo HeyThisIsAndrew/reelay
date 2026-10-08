@@ -8,11 +8,12 @@ import logging
 import time
 from datetime import datetime
 
-from PySide6.QtCore import (QAbstractListModel, QMimeData, QModelIndex, QRect, QRectF, QSize, Qt, QTimer,
-                            Signal)
+from PySide6.QtCore import (QAbstractListModel, QItemSelectionModel, QMimeData, QModelIndex, QRect, QRectF, QSize,
+                            Qt, QTimer, Signal)
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPen
-from PySide6.QtWidgets import (QAbstractItemView, QFrame, QHBoxLayout, QLabel, QListView, QMessageBox,
-                               QPushButton, QSplitter, QStyle, QStyledItemDelegate, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFrame, QHBoxLayout, QLabel, QListView, QMenu,
+                               QMessageBox, QPushButton, QSplitter, QStackedWidget, QStyle, QStyledItemDelegate,
+                               QVBoxLayout, QWidget)
 
 from ..models import Platform, Post, PostStatus, Profile, Stage
 from ..pipeline import Card, Pipeline, PipelineError
@@ -20,10 +21,13 @@ from ..store import Change
 from ..text import clock, local_text
 from ..uploads import UploadManager
 from . import theme
+from .theme import set_prop
+from .board_tools import ArchivedDialog, BulkPanel, ImportDialog
 from .bridge import change_bridge
 from .post_panel import PostPanel
 from .table_model import fmt_duration, short_date
 from .thumbnails import ThumbnailCache
+from .tips import tip
 from .workers import CallWorker
 
 log = logging.getLogger("reelay")
@@ -245,7 +249,8 @@ class BoardColumn(QFrame):
         self.view = QListView(objectName="BoardList")
         self.view.setModel(self.model)
         self.view.setItemDelegate(CardDelegate(thumbs, self.view))
-        self.view.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.view.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.view.setContextMenuPolicy(Qt.CustomContextMenu)
         self.view.setDragDropMode(QAbstractItemView.DragDrop)
         self.view.setDefaultDropAction(Qt.MoveAction)
         self.view.setDragEnabled(True)
@@ -267,10 +272,16 @@ class BoardColumn(QFrame):
         lay.addWidget(self.view, 1)
         lay.addWidget(self.empty)
 
-    def set_cards(self, cards: list[Card]) -> None:
+    def set_cards(self, cards: list[Card], total: int | None = None) -> None:
         self.model.set_cards(cards)
-        self.count.setText(str(len(cards)))
+        filtered = total is not None and total != len(cards)
+        self.count.setText(f"{len(cards)} of {total}" if filtered else str(len(cards)))
+        self.count.setToolTip(f"{len(cards)} shown by the filter, {total} in this column" if filtered else "")
         self.empty.setVisible(not cards)
+
+    def selected_cards(self) -> list[Card]:
+        return [self.model.cards[i.row()] for i in sorted(self.view.selectionModel().selectedIndexes(),
+                                                           key=lambda i: i.row())]
 
 
 # ====================================================================== page
@@ -291,7 +302,10 @@ class BoardPage(QWidget):
         self.profile: Profile | None = None
         self.cards: dict[int, Card] = {}
         self.selected_id: int | None = None
+        self.bulk_ids: list[int] = []
+        self.filter = "all"
         self.sync_worker: CallWorker | None = None
+        self.task_worker: CallWorker | None = None
         self._last_sync = 0.0
         self._closed = False
         self._reload_timer = QTimer(self, singleShot=True, interval=30, timeout=self.reload)
@@ -319,6 +333,20 @@ class BoardPage(QWidget):
         self.sync_label = QLabel()
         self.sync_label.setProperty("faint", True)
         head.addWidget(self.sync_label)
+        self.filter_box = tip(QComboBox(), "Show only tickets that are ready, not ready, or blocked on a platform")
+        for key, label in (("all", "Show: All tickets"), ("ready", "Show: Ready"), ("not_ready", "Show: Not ready"),
+                           *((f"blocking:{p}", f"Show: Blocking {Platform.LABELS[p]}") for p in Platform.ALL)):
+            self.filter_box.addItem(label, key)
+        self.filter_box.currentIndexChanged.connect(self._on_filter)
+        head.addWidget(self.filter_box)
+        self.import_btn = tip(QPushButton("Import Sheet…"), "Fill tickets from a spreadsheet (CSV file or a Google "
+                                                            "Sheets link), with a preview before anything changes")
+        self.import_btn.clicked.connect(self.open_import)
+        head.addWidget(self.import_btn)
+        self.archived_btn = tip(QPushButton("Archived…"), "Videos you've archived. Bring them back from here.")
+        set_prop(self.archived_btn, "flat")
+        self.archived_btn.clicked.connect(self.open_archived)
+        head.addWidget(self.archived_btn)
         self.sync_btn = QPushButton("Check YouTube for Updates")
         self.sync_btn.setToolTip("Ask YouTube whether scheduled videos have gone live, and move them to Published")
         self.sync_btn.clicked.connect(lambda: self.sync(force=True))
@@ -336,6 +364,8 @@ class BoardPage(QWidget):
             col.view.selectionModel().currentChanged.connect(
                 lambda cur, _prev, c=col: self._on_select(c, cur))
             col.view.clicked.connect(lambda idx, c=col: self._on_select(c, idx))
+            col.view.selectionModel().selectionChanged.connect(lambda *_a, c=col: self._on_selection(c))
+            col.view.customContextMenuRequested.connect(lambda pos, c=col: self._card_menu(c, pos))
             self.columns[stage] = col
             cl.addWidget(col, 1)
 
@@ -350,9 +380,19 @@ class BoardPage(QWidget):
         self.panel.markPostedRequested.connect(self._mark_posted)
         self.panel.unmarkRequested.connect(self._unmark_posted)
         self.panel.revisionsRequested.connect(self._show_revisions)
+        self.panel.fillRequested.connect(lambda row_id: self._fill([row_id]))
+        self.panel.transcriptRequested.connect(lambda row_id: self._get_transcripts([row_id], ask_replace=True))
+        self.bulk = BulkPanel()
+        self.bulk.applyRequested.connect(self._bulk_apply)
+        self.bulk.fillRequested.connect(lambda: self._fill(self.bulk_ids))
+        self.bulk.transcriptsRequested.connect(lambda: self._get_transcripts(self.bulk_ids))
+        self.bulk.archiveRequested.connect(lambda: self._archive(self.bulk_ids))
+        self.side = QStackedWidget()
+        self.side.addWidget(self.panel)
+        self.side.addWidget(self.bulk)
         split = QSplitter(Qt.Horizontal)
         split.addWidget(cols)
-        split.addWidget(self.panel)
+        split.addWidget(self.side)
         split.setStretchFactor(0, 1)
         split.setSizes([960, 400])
         split.setChildrenCollapsible(False)
@@ -363,6 +403,8 @@ class BoardPage(QWidget):
     def set_profile(self, profile: Profile) -> None:
         self.profile = profile
         self.selected_id = None
+        self.bulk_ids = []
+        self.side.setCurrentWidget(self.panel)
         self.panel.show_empty()
         self.subtitle.setText(f"{profile.name}'s pipeline · drag cards to move them along")
         self._last_sync = 0.0
@@ -386,8 +428,189 @@ class BoardPage(QWidget):
             return
         self.cards = {card.id: card for cards in columns.values() for card in cards}
         for stage, col in self.columns.items():
-            col.set_cards(columns[stage])
-        self._reselect()
+            shown = [c for c in columns[stage] if self._matches(c)]
+            col.set_cards(shown, total=len(columns[stage]))
+        if self.bulk_ids:
+            self._reselect_bulk()
+        else:
+            self._reselect()
+
+    # ---------------------------------------------------------------- filter
+    def _matches(self, card: Card) -> bool:
+        r = card.readiness
+        if self.filter == "all" or r is None:
+            return True
+        if self.filter == "ready":
+            return r.ready and not r.blocking
+        if self.filter == "not_ready":
+            return bool(r.blocking)
+        return self.filter.split(":", 1)[1] in r.blocking
+
+    def _on_filter(self) -> None:
+        self.filter = self.filter_box.currentData()
+        self.reload()
+
+    # ---------------------------------------------------------------- multi-select & bulk
+    def _on_selection(self, column: BoardColumn) -> None:
+        chosen = column.selected_cards()
+        if len(chosen) > 1:
+            for other in self.columns.values():
+                if other is not column:
+                    other.view.blockSignals(True)
+                    other.view.clearSelection()
+                    other.view.blockSignals(False)
+            self.bulk_ids = [c.id for c in chosen]
+            self.selected_id = None
+            self.bulk.show_cards(chosen)
+            self.side.setCurrentWidget(self.bulk)
+        elif self.bulk_ids:
+            self.bulk_ids = []
+            self.side.setCurrentWidget(self.panel)
+            if chosen:
+                self.selected_id = None
+                self._on_select(column, column.model.index(column.model.cards.index(chosen[0])))
+
+    def _reselect_bulk(self) -> None:
+        cards = [self.cards[i] for i in self.bulk_ids if i in self.cards]
+        stages = {c.row.stage for c in cards}
+        if len(cards) < 2 or len(stages) != 1:
+            self.bulk_ids = []
+            self.side.setCurrentWidget(self.panel)
+            self.panel.show_empty()
+            return
+        col = self.columns[stages.pop()]
+        sel = col.view.selectionModel()
+        sel.blockSignals(True)
+        for row, c in enumerate(col.model.cards):
+            if c.id in self.bulk_ids:
+                sel.select(col.model.index(row), QItemSelectionModel.Select)
+        sel.blockSignals(False)
+        col.view.viewport().update()
+        self.bulk.show_cards([c for c in col.model.cards if c.id in self.bulk_ids])
+
+    def _bulk_apply(self, changes: dict) -> None:
+        try:
+            n = self.pipeline.bulk_update(self.bulk_ids, changes)
+        except PipelineError as exc:
+            self.bulk.show_errors(exc.problems)
+            return
+        self.bulk.clear_inputs()
+        self.bulk.show_errors([])
+        self._status(f"Updated {n} tickets.")
+
+    def _card_menu(self, column: BoardColumn, pos) -> None:
+        index = column.view.indexAt(pos)
+        if not index.isValid():
+            return
+        chosen = column.selected_cards()
+        clicked = column.model.cards[index.row()]
+        if clicked not in chosen:
+            column.view.setCurrentIndex(index)
+            chosen = [clicked]
+        ids = [c.id for c in chosen]
+        n = len(ids)
+        menu = QMenu(self)
+        menu.addAction("Fill Empty Copy from Original Post" + ("s" if n > 1 else ""), lambda: self._fill(ids))
+        menu.addAction("Get Transcript" + ("s" if n > 1 else "") + " from Original Post" + ("s" if n > 1 else ""),
+                       lambda: self._get_transcripts(ids, ask_replace=n == 1))
+        if n == 1:
+            menu.addSeparator()
+            menu.addAction("Mark as Posted…", lambda: self._mark_posted(ids[0]))
+            menu.addAction("Change History…", lambda: self._show_revisions(ids[0]))
+        menu.addSeparator()
+        menu.addAction(f"Archive {n} Video{'s' if n > 1 else ''}" if n > 1 else "Archive", lambda: self._archive(ids))
+        menu.exec(column.view.viewport().mapToGlobal(pos))
+
+    # ---------------------------------------------------------------- fill, transcripts, archive, import
+    def _fill(self, row_ids: list[int]) -> None:
+        if not row_ids:
+            return
+        try:
+            filled = self.pipeline.fill_from_original(row_ids)
+        except PipelineError as exc:
+            self._status(str(exc))
+            return
+        fields = sum(len(f) for f in filled.values())
+        self._status(f"Filled {fields} empty field{'s' if fields != 1 else ''} on {len(filled)} ticket"
+                     f"{'s' if len(filled) != 1 else ''} from the original posts." if filled
+                     else "Nothing to fill: those tickets' copy is already written (or doesn't fit).")
+
+    def _get_transcripts(self, row_ids: list[int], ask_replace: bool = False) -> None:
+        if not row_ids or (self.task_worker and self.task_worker.isRunning()):
+            return
+        from ..ytdl import base_options
+        replace_existing = False
+        if ask_replace and len(row_ids) == 1:
+            row = self.store.get_video(row_ids[0])
+            if row and row.ticket.transcript:
+                if QMessageBox.question(self, "Replace Transcript", "This ticket already has a transcript. Replace "
+                                        "it with the original post's captions?") != QMessageBox.Yes:
+                    return
+                replace_existing = True
+        opts = base_options(self.profile.cookies_browser or None) if self.profile else {}
+
+        def work():
+            got, failed = 0, []
+            for row_id in row_ids:
+                try:
+                    self.pipeline.fetch_transcript(row_id, opts, replace_existing=replace_existing)
+                    got += 1
+                except PipelineError as exc:
+                    if exc.code != "invalid_post" or len(row_ids) == 1:   # "already has one" is fine in bulk
+                        failed.append(str(exc))
+            return got, failed
+
+        self._status(f"Getting transcript{'s' if len(row_ids) > 1 else ''} from the original post"
+                     f"{'s' if len(row_ids) > 1 else ''}…")
+        self.task_worker = CallWorker(work, parent=self)
+        self.task_worker.succeeded.connect(self._transcripts_done)
+        self.task_worker.failed.connect(self._status)
+        self.task_worker.start()
+
+    def _transcripts_done(self, result) -> None:
+        got, failed = result
+        message = f"Got {got} transcript{'s' if got != 1 else ''}."
+        if failed:
+            message += f" {len(failed)} couldn't: {failed[0]}"
+        self._status(message)
+
+    def _archive(self, row_ids: list[int]) -> None:
+        if not row_ids:
+            return
+        n = len(row_ids)
+        if QMessageBox.question(self, "Archive", f"Archive {n} video{'s' if n > 1 else ''}? "
+                                f"{'They' if n > 1 else 'It'} disappear{'' if n > 1 else 's'} from the Board and the "
+                                "Download page. Files, tickets and history are kept, and you can bring "
+                                f"{'them' if n > 1 else 'it'} back from Archived….") != QMessageBox.Yes:
+            return
+        try:
+            self.pipeline.archive(row_ids, True)
+        except PipelineError as exc:
+            QMessageBox.warning(self, "Archive", str(exc) + ("\n\n" + "\n".join(exc.problems)
+                                                              if len(exc.problems) > 1 else ""))
+            return
+        self.bulk_ids = []
+        self.selected_id = None
+        self.side.setCurrentWidget(self.panel)
+        self._status(f"Archived {n} video{'s' if n > 1 else ''}.")
+        self.reload()
+
+    def open_archived(self) -> None:
+        if not self.profile:
+            return
+        dialog = ArchivedDialog(self.pipeline, self.profile, self)
+        dialog.exec()
+        if dialog.restored:
+            self._status(f"Brought back {dialog.restored} video{'s' if dialog.restored != 1 else ''}.")
+            self.reload()
+
+    def open_import(self) -> None:
+        if not self.profile:
+            return
+        dialog = ImportDialog(self.pipeline, self.profile, self)
+        if dialog.exec() == ImportDialog.Accepted and dialog.applied:
+            self._status(f"Imported {dialog.applied} ticket{'s' if dialog.applied != 1 else ''} from the sheet.")
+            self.reload()
 
     def _reselect(self) -> None:
         card = self.cards.get(self.selected_id) if self.selected_id else None
@@ -442,10 +665,18 @@ class BoardPage(QWidget):
     def _show_revisions(self, row_id: int) -> None:
         from .ticket_widgets import RevisionDialog
         titles = {c.id: c.title for c in self.cards.values()}
-        RevisionDialog(self.store.revisions(row_id), self, titles).exec()
+
+        def restore(revision_id: int) -> str | None:
+            try:
+                self.pipeline.restore_revision(row_id, revision_id)
+            except PipelineError as exc:
+                return "\n".join(exc.problems)
+            return None
+        RevisionDialog(self.store.revisions(row_id), self, titles, on_restore=restore,
+                       reload=lambda: self.store.revisions(row_id)).exec()
 
     def _on_select(self, column: BoardColumn, index) -> None:
-        if not index.isValid():
+        if not index.isValid() or len(column.selected_cards()) > 1:
             return
         card = column.model.cards[index.row()]
         if card.id == self.selected_id and self.panel.card is not None:

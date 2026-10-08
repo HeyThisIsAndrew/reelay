@@ -32,7 +32,7 @@ from .models import (TICKET_FIELDS, Account, Dispatch, DispatchStatus, ManualPos
 
 log = logging.getLogger("reelay")
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 # Post fields whose edits are logical metadata commits (logged as revisions).
 # Status, remote ids and errors are publishing state, tracked by dispatches.
@@ -201,6 +201,9 @@ _MIGRATIONS: dict[int, str] = {
         created_at TEXT NOT NULL
     );
     CREATE INDEX manual_posts_by_video ON manual_posts (video_row, posted_at);
+    """,
+    6: """
+    ALTER TABLE videos ADD COLUMN archived_at TEXT;
     """,
 }
 
@@ -465,8 +468,12 @@ class Store:
     def save_video(self, profile_id: int, item: VideoItem) -> int:
         return self.save_videos(profile_id, [item])[item.key]
 
-    def load_videos(self, profile_id: int, stages: Iterable[str] | None = None) -> list[VideoRow]:
+    def load_videos(self, profile_id: int, stages: Iterable[str] | None = None,
+                    archived: bool | None = False) -> list[VideoRow]:
+        """archived: False = active videos only (the default), True = archived only, None = both."""
         sql, args = "SELECT * FROM videos WHERE profile_id = ?", [profile_id]
+        if archived is not None:
+            sql += " AND archived_at IS NOT NULL" if archived else " AND archived_at IS NULL"
         stages = list(stages or [])
         if stages:
             sql += f" AND stage IN ({','.join('?' * len(stages))})"
@@ -519,27 +526,54 @@ class Store:
         """Write ticket fields (and optionally the edited post) as one logical
         commit: the update and its revision log entries share a transaction, so
         if logging fails nothing is written."""
-        unknown = sorted(set(changes) - set(TICKET_FIELDS))
-        if unknown:
-            raise ValueError(f"unknown ticket field(s): {', '.join(unknown)}")
-        with self.tx() as c:
-            row = c.execute("SELECT * FROM videos WHERE id=?", (row_id,)).fetchone()
-            if row is None:
-                raise KeyError(row_id)
-            old = self._ticket(row)
-            diffs = [(f, getattr(old, f), v) for f, v in changes.items() if getattr(old, f) != v]
-            if diffs:
-                c.execute(f"UPDATE videos SET {', '.join(f'{f}=?' for f, _o, _n in diffs)}, updated_at=? WHERE id=?",
-                          (*[n for _f, _o, n in diffs], utcnow(), row_id))
-                self._log_revisions(c, row_id, diffs)
-            if post is not None:
-                post.updated_at = utcnow()
-                self._write_post(c, post)
-        if diffs:
-            self._emit("video", (row_id,), row["profile_id"])
-        if post is not None:
-            self._emit("post", (row_id,), row["profile_id"])
+        self.update_many([(row_id, changes, post)])
         return self.get_video(row_id).ticket
+
+    def update_many(self, edits: list[tuple[int, dict, Post | None]]) -> None:
+        """Several tickets' edits (ticket fields, and the edited post or None) in
+        ONE transaction with their revision logs: a bulk edit or a sheet import
+        lands completely or not at all."""
+        for _row_id, changes, _post in edits:
+            unknown = sorted(set(changes) - set(TICKET_FIELDS))
+            if unknown:
+                raise ValueError(f"unknown ticket field(s): {', '.join(unknown)}")
+        touched: dict[int, int] = {}
+        with self.tx() as c:
+            for row_id, changes, post in edits:
+                row = c.execute("SELECT * FROM videos WHERE id=?", (row_id,)).fetchone()
+                if row is None:
+                    raise KeyError(row_id)
+                old = self._ticket(row)
+                diffs = [(f, getattr(old, f), v) for f, v in changes.items() if getattr(old, f) != v]
+                if diffs:
+                    c.execute(f"UPDATE videos SET {', '.join(f'{f}=?' for f, _o, _n in diffs)}, updated_at=? "
+                              "WHERE id=?", (*[n for _f, _o, n in diffs], utcnow(), row_id))
+                    self._log_revisions(c, row_id, diffs)
+                if post is not None:
+                    post.updated_at = utcnow()
+                    self._write_post(c, post)
+                touched[row_id] = row["profile_id"]
+        for profile_id in set(touched.values()):
+            ids = [r for r, p in touched.items() if p == profile_id]
+            self._emit("video", ids, profile_id)
+            self._emit("post", ids, profile_id)
+
+    def set_archived(self, row_ids: Iterable[int], archived: bool) -> None:
+        """Hide videos from the board and Download list (files and history stay),
+        or bring them back. Logged as an "archived" revision."""
+        row_ids = list(row_ids)
+        now = utcnow()
+        with self.tx() as c:
+            for row_id in row_ids:
+                old = c.execute("SELECT archived_at FROM videos WHERE id=?", (row_id,)).fetchone()
+                if old is None:
+                    raise KeyError(row_id)
+                new = (old["archived_at"] or now) if archived else None
+                if new != old["archived_at"]:
+                    c.execute("UPDATE videos SET archived_at=?, updated_at=? WHERE id=?", (new, now, row_id))
+                    self._log_revisions(c, row_id, [("archived", old["archived_at"], new)])
+        if row_ids:
+            self._emit("video", row_ids, self._profile_of_videos(row_ids))
 
     def _log_revisions(self, c: sqlite3.Connection, video_row: int, diffs: list[tuple[str, object, object]]) -> None:
         """Append (field, old, new) entries for one commit. Runs inside the
@@ -592,7 +626,7 @@ class Store:
         item = VideoItem.from_record(json.loads(row["data"]))
         return VideoRow(id=row["id"], item=item, stage=row["stage"], position=row["position"], notes=row["notes"],
                         profile_id=row["profile_id"], updated_at=row["updated_at"], ticket=Store._ticket(row),
-                        ready_gate_exempt=bool(row["ready_gate_exempt"]))
+                        ready_gate_exempt=bool(row["ready_gate_exempt"]), archived_at=row["archived_at"])
 
     # ================================================================ posts
     def get_post(self, video_row: int) -> Post | None:

@@ -35,8 +35,10 @@ FIELD_LABELS = {
     "content_type": "Type", "topic": "Topic", "keywords": "Keywords", "creator": "Creator",
     "original_publish_date": "First published", "source_platform": "Came from", "source_url": "Original link",
     "imported_at": "Imported", "authorization": "Permission", "derived_from": "Cut from",
+    "archived": "Archived",
 }
-ORIGIN_LABELS = {"local": "You (Reelay app)", "api": "AI agent (API)", "remote": "Companion app"}
+ORIGIN_LABELS = {"local": "You (Reelay app)", "api": "AI agent (API)", "remote": "Companion app",
+                 "import": "Sheet import"}
 
 
 def _section(text: str, hint: str) -> QLabel:
@@ -136,6 +138,7 @@ class CommitText(QPlainTextEdit):
 class TicketDetails(QWidget):
     """Ticket fields. Each change is committed on blur / choice as {field: value}."""
     fieldCommitted = Signal(str, object)
+    transcriptRequested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -167,7 +170,15 @@ class TicketDetails(QWidget):
             edit.editingFinished.connect(lambda k=key, e=edit: self._commit(k, e.text().strip() or None))
             return edit
 
-        bl.addWidget(_section("TRANSCRIPT", "Everything said in the video. Saved when you click away."))
+        trow = QHBoxLayout()
+        trow.addWidget(_section("TRANSCRIPT", "Everything said in the video. Saved when you click away."))
+        trow.addStretch()
+        get = tip(QPushButton("Get from Original Post"), "Use the original post's captions (where the platform "
+                                                         "has them) as the transcript. Uses the network.")
+        set_prop(get, "flat")
+        get.clicked.connect(self.transcriptRequested.emit)
+        trow.addWidget(get)
+        bl.addLayout(trow)
         self.transcript = CommitText()
         self.transcript.setPlaceholderText("Paste or type the transcript")
         self.transcript.setFixedHeight(90)
@@ -424,8 +435,12 @@ class MarkPostedDialog(QDialog):
 
 
 class RevisionDialog(QDialog):
-    def __init__(self, revisions, parent=None, titles: dict[int, str] | None = None):
+    """The change log. With `on_restore(revision_id) -> error or None`, a change
+    can be undone (the undo is logged as a new change)."""
+
+    def __init__(self, revisions, parent=None, titles: dict[int, str] | None = None, on_restore=None, reload=None):
         super().__init__(parent)
+        self._on_restore, self._reload = on_restore, reload
         self.setWindowTitle("Change History")
         self.resize(760, 440)
         lay = QVBoxLayout(self)
@@ -433,26 +448,50 @@ class RevisionDialog(QDialog):
         lay.addWidget(_faint("Every saved change to this ticket, newest first. Typing isn't recorded, only saves.",
                              "muted"))
         tree = QTreeWidget()
+        self._titles = titles or {}
         tree.setHeaderLabels(["WHEN", "WHO", "WHAT", "FROM", "TO"])
         tree.setRootIsDecorated(False)
         tree.setWordWrap(True)
         tree.header().setSectionResizeMode(3, QHeaderView.Stretch)
         tree.header().setSectionResizeMode(4, QHeaderView.Stretch)
-        titles = titles or {}
+        self.tree = tree
+        lay.addWidget(tree, 1)
+        self.status = _faint(prop="danger")
+        lay.addWidget(self.status)
+        row = QHBoxLayout()
+        self.restore_btn = tip(QPushButton("Restore the Earlier Value"),
+                               "Put the highlighted field back to what it was before that change. The undo is "
+                               "saved as a new change, so nothing is lost.")
+        self.restore_btn.setEnabled(False)
+        self.restore_btn.setVisible(on_restore is not None)
+        self.restore_btn.clicked.connect(self._restore)
+        tree.itemSelectionChanged.connect(lambda: self.restore_btn.setEnabled(bool(tree.selectedItems()) and bool(
+            tree.selectedItems()[0].data(0, Qt.UserRole))))
+        row.addWidget(self.restore_btn)
+        row.addStretch()
+        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        buttons.rejected.connect(self.reject)
+        row.addWidget(buttons)
+        lay.addLayout(row)
+        self.fill(revisions)
 
-        def shown(field: str, value: str | None) -> str:
-            if value is None or value == "":
-                return "(empty)"
-            if field == "derived_from" and value.isdigit():
-                return titles.get(int(value), f"video {value}")
-            if field in ("original_publish_date", "imported_at"):
-                return local_text(value) or value
-            return value if len(value) <= 300 else value[:300] + "…"
+    def _shown(self, field: str, value: str | None) -> str:
+        if value is None or value == "":
+            return "(empty)"
+        if field == "derived_from" and value.isdigit():
+            return self._titles.get(int(value), f"video {value}")
+        if field in ("original_publish_date", "imported_at", "archived"):
+            return local_text(value) or value
+        return value if len(value) <= 300 else value[:300] + "…"
 
+    def fill(self, revisions) -> None:
+        tree = self.tree
+        tree.clear()
         for r in revisions:
             item = QTreeWidgetItem([local_text(r.at) or r.at, ORIGIN_LABELS.get(r.origin, r.origin),
-                                    FIELD_LABELS.get(r.field, r.field), shown(r.field, r.old_value),
-                                    shown(r.field, r.new_value)])
+                                    FIELD_LABELS.get(r.field, r.field), self._shown(r.field, r.old_value),
+                                    self._shown(r.field, r.new_value)])
+            item.setData(0, Qt.UserRole, r.id)
             for col in (3, 4):
                 item.setToolTip(col, (r.old_value if col == 3 else r.new_value) or "")
             tree.addTopLevelItem(item)
@@ -460,9 +499,13 @@ class RevisionDialog(QDialog):
             tree.addTopLevelItem(QTreeWidgetItem(["No changes saved yet.", "", "", "", ""]))
         for col in range(3):
             tree.resizeColumnToContents(col)
-        self.tree = tree
-        lay.addWidget(tree, 1)
-        buttons = QDialogButtonBox(QDialogButtonBox.Close)
-        buttons.rejected.connect(self.reject)
-        lay.addWidget(buttons)
+
+    def _restore(self) -> None:
+        items = self.tree.selectedItems()
+        if not items or self._on_restore is None:
+            return
+        error = self._on_restore(items[0].data(0, Qt.UserRole))
+        self.status.setText(error or "")
+        if not error and self._reload is not None:
+            self.fill(self._reload())
 

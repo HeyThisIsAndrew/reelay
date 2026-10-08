@@ -139,6 +139,8 @@ class PostPanel(QFrame):
     markPostedRequested = Signal(int)                 # video row id
     unmarkRequested = Signal(int)                     # manual post id
     revisionsRequested = Signal(int)                  # video row id
+    fillRequested = Signal(int)                       # video row id
+    transcriptRequested = Signal(int)                 # video row id
 
     def __init__(self, thumbs: ThumbnailCache, parent=None):
         super().__init__(parent)
@@ -233,6 +235,15 @@ class PostPanel(QFrame):
 
         # ---- copy blocks (the ticket)
         lay.addSpacing(6)
+        fill_row = QHBoxLayout()
+        fill_row.addStretch()
+        self.fill_btn = tip(QPushButton("Fill Empty from Original Post"),
+                            "Fill this ticket's empty boxes from the original caption, within each platform's "
+                            "limits. Nothing already written changes, and nothing is shortened.")
+        set_prop(self.fill_btn, "flat")
+        self.fill_btn.clicked.connect(lambda: self.card and self.fillRequested.emit(self.card.id))
+        fill_row.addWidget(self.fill_btn)
+        lay.addLayout(fill_row)
         self.blocks: dict[str, CopyBlock] = {}
         for key, label, multiline, placeholder in BLOCKS:
             block = CopyBlock(key, label, multiline, placeholder, self._copy, self._update_counts)
@@ -330,6 +341,7 @@ class PostPanel(QFrame):
         self.details = TicketDetails()
         self.details.fieldCommitted.connect(
             lambda key, value: self.card and self.ticketFieldCommitted.emit(self.card.id, key, value))
+        self.details.transcriptRequested.connect(lambda: self.card and self.transcriptRequested.emit(self.card.id))
         lay.addWidget(self.details)
         lay.addSpacing(10)
         self.history = PublishingHistory()
@@ -507,6 +519,7 @@ class PostPanel(QFrame):
         locked = self._locked()
         for block in self.blocks.values():   # copy stays copyable; edits wait until it's unscheduled
             block.set_read_only(locked)
+        self.fill_btn.setVisible(not locked)
         self.form.setVisible(not locked)
         self.save_btn.setVisible(not locked)
         self.upload_btn.setVisible(not locked)

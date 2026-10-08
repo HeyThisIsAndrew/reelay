@@ -401,3 +401,4 @@ class VideoRow:
     updated_at: str = ""
     ticket: Ticket = field(default_factory=Ticket)
     ready_gate_exempt: bool = False   # was already Scheduled/Published before the Ready gate existed
+    archived_at: str | None = None    # hidden from the board and Download list (files and history kept)

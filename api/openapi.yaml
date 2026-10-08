@@ -7,7 +7,7 @@ info:
   description: 'Read a creator''s video board (each video is a content ticket with a readiness checklist), apply
     approved edits, record manual posts, and schedule posts to YouTube, Bluesky, Threads and Facebook. All /v1 routes
     need `Authorization: Bearer <token>`. Changes show up immediately on the Reelay desktop board.'
-  version: 0.6.0
+  version: 0.7.0
 paths:
   /v1/board:
     get:
@@ -19,7 +19,7 @@ paths:
 
         platforms, per-platform status, and the original caption and stats. Videos fetched but not yet
 
-        downloaded aren''t on the board.'
+        downloaded aren''t on the board, and archived videos only appear with archived=true.'
       operationId: getBoard
       security:
       - HTTPBearer: []
@@ -68,6 +68,15 @@ paths:
           default: 0
           title: Offset
         description: Videos to skip (from next_offset of the previous page).
+      - name: archived
+        in: query
+        required: false
+        schema:
+          type: boolean
+          description: true lists archived videos instead.
+          default: false
+          title: Archived
+        description: true lists archived videos instead.
       responses:
         '200':
           description: Successful Response
@@ -331,6 +340,356 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+  /v1/videos/bulk-update:
+    post:
+      tags:
+      - videos
+      summary: Apply the same edit to many videos
+      description: 'Same rules as PATCH /v1/videos/{video_id}, for many videos at once, in one transaction: if any
+        video
+
+        has a problem, nothing is written and every problem is listed (422).'
+      operationId: bulkUpdateVideos
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BulkUpdate'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BulkResult'
+        '401':
+          description: Missing or invalid bearer token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: No video with that id.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Invalid input; nothing was changed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - HTTPBearer: []
+  /v1/videos/fill-from-original:
+    post:
+      tags:
+      - videos
+      summary: Fill empty copy from the original posts
+      description: 'Fills each video''s EMPTY copy blocks (and creator) from its original caption, within every
+        platform''s
+
+        limits; text that doesn''t fit is left empty, never shortened. Copy of scheduled or published videos is
+
+        untouched. One transaction; each change is logged.'
+      operationId: fillFromOriginal
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VideoIds'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FillResult'
+        '401':
+          description: Missing or invalid bearer token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: No video with that id.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Invalid input; nothing was changed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - HTTPBearer: []
+  /v1/videos/{video_id}/archive:
+    post:
+      tags:
+      - videos
+      summary: Archive a video
+      description: 'Hides the video from the board and the Download page; its file, ticket and history are kept.
+        409 if it''s
+
+        scheduled or uploading.'
+      operationId: archiveVideo
+      security:
+      - HTTPBearer: []
+      parameters:
+      - name: video_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Video Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Video'
+        '401':
+          description: Missing or invalid bearer token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: No video with that id.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: Conflicts with the video's current state (already scheduled).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Invalid input; nothing was changed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+  /v1/videos/{video_id}/unarchive:
+    post:
+      tags:
+      - videos
+      summary: Bring an archived video back
+      operationId: unarchiveVideo
+      security:
+      - HTTPBearer: []
+      parameters:
+      - name: video_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Video Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Video'
+        '401':
+          description: Missing or invalid bearer token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: No video with that id.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Invalid input; nothing was changed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+  /v1/videos/{video_id}/revisions/{revision_id}/restore:
+    post:
+      tags:
+      - videos
+      summary: Undo one logged change
+      description: 'Puts the field back to the value it had before that change. The restore is itself a new, logged
+
+        change. Same rules as PATCH (copy is locked once scheduled).'
+      operationId: restoreRevision
+      security:
+      - HTTPBearer: []
+      parameters:
+      - name: video_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Video Id
+      - name: revision_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Revision Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Video'
+        '401':
+          description: Missing or invalid bearer token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: No video with that id.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: Conflicts with the video's current state (already scheduled).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Invalid input; nothing was changed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+  /v1/videos/{video_id}/transcript:
+    post:
+      tags:
+      - videos
+      summary: Get the transcript from the original post's captions
+      description: 'Downloads the original post''s captions (creator subtitles first, else automatic captions) and
+        saves
+
+        them as the ticket''s transcript. Network call; takes a few seconds. 422 no_transcript when the post has
+
+        no captions; 422 invalid_post when a transcript exists and replace is false.'
+      operationId: fetchTranscript
+      security:
+      - HTTPBearer: []
+      parameters:
+      - name: video_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Video Id
+      requestBody:
+        content:
+          application/json:
+            schema:
+              anyOf:
+              - $ref: '#/components/schemas/TranscriptRequest'
+              - type: 'null'
+              title: Body
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Video'
+        '401':
+          description: Missing or invalid bearer token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: No video with that id.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Invalid input; nothing was changed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+  /v1/import:
+    post:
+      tags:
+      - import
+      summary: Import a spreadsheet (CSV) into tickets
+      description: 'Matches each row to a video (by link, video ID, file name or your name for it), maps columns
+        to ticket
+
+        fields, and fills them. Empty cells never clear anything; over-limit or invalid rows are skipped and
+
+        reported. With dry_run=false every changing row is written in one transaction, each change logged.'
+      operationId: importSheet
+      security:
+      - HTTPBearer: []
+      parameters:
+      - name: profile
+        in: query
+        required: true
+        schema:
+          type: string
+          description: Profile name exactly as shown in Reelay's sidebar.
+          title: Profile
+        description: Profile name exactly as shown in Reelay's sidebar.
+      - name: dry_run
+        in: query
+        required: false
+        schema:
+          type: boolean
+          description: true (default) only reports what would change.
+          default: true
+          title: Dry Run
+        description: true (default) only reports what would change.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ImportRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImportReport'
+        '400':
+          description: Bad request (e.g. missing or unknown profile).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '401':
+          description: Missing or invalid bearer token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Invalid input; nothing was changed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
   /v1/platforms:
     get:
       tags:
@@ -475,6 +834,89 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+  /v1/sources/{source_id}:
+    patch:
+      tags:
+      - sources
+      summary: Rename a saved source or mark it as yours
+      description: Saved sources only (connected channels are managed in Reelay → Accounts).
+      operationId: updateSource
+      security:
+      - HTTPBearer: []
+      parameters:
+      - name: source_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Source Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SourcePatch'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SourceOut'
+        '401':
+          description: Missing or invalid bearer token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: No video with that id.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Invalid input; nothing was changed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+    delete:
+      tags:
+      - sources
+      summary: Remove a saved source
+      description: Removes the saved link only. Videos already listed or downloaded from it stay.
+      operationId: deleteSource
+      security:
+      - HTTPBearer: []
+      parameters:
+      - name: source_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Source Id
+      responses:
+        '204':
+          description: Successful Response
+        '401':
+          description: Missing or invalid bearer token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: No video with that id.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Invalid input; nothing was changed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
 components:
   schemas:
     BoardPage:
@@ -521,6 +963,34 @@ components:
       - offset
       - videos
       title: BoardPage
+    BulkResult:
+      properties:
+        changed:
+          type: integer
+          title: Changed
+          description: 'Tickets updated. All or nothing: on any problem nothing is written (422).'
+      type: object
+      required:
+      - changed
+      title: BulkResult
+    BulkUpdate:
+      properties:
+        video_ids:
+          items:
+            type: integer
+          type: array
+          maxItems: 500
+          minItems: 1
+          title: Video Ids
+        changes:
+          $ref: '#/components/schemas/VideoPatch'
+          description: The same fields PATCH /v1/videos/{video_id} accepts.
+      additionalProperties: false
+      type: object
+      required:
+      - video_ids
+      - changes
+      title: BulkUpdate
     ChannelRef:
       properties:
         id:
@@ -565,6 +1035,21 @@ components:
       required:
       - detail
       title: ErrorBody
+    FillResult:
+      properties:
+        filled:
+          additionalProperties:
+            items:
+              type: string
+            type: array
+          type: object
+          title: Filled
+          description: Per video id, the fields filled from the original post. Videos with nothing to fill are left
+            out.
+      type: object
+      required:
+      - filled
+      title: FillResult
     HistoryItem:
       properties:
         method:
@@ -610,6 +1095,111 @@ components:
       - status
       - id
       title: HistoryItem
+    ImportReport:
+      properties:
+        applied:
+          type: boolean
+          title: Applied
+          description: false for a dry run.
+        changed:
+          type: integer
+          title: Changed
+          description: Tickets changed (or that would change).
+        mapping:
+          additionalProperties:
+            anyOf:
+            - type: string
+            - type: 'null'
+          type: object
+          title: Mapping
+        summary:
+          type: string
+          title: Summary
+        rows:
+          items:
+            $ref: '#/components/schemas/ImportRowOut'
+          type: array
+          title: Rows
+      type: object
+      required:
+      - applied
+      - changed
+      - mapping
+      - summary
+      - rows
+      title: ImportReport
+    ImportRequest:
+      properties:
+        csv:
+          type: string
+          maxLength: 5000000
+          minLength: 1
+          title: Csv
+          description: The sheet as CSV (or TSV) text, header row first.
+        mapping:
+          anyOf:
+          - additionalProperties:
+              anyOf:
+              - type: string
+              - type: 'null'
+            type: object
+          - type: 'null'
+          title: Mapping
+          description: Column header → field (title, description, tags, target_platforms, tiktok_text, instagram_text,
+            bluesky_text, threads_text, facebook_text, hashtags, transcript, topic, keywords, creator, content_type,
+            original_publish_date, authorization, thumbnail_path) or a match key (match_url, match_id, match_file,
+            match_name); null ignores the column. Omit to let Reelay guess from the headers.
+        overwrite:
+          type: boolean
+          title: Overwrite
+          description: 'false: only fill empty fields. true: replace what''s there.'
+          default: false
+      additionalProperties: false
+      type: object
+      required:
+      - csv
+      title: ImportRequest
+    ImportRowOut:
+      properties:
+        row:
+          type: integer
+          title: Row
+          description: Sheet row number (the header is row 1).
+        video_id:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Video Id
+        matched_by:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Matched By
+        fields:
+          items:
+            type: string
+          type: array
+          title: Fields
+          description: Fields this row sets.
+        kept:
+          items:
+            type: string
+          type: array
+          title: Kept
+          description: Fields left as they were (already filled, or already scheduled).
+        problems:
+          items:
+            type: string
+          type: array
+          title: Problems
+          description: Why the row is skipped, if it is.
+      type: object
+      required:
+      - row
+      - fields
+      - kept
+      - problems
+      title: ImportRowOut
     ManualPostCreate:
       properties:
         platform:
@@ -1246,6 +1836,23 @@ components:
       - platform
       - mine
       title: SourceOut
+    SourcePatch:
+      properties:
+        name:
+          anyOf:
+          - type: string
+            maxLength: 80
+            minLength: 1
+          - type: 'null'
+          title: Name
+        mine:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Mine
+      additionalProperties: false
+      type: object
+      title: SourcePatch
     SourcesResponse:
       properties:
         profile:
@@ -1341,6 +1948,16 @@ components:
           description: Id of the video this one was cut from; becomes null if that video is deleted.
       type: object
       title: TicketFields
+    TranscriptRequest:
+      properties:
+        replace:
+          type: boolean
+          title: Replace
+          description: Replace an existing transcript.
+          default: false
+      additionalProperties: false
+      type: object
+      title: TranscriptRequest
     Video:
       properties:
         id:
@@ -1465,6 +2082,11 @@ components:
           $ref: '#/components/schemas/TicketFields'
         provenance:
           $ref: '#/components/schemas/Provenance'
+        archived:
+          type: boolean
+          title: Archived
+          description: Archived videos are hidden from the board (files and history kept).
+          default: false
         publishing_history:
           additionalProperties:
             items:
@@ -1511,6 +2133,20 @@ components:
       - provenance
       - publishing_history
       title: Video
+    VideoIds:
+      properties:
+        video_ids:
+          items:
+            type: integer
+          type: array
+          maxItems: 500
+          minItems: 1
+          title: Video Ids
+      additionalProperties: false
+      type: object
+      required:
+      - video_ids
+      title: VideoIds
     VideoPatch:
       properties:
         title:

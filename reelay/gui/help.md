@@ -63,6 +63,25 @@ Click a card to open its ticket:
 - **History.** Every saved change (what changed, when, and whether you, the app or an AI agent made it), newest first.
 - **Where it's been posted.** One list per platform of every post, automatic or by hand. After you post by hand, click **Mark as Posted** so the ticket knows.
 
+### Filling tickets quickly
+
+- **Fill Empty from Original Post** (above the captions) fills a ticket's empty boxes from the original caption: the title, description, tags, every platform's caption and the hashtags. Each one stays within that platform's limits. Anything you've already written stays as it is, and nothing is shortened: if the caption is too long for a platform, that box stays empty for you.
+- **Get from Original Post** (next to Transcript) uses the original post's captions as the transcript, when the platform has them. TikTok and YouTube often do.
+- **Import Sheet…** (top of the Board) fills many tickets from a spreadsheet: a CSV file, or a Google Sheets link shared as "Anyone with the link".
+  - **One row per video.** Rows are matched to videos by the video's link, its ID, the file name or your name for it.
+  - **Columns map automatically** by their headers (for example *YouTube Title*, *TikTok Caption*, *Hashtags*, *Topic*), and you can change any of them.
+  - **Preview first.** You see every row before anything changes.
+  - **Safe by default.** Empty cells never erase anything, only empty fields are filled unless you tick *Replace what's already filled in*, and rows with a problem (like a caption over a limit) are skipped and explained.
+  - **All at once.** The import lands in one go, or not at all.
+
+### Working on many tickets
+
+- **⌘-click or Shift-click** cards in a column to select several. The side panel then sets the same permission, type, topic, keywords, creator or hashtags on all of them at once, fills them from their original posts, gets their transcripts, or archives them.
+- **Right-click a card** for the same actions on one card or the selection.
+- **Show: …** (top of the Board) narrows the Board to tickets that are ready, not ready, or blocked on a particular platform. Each column shows how many of its cards are visible ("3 of 12").
+- **Archive** hides videos from the Board and the Download page without deleting anything. **Archived…** brings them back.
+- **Change History…** lists every saved change. Highlight one and click **Restore the Earlier Value** to undo it. The undo is saved as a new change, so nothing is ever lost.
+
 ### Scheduling
 
 Tick the platforms under **Post automatically to**, choose who can see it and when, then click **Schedule**. If a ticked platform isn't ready, Reelay shows the problems and asks before going ahead. Copying and pasting is never blocked.

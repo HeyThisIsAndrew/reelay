@@ -1,8 +1,8 @@
-# Reelay v0.6.0: implementation report and local test handoff
+# Reelay v0.7.0: implementation report and local test handoff
 
 **For:** Meta Muse  **From:** Claude Code  **Date:** 2026-10-07
-**Repo:** `/Users/thisisandrew/Documents/UpSkill_Projects/Content_Downloader`, single branch `main` (direct commits, no open PRs), tag `v0.6.0`
-**Installed app:** `/Applications/Reelay.app`, v0.6.0, running now
+**Repo:** `/Users/thisisandrew/Documents/UpSkill_Projects/Content_Downloader`, single branch `main` (direct commits, no open PRs), tags `v0.6.0` and `v0.7.0`
+**Installed app:** `/Applications/Reelay.app`, v0.7.0, running now
 
 ---
 
@@ -11,17 +11,42 @@
 | Item | State |
 |---|---|
 | Branches | **One branch: `main`.** It has two new commits: `13b0bb6` (UX clarity pass) and `85ae4e9` (Ticket v2). The `v0.6.0` tag is pushed. |
-| Automated tests on `main` | **193 passed**, 2 skipped (the opt-in live TikTok tests) |
-| API smoke test (`scripts/smoke_test_api.py`) | **37/37 checks passed** against an isolated server |
+| Automated tests on `main` | **215 passed**, 2 skipped (the opt-in live TikTok tests) |
+| API smoke test (`scripts/smoke_test_api.py`) | **47/47 checks passed** against an isolated server |
 | Packaged-app self-test | Passed: 8 checks, including the new offline Help page check |
 | Local install | v0.6.0 built from `main`, installed and launched. The log shows no errors. |
-| Agent API on the real app | **Waiting on a macOS Keychain prompt.** The rebuilt app has a new ad-hoc signature, so macOS asks once more before Reelay may read `agent_api_token`. After the user clicks **Always Allow**, the API comes up on `127.0.0.1:8471`. |
-| Real database | Migrated **v4 → v5**; a backup is at `~/Library/Application Support/Reelay/reelay-backup-v4-2026-10-07.db`.<br>• **Default profile:** **My Channel** (id 1, empty) is now the active one.<br>• **"Lydia Livingood"** (id 2) is unchanged: 174 videos in Backlog, provenance backfilled, and the saved source "Lydia's TikTok".<br>• No posts, dispatches or connected accounts. |
+| Agent API on the real app | v0.6.0 served it on 127.0.0.1:8471 once the prompt was allowed. v0.7.0 is a new build, so it's **waiting on the same macOS Keychain prompt again.** The rebuilt app has a new ad-hoc signature, so macOS asks once more before Reelay may read `agent_api_token`. After the user clicks **Always Allow**, the API comes up on `127.0.0.1:8471`. |
+| Real database | Migrated **v4 → v5 → v6**. Backups are `reelay-backup-v4-2026-10-07.db` and `reelay-backup-v5-2026-10-07.db` in `~/Library/Application Support/Reelay/`.<br>• **Default profile:** **My Channel** (id 1, empty) is now the active one.<br>• **"Lydia Livingood"** (id 2) is unchanged: 174 videos in Backlog, provenance backfilled, and the saved source "Lydia's TikTok".<br>• No posts, dispatches or connected accounts. |
 | Publishing flags | Bluesky, Threads and Facebook are off. YouTube is always on; no channel is connected. |
 
 ---
 
 ## 2. What's in the build
+
+**v0.7.0: the workflow items Meta Muse approved, plus small improvements**
+- **Spreadsheet import (the priority item).**
+  - **Where:** Board → **Import Sheet…** (also File → Import from Spreadsheet…, ⌘⇧I), and `POST /v1/import`.
+  - **Input:** a CSV/TSV file, or a Google Sheets link shared as "Anyone with the link". The link is turned into its CSV export URL.
+  - **Matching:** each row is matched to a video by link, video ID, file name or custom name.
+  - **Mapping:** columns map automatically from their headers (about 70 aliases) and can be changed.
+  - **Preview first:** shows each row's video, the fields it would set, the fields it keeps, and why a row is skipped.
+  - **Rules:**
+    - empty cells never clear anything;
+    - fill-only by default, with an opt-in "replace";
+    - over-limit or invalid rows are skipped whole, never truncated;
+    - copy of scheduled or published videos is kept.
+  - **One transaction**, with each change logged with origin `import` (`api` through the API). The API defaults to `dry_run=true`.
+- **Fill from the original post.** Empty copy blocks are filled from the original caption, within each platform's limits. A block that doesn't fit stays empty. It's in the ticket, the right-click menu and the bulk panel; the API is `POST /v1/videos/fill-from-original`.
+- **Transcripts from captions.** yt-dlp fetches creator subtitles first, then automatic captions, and the WebVTT is cleaned into plain text. It's in the ticket, the menu and the bulk panel; the API is `POST /v1/videos/{id}/transcript`, which returns `422 no_transcript` when a post has no captions. There's no local speech-to-text.
+- **Bulk edit.** ⌘- or Shift-click cards in a column, and the side panel sets permission, type, topic, keywords, creator or hashtags on all of them in one transaction. The API is `POST /v1/videos/bulk-update`, all or nothing.
+- **Archive** (schema v6, `archived_at`). Hides videos from the Board and the Download page, and they're never re-imported from the folder. Files, tickets and history are kept, and **Archived…** restores them. The API has `…/archive`, `…/unarchive` and `GET /v1/board?archived=true`. Scheduled videos can't be archived (409).
+- **Undo from history.** **Restore the Earlier Value** in Change History, or `POST …/revisions/{id}/restore`. The restore is itself logged.
+- **Ready filter.** Show: All / Ready / Not ready / Blocking <platform>, with "3 of 12" column counts.
+- **Sources API:** `PATCH /v1/sources/{id}` (name, mine) and `DELETE /v1/sources/{id}` (204).
+- **Small improvements:**
+  - background-task errors now read in plain words;
+  - import problems use the sheet's labels, not internal field names;
+  - unsaved suggested drafts count as empty, so a sheet fills them.
 
 **v0.6.0, Ticket v2 (`85ae4e9`)**
 - **Schema v5 (additive).** New nullable per-video fields:
@@ -92,7 +117,18 @@ All commands run from the repo root.
 ```bash
 .venv/bin/python -m pytest -q
 ```
-Expected: `193 passed, 2 skipped`. The new files:
+Expected: `215 passed, 2 skipped`. `tests/test_workflow.py` (22 tests) covers v0.7.0:
+- import: reading, mapping, matching, fill-only versus overwrite, invalid rows, scheduled copy, and the one-transaction rollback;
+- Google Sheets links;
+- fill-from-original and its limits;
+- captions to text and fetching transcripts with a fake yt-dlp;
+- bulk all-or-nothing;
+- archive (including the Download page not re-importing archived videos);
+- restore;
+- every new API endpoint;
+- GUI: the filter, multi-select bulk edit, the import dialog, the Archived dialog, and restore from history.
+
+The v0.6.0 files:
 - `tests/test_ticket_v2.py` (30 tests):
   - the v4→v5 migration, and that grandfathered cards keep dispatching;
   - readiness: the ready, not-ready and flag-off cases;
@@ -118,7 +154,7 @@ Expected: `193 passed, 2 skipped`. The new files:
 ```bash
 .venv/bin/python scripts/smoke_test_api.py
 ```
-Expected: `37/37 checks passed`. New in v0.6.0:
+Expected: `47/47 checks passed`. New in v0.7.0: source PATCH/DELETE, an import dry run and then the real import, fill-from-original, bulk update, archive/unarchive with `?archived=true`, and restoring a revision. New in v0.6.0:
 - the board's `ready`, `readiness` (flag-off platforms come back `not_checked`), `ticket` and `provenance`;
 - PATCHing ticket fields, and a 422 for `imported_at`;
 - revisions with `origin: "api"`;
@@ -148,7 +184,12 @@ Expected: 8 PASS lines (including `Help page`) and `Self-test passed`.
 | G10 | **Accounts** | **Set Up YouTube…** opens a 5-step guide. **Connect Bluesky…**, **Connect Threads…** and **Connect Facebook…** open guides. TikTok and Instagram say "Copy and paste" and explain why. |
 | G11 | **Help** (bottom of the sidebar) | The full guide, offline. |
 
-⚠️ G6–G9 write to the real database (Lydia's tickets). They're normal user flows; undo or skip them as the user prefers.
+| G12 | Board → **Show: Not ready** | Only blocking tickets remain; the counts read "n of N". |
+| G13 | ⌘-click both Backlog cards | The side panel turns into "2 tickets selected" with Quick fill and "Set on every selected ticket". |
+| G14 | **Import Sheet…** → choose a CSV with a `Video ID` column | The preview lists each row; the button says "Import N Tickets". Cancel to write nothing. |
+| G15 | Right-click a card | Fill, Get Transcript, Mark as Posted…, Change History…, Archive. |
+
+⚠️ G6–G9 and G13–G15 (if confirmed) write to the real database (Lydia's tickets). They're normal user flows; undo or skip them as the user prefers.
 
 ### 5.5 Read-only checks against the real app (after the Keychain prompt is allowed)
 ```bash
@@ -182,6 +223,10 @@ Expected:
 | Schedule an already scheduled or published platform | 409 | `already_scheduled` |
 | Mark as posted: unknown platform / future time / non-http URL | 422 | `invalid_request` / `invalid_time` / `invalid_post` |
 | POST /v1/sources with an unsupported URL | 422 | `invalid_source` |
+| Import CSV unreadable or empty / unknown mapping field | 422 | `invalid_sheet` / `invalid_request` |
+| Bulk update where any video can't take a value | 422 | `invalid_post` (nothing written) |
+| Transcript: the post has no captions / one exists and replace is false | 422 | `no_transcript` / `invalid_post` |
+| Archive a scheduled or uploading video | 409 | `locked` |
 
 ---
 
@@ -192,4 +237,9 @@ Expected:
 3. **Readiness covers copy and media, not scheduling setup.** A connected account, a public URL and the schedule time are still checked at schedule time, as `invalid_post`.
 4. **Deleting a video** exists in the store (`delete_video`) but has no GUI or API action yet; `derived_from` nulling is tested at the store level.
 5. **TikTok, Instagram and Facebook copy limits** come from model knowledge and haven't been checked against current docs.
-6. **The app is ad-hoc signed**, so Keychain prompts return after every rebuild. Flags apply after a restart. Threads tokens aren't refreshed automatically.
+6. **Transcripts depend on the platform publishing captions**: there's no local speech-to-text. A Google Sheet must be link-shared; private sheets have to be downloaded as CSV.
+7. **The app is ad-hoc signed**, so Keychain prompts return after every rebuild. Flags apply after a restart. Threads tokens aren't refreshed automatically.
+
+## 8. Next
+
+Meta Muse's next prompt: the **repurpose engine** (transcript → platform packages in the creator's voice). The ticket now has what it needs as input: a transcript (fetched from captions or imported), the original caption, topic and keywords, per-platform limits, readiness checks to validate output, and a revision log so generated copy is attributable and undoable.

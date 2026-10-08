@@ -378,6 +378,157 @@ class Pipeline:
         return self.store.add_manual_post(ManualPost(video_row=row_id, platform=platform, posted_at=utc_iso(when),
                                                      url=url, note=(note or "").strip()[:500]))
 
+    # ================================================================ archive, bulk, restore
+    def _active(self, row_id: int) -> bool:
+        post = self.store.get_post(row_id)
+        return (any(d.status in DispatchStatus.ACTIVE for d in self.store.dispatches_for(row_id))
+                or bool(post and post.status == PostStatus.UPLOADING))
+
+    def archive(self, row_ids: list[int], archived: bool = True) -> None:
+        """Hide videos from the board and Download list, or bring them back. Files,
+        tickets and history are kept. Videos waiting to post can't be archived."""
+        rows = [self._row(r) for r in row_ids]
+        busy = [r.id for r in rows if archived and self._active(r.id)]
+        if busy:
+            raise PipelineError("Videos that are scheduled or uploading can't be archived; cancel them first.",
+                                "locked", [f"Video {r}: scheduled or uploading." for r in busy])
+        self.store.set_archived([r.id for r in rows], archived)
+
+    def archived(self, profile_id: int) -> list[VideoRow]:
+        return self.store.load_videos(profile_id, archived=True)
+
+    def _plan_edit(self, row: VideoRow, changes: dict) -> tuple[dict, Post | None, list[str]]:
+        """Validate one ticket's edit: (ticket changes, edited post or None, problems)."""
+        unknown = sorted(set(changes) - set(EDITABLE_FIELDS))
+        if unknown:
+            return {}, None, [f"These fields can't be edited: {', '.join(unknown)}."]
+        post_changes = {k: v for k, v in changes.items() if k in POST_FIELDS}
+        ticket_changes = {k: v for k, v in changes.items() if k in EDITABLE_TICKET_FIELDS}
+        problems = []
+        if post_changes and self._copy_locked(row):
+            problems.append("Already scheduled or published; its copy can't change.")
+        problems += metadata_problems(post_changes) + self.ticket_problems(row, ticket_changes)
+        if problems:
+            return {}, None, problems
+        if "tags" in post_changes:
+            post_changes["tags"] = [t.strip().lstrip("#") for t in post_changes["tags"]]
+        if "target_platforms" in post_changes:
+            post_changes["target_platforms"] = list(dict.fromkeys(post_changes["target_platforms"]))
+        post = replace(self.post_or_default(row)[0], **post_changes) if post_changes else None
+        return normalize_ticket(ticket_changes), post, []
+
+    def _copy_locked(self, row: VideoRow) -> bool:
+        return row.stage == Stage.PUBLISHED or any(
+            d.status in DispatchStatus.ACTIVE + (DispatchStatus.PUBLISHED,) for d in self.store.dispatches_for(row.id))
+
+    def bulk_update(self, row_ids: list[int], changes: dict) -> int:
+        """The same edit on many tickets, all or nothing, each change logged.
+        Returns how many tickets changed."""
+        if not row_ids or not changes:
+            raise PipelineError("Choose some videos and at least one field.", "invalid_request")
+        edits, problems = [], []
+        for row_id in dict.fromkeys(row_ids):
+            row = self._row(row_id)
+            ticket_changes, post, row_problems = self._plan_edit(row, dict(changes))
+            problems += [f"{short_title(row.item.hook, 40)}: {p}" for p in row_problems]
+            edits.append((row_id, ticket_changes, post))
+        if problems:
+            raise PipelineError("Nothing was changed.", "invalid_post", problems)
+        self.store.update_many(edits)
+        return len(edits)
+
+    def fill_from_original(self, row_ids: list[int]) -> dict[int, list[str]]:
+        """Fill each ticket's EMPTY copy (and creator) from its original post's
+        caption, within every platform's limits. One transaction; logged.
+        Copy of scheduled or published videos is left alone. Returns the fields
+        filled per video."""
+        from .autofill import suggest
+        edits, filled = [], {}
+        for row_id in dict.fromkeys(row_ids):
+            row = self._row(row_id)
+            post, _saved = self.post_or_default(row)
+            post_changes, ticket_changes = suggest(post, row.item, row.ticket)
+            if self._copy_locked(row):
+                post_changes = {}
+            if post_changes or ticket_changes or not _saved:
+                edits.append((row_id, ticket_changes, replace(post, **post_changes)))
+                filled[row_id] = [*post_changes, *ticket_changes]
+        if edits:
+            self.store.update_many(edits)
+        return filled
+
+    def restore_revision(self, row_id: int, revision_id: int) -> None:
+        """Put a field back to the value it had before a logged change (a new,
+        logged change itself)."""
+        import json as _json
+        revision = next((r for r in self.store.revisions(row_id, limit=100_000) if r.id == revision_id), None)
+        if revision is None:
+            raise PipelineError("That change isn't in this ticket's history.", "not_found")
+        value = revision.old_value
+        if revision.field == "archived":
+            self.archive([row_id], archived=value is not None)
+            return
+        if revision.field in ("tags", "target_platforms"):
+            value = _json.loads(value) if value else []
+            if revision.field == "target_platforms" and not value:
+                raise PipelineError("A ticket needs at least one platform; nothing was changed.", "invalid_post")
+        elif revision.field == "derived_from":
+            value = int(value) if value else None
+        elif revision.field in ("title", "description"):
+            value = value or ""
+        self.update_metadata(row_id, {revision.field: value})
+
+    # ================================================================ transcripts & sheets
+    def fetch_transcript(self, row_id: int, ydl_opts: dict, replace_existing: bool = False, fetch=None) -> str:
+        """Get the transcript from the original post's captions (network) and
+        save it. Raises PipelineError. Keeps an existing transcript unless
+        replace_existing."""
+        from .transcripts import TranscriptError, fetch_transcript
+        row = self._row(row_id)
+        if row.ticket.transcript and not replace_existing:
+            raise PipelineError("This ticket already has a transcript.", "invalid_post")
+        url = row.ticket.source_url or row.item.url
+        if not url:
+            raise PipelineError("This video has no original link to get captions from.", "invalid_post")
+        try:
+            text, _track = (fetch or fetch_transcript)(url, ydl_opts)
+        except TranscriptError as exc:
+            raise PipelineError(str(exc), "no_transcript") from None
+        self.update_ticket(row_id, {"transcript": text})
+        return text
+
+    def plan_sheet(self, profile_id: int, headers: list[str], rows: list[list[str]],
+                   mapping: dict[str, str | None], overwrite: bool = False):
+        from .sheet_import import plan_import
+        self._profile(profile_id)
+        videos = self.store.load_videos(profile_id)
+        # Unsaved suggestions (from the caption) count as empty: the sheet wins over them.
+        posts = {v.id: self.store.get_post(v.id) or Post(video_row=v.id, target_platforms=[]) for v in videos}
+        locked = {v.id for v in videos if self._copy_locked(v)}
+
+        from .sheet_import import LABELS
+
+        def validate(video, post_changes, ticket_changes):
+            problems = metadata_problems(post_changes) + self.ticket_problems(video, ticket_changes)
+            for key, label in LABELS.items():   # people see the sheet's words, not field names
+                problems = [p.replace(f"{key}: ", f"{label}: ", 1) if p.startswith(f"{key}: ") else p
+                            for p in problems]
+            return problems
+        return plan_import(headers, rows, mapping, videos, posts, locked, overwrite, validate)
+
+    def apply_sheet(self, plan) -> int:
+        """Write a planned import: every changing row in one transaction."""
+        edits = []
+        for row in plan.changing:
+            video = self._row(row.video_id)
+            post = replace(self.post_or_default(video)[0], **row.post_changes) if row.post_changes else None
+            if post is not None and "tags" in row.post_changes:
+                post.tags = [t.strip().lstrip("#") for t in post.tags]
+            edits.append((row.video_id, normalize_ticket(row.ticket_changes), post))
+        if edits:
+            self.store.update_many(edits)
+        return len(edits)
+
     def unmark_posted(self, manual_id: int) -> None:
         self.store.delete_manual_post(manual_id)
 
@@ -811,7 +962,7 @@ class Pipeline:
         try:
             library.save(item)
             items = []
-            for row in self.store.load_videos(profile.id):
+            for row in self.store.load_videos(profile.id, archived=None):   # the manifest lists every file
                 row.item.refresh_download_status(profile.output_folder)
                 if Path(row.item.folder or profile.output_folder) == folder:
                     items.append(row.item)

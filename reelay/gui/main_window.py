@@ -160,6 +160,10 @@ class MainWindow(QMainWindow):
         self._action(f, "Choose Output Folder…", self.download.choose_folder, QKeySequence.StandardKey.Open)
         self._action(f, "Open Output Folder", self.download.open_output_folder)
         self._action(f, "Open Video List (manifest.md)", self.download.open_manifest)
+        f.addSeparator()
+        self._action(f, "Import from Spreadsheet…", lambda: (self.go("board"), self.board.open_import()),
+                     "Ctrl+Shift+I")
+        self._action(f, "Archived Videos…", lambda: (self.go("board"), self.board.open_archived()))
 
         v = mb.addMenu("View")
         for n, (key, label) in enumerate(PAGES, 1):

@@ -5,9 +5,9 @@ All sign-ins here use fakes; nothing talks to Google, Bluesky or Meta."""
 from __future__ import annotations
 
 import pytest
-from PySide6.QtCore import QEvent, QPoint, Qt
+from PySide6.QtCore import QEvent, QPoint
 from PySide6.QtGui import QHelpEvent
-from PySide6.QtWidgets import QAbstractButton, QApplication, QMessageBox
+from PySide6.QtWidgets import QApplication, QMessageBox
 
 from reelay.models import VideoItem
 from reelay.naming import DEFAULT_TEMPLATE

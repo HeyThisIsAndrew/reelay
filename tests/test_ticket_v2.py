@@ -61,10 +61,11 @@ def _v4_database(tmp_path, monkeypatch):
 
 
 def test_v4_to_v5_migration_keeps_everything_and_adds_provenance(tmp_path, monkeypatch):
-    from reelay.store import Store
+    from reelay.store import SCHEMA_VERSION, Store
     path, _profile, backlog, scheduled = _v4_database(tmp_path, monkeypatch)
     store = Store(path)
-    assert store.conn.execute("PRAGMA user_version").fetchone()[0] == 5
+    assert store.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION >= 5
+    assert store.get_video(backlog).archived_at is None    # v6: nothing is archived by the upgrade
     a, b = store.get_video(backlog), store.get_video(scheduled)
     assert (a.stage, b.stage) == ("backlog", "scheduled") and a.item.description == "caption #growth"
     assert store.get_post(scheduled).title == "Old title" and store.dispatches_for(scheduled)[0].status == "pending"

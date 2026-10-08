@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""End-to-end smoke test of the Reelay agent API (v0.6.0), fully isolated.
+"""End-to-end smoke test of the Reelay agent API (v0.7.0), fully isolated.
 
 Seeds a throwaway data folder (REELAY_HOME) with videos from a library folder
 (default: lydia_archive/), starts `python -m reelay.api` on a free port with a
@@ -191,6 +191,42 @@ def main() -> int:
             status, body = call(base, "GET", "/v1/sources?profile=Lydia%20Livingood")
             check(status == 200 and len(body["sources"]) == 2, "GET /v1/sources lists both as stored",
                   f"{status} {body}")
+            dup = body["sources"][-1]["id"]
+            status, body = call(base, "PATCH", f"/v1/sources/{dup}", {"name": "Lydia's TikTok (copy)", "mine": True})
+            check(status == 200 and body.get("name") == "Lydia's TikTok (copy)" and body.get("mine"),
+                  "PATCH /v1/sources renames and marks mine", f"{status} {body}")
+            req = urllib.request.Request(f"{base}/v1/sources/{dup}", method="DELETE",
+                                         headers={"Authorization": f"Bearer {TOKEN}"})
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                check(resp.status == 204, "DELETE /v1/sources -> 204", str(resp.status))
+
+            # ---- v0.7.0: sheet import, fill, bulk, archive, undo
+            others = [x["id"] for x in board["videos"] if x["id"] != vid]
+            sheet = "Video ID,Topic,Hashtags\n" + "\n".join(
+                f"{x['source']['url'].rstrip('/').rsplit('/', 1)[-1]},smoke topic,#smoke" for x in board["videos"])
+            status, body = call(base, "POST", "/v1/import?profile=Lydia%20Livingood", {"csv": sheet})
+            check(status == 200 and body["applied"] is False and body["changed"] >= 1,
+                  "import dry run reports changes and writes nothing", f"{status} {body}")
+            status, body = call(base, "POST", "/v1/import?profile=Lydia%20Livingood&dry_run=false", {"csv": sheet})
+            check(status == 200 and body["applied"] is True, "import applies", f"{status} {body}")
+            if others:
+                status, body = call(base, "POST", "/v1/videos/fill-from-original", {"video_ids": others})
+                check(status == 200, "fill-from-original", f"{status} {body}")
+            status, body = call(base, "POST", "/v1/videos/bulk-update",
+                                {"video_ids": [x["id"] for x in board["videos"]], "changes": {"content_type": "short"}})
+            check(status == 200 and body.get("changed") == len(board["videos"]), "bulk update", f"{status} {body}")
+            status, body = call(base, "POST", f"/v1/videos/{vid}/archive")
+            check(status == 200 and body.get("archived") is True, "archive", f"{status} {body}")
+            status, body = call(base, "GET", "/v1/board?profile=Lydia%20Livingood&archived=true")
+            check(status == 200 and [x["id"] for x in body["videos"]] == [vid], "board?archived=true lists it",
+                  f"{status} {body}")
+            status, body = call(base, "POST", f"/v1/videos/{vid}/unarchive")
+            check(status == 200 and body.get("archived") is False, "unarchive", f"{status} {body}")
+            status, revs = call(base, "GET", f"/v1/videos/{vid}/revisions")
+            topic = next(r for r in revs["revisions"] if r["field"] == "topic" and r["origin"] == "api")
+            status, body = call(base, "POST", f"/v1/videos/{vid}/revisions/{topic['id']}/restore")
+            check(status == 200 and body["ticket"]["topic"] == topic["old_value"], "restore a revision",
+                  f"{status} {body.get('ticket')}")
 
             status, body = call(base, "GET", "/v1/platforms?profile=Lydia%20Livingood")
             info = {p["platform"]: p for p in body.get("platforms", [])}

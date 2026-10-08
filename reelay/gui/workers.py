@@ -169,11 +169,14 @@ class CallWorker(QThread):
 
     def run(self) -> None:
         import requests
+        from ..pipeline import PipelineError
         from ..publishers.base import PublishError
+        from ..sheet_import import SheetError
+        from ..transcripts import TranscriptError
         from ..youtube import YouTubeError
         try:
             result = self.fn(*self.args, **self.kwargs)
-        except (YouTubeError, PublishError) as exc:  # already plain-language and secret-free
+        except (YouTubeError, PublishError, SheetError, TranscriptError, PipelineError) as exc:  # plain, secret-free
             self.failed.emit(str(exc))
         except requests.RequestException as exc:
             self.failed.emit(f"Network problem: {exc}")

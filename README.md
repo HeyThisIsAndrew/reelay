@@ -61,6 +61,16 @@ It's a native desktop app for macOS (Windows builds included) in a monotone Ligh
 - **Ticket details:** transcript, cover image, type (short, long-form, clip, other), topic, keywords, creator, first-published date, "cut from" (another video; cleared if that video is deleted), and provenance. Each field saves when you leave it.
 - **Change history.** Every saved change is logged with the time, who made it (the app or an AI agent), the field, and the old and new values, newest first. Typing isn't logged; saves are. The log is written in the same database transaction as the change, so if logging fails, nothing is saved.
 - **Where it's been posted:** one list per platform combining Reelay's automatic posts and your manual ones. Click **Mark as Posted…** after posting by hand.
+- **Import Sheet…** fills tickets from a spreadsheet (a CSV file, or a Google Sheets link shared as "Anyone with the link").
+  - Rows are matched to videos by link, video ID, file name or your name.
+  - Columns are mapped from their headers, and you can change the mapping.
+  - Every row is previewed before anything is written. Empty cells never erase anything, only empty fields are filled unless you choose to replace, and invalid rows are skipped with the reason.
+  - The whole import is one transaction, logged as "Sheet import".
+- **Fill from Original Post** fills a ticket's empty copy from the original caption, within every platform's limits; text that doesn't fit is left empty, never shortened. **Get from Original Post** turns the post's captions into the transcript.
+- **Bulk edit:** ⌘/Shift-click cards to set permission, type, topic, keywords, creator or hashtags on all of them in one transaction, or to fill, fetch transcripts or archive them together. Right-click a card for the same actions.
+- **Show: Ready / Not ready / Blocking <platform>** filters the Board.
+- **Archive** hides videos without deleting anything; **Archived…** brings them back.
+- **Change History** can restore any earlier value. The restore is logged as a new change.
 - **Post automatically to** sends the video to YouTube (resumable, with progress) with a `publishAt` time, so YouTube publishes it even when Reelay is closed. Only platforms with automatic posting turned on are offered.
 - **Check YouTube for Updates** moves cards to Published once they go live.
 
@@ -178,6 +188,13 @@ For a stable address, create a named tunnel in the Cloudflare dashboard. Every `
 | `GET /v1/board?profile=…&stage=…&limit=…&offset=…` | A profile's board in order. Each video has:<br>• its copy: title, description, tags, target platforms, overrides;<br>• the channel, visibility, schedule and file path;<br>• per-platform status, and the original caption and stats;<br>• **`ready`** and **`readiness`** (a per-platform checklist with `state`: `ready`, `not_ready` or `not_checked`);<br>• **`ticket`** fields and **`provenance`**;<br>• **`publishing_history`** (automatic and manual posts per platform).<br>`profile` is the sidebar name (not case-sensitive). |
 | `PATCH /v1/videos/{id}` | Partial edit of the ticket. Two kinds of field:<br>• **Copy:** `title`, `description`, `tags`, `target_platforms`, the five `*_text` fields and `hashtags`. Locked once the video is scheduled or published.<br>• **Ticket fields** (editable any time): `transcript`, `thumbnail_path`, `content_type`, `topic`, `keywords`, `creator`, `original_publish_date`, `source_platform`, `source_url`, `authorization` and `derived_from`.<br>Everything is checked before anything is saved. Over-limit text is rejected, never cut short. Each change is logged as a revision. |
 | `POST /v1/videos/{id}/schedule?force=…` | Schedules automatic posting through the same pipeline as the Board's button. Optional `scheduled_at` (ISO 8601 with a timezone, at least 10 minutes ahead) and `platforms` (each must be enabled). Returns the queued jobs and `manual_platforms`. If a platform isn't ready it returns `422 ticket_not_ready` with the problems; `force=true` schedules anyway. |
+| `POST /v1/import?profile=…&dry_run=true` | Imports a sheet: `{"csv": "…", "mapping": {header: field} (optional, guessed from headers), "overwrite": false}`. Returns a per-row report (`video_id`, `matched_by`, `fields`, `kept`, `problems`). It's a dry run unless `dry_run=false`; then every changing row is written in one transaction. |
+| `POST /v1/videos/bulk-update` | `{"video_ids": […], "changes": {…same fields as PATCH…}}`. All or nothing; returns `{"changed": n}`. |
+| `POST /v1/videos/fill-from-original` | `{"video_ids": […]}`. Fills empty copy from the original captions, within limits. Returns the fields filled per video. |
+| `POST /v1/videos/{id}/transcript` | Gets the transcript from the original post's captions (network). `{"replace": false}`. `422 no_transcript` if the post has none. |
+| `POST /v1/videos/{id}/archive`, `…/unarchive` | Hides or restores a video. `GET /v1/board?archived=true` lists archived ones. `409` while it's scheduled or uploading. |
+| `POST /v1/videos/{id}/revisions/{revision_id}/restore` | Puts a field back to its value before that change (logged as a new change). |
+| `PATCH /v1/sources/{id}`, `DELETE /v1/sources/{id}` | Rename a saved source or mark it as yours; remove it (`204`). Connected channels are managed in the app. |
 | `GET /v1/videos/{id}/revisions` | The ticket's change log, newest first: `at`, `origin` (`local` = the app, `api` = an agent), `field`, `old_value` and `new_value`. |
 | `POST /v1/videos/{id}/manual-posts` | Records a post made by hand: `{"platform": "tiktok", "posted_at": "…" (optional, not in the future), "url": "…", "note": "…"}`. Returns `201`. It doesn't post anything or move the card. |
 | `GET /v1/sources?profile=…` | The profile's download sources: connected YouTube channels (`kind: "account"`, with an `account` reference) and saved profile links (`kind: "saved"`, with `url`, `mine`, `last_fetched_at`). Duplicates are listed as stored. |
@@ -323,10 +340,10 @@ Secrets are only ever in the system keychain (macOS Keychain or Windows Credenti
 ## Tests
 
 ```bash
-python -m pytest                              # 193 tests: engine, database + migrations, pipeline, readiness,
+python -m pytest                              # 215 tests: engine, database + migrations, pipeline, readiness,
                                               #   agent API + contract, dispatcher, platform publishers,
                                               #   YouTube client, headless GUI (incl. setup guides)
-python scripts/smoke_test_api.py              # 37 end-to-end API checks in a throwaway data folder
+python scripts/smoke_test_api.py              # 47 end-to-end API checks in a throwaway data folder
 python -m pytest --run-network -m network     # optional live checks against TikTok
 python run_app.py --self-test                 # environment check (also works on packaged builds)
 ```

@@ -29,7 +29,7 @@ import uvicorn
 from fastapi import Depends, FastAPI, Query, Request, Security
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -66,6 +66,7 @@ STATUS_FOR_CODE = {
     "locked": 409, "already_scheduled": 409, "already_uploading": 409, "needs_upload": 409,
     "invalid_post": 422, "invalid_field": 422, "invalid_stage": 422, "invalid_time": 422,
     "invalid_platform": 422, "platform_disabled": 422, "invalid": 422, "ticket_not_ready": 422,
+    "invalid_request": 422, "no_transcript": 422,
 }
 
 
@@ -222,6 +223,7 @@ class Video(BaseModel):
     readiness: dict[PlatformName, PlatformReadinessOut] = Field(description="Checklist per target platform.")
     ticket: TicketFields
     provenance: Provenance
+    archived: bool = Field(False, description="Archived videos are hidden from the board (files and history kept).")
     publishing_history: dict[ManualPlatformName, list[HistoryItem]] = Field(
         description="What went where, when and how: automatic posts and manual ones, oldest first, per platform. "
                     "Platforms with no history are omitted.")
@@ -273,6 +275,72 @@ class VideoPatch(BaseModel):
     authorization: str | None = Field(None, max_length=200, description="e.g. \"Own content\", \"Managed account\".")
     derived_from: int | None = Field(None, description="Id of the video this one was cut from (same profile), or "
                                                        "null.")
+
+
+class BulkUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    video_ids: list[int] = Field(min_length=1, max_length=500)
+    changes: VideoPatch = Field(description="The same fields PATCH /v1/videos/{video_id} accepts.")
+
+
+class BulkResult(BaseModel):
+    changed: int = Field(description="Tickets updated. All or nothing: on any problem nothing is written (422).")
+
+
+class VideoIds(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    video_ids: list[int] = Field(min_length=1, max_length=500)
+
+
+class FillResult(BaseModel):
+    filled: dict[int, list[str]] = Field(description="Per video id, the fields filled from the original post. "
+                                                     "Videos with nothing to fill are left out.")
+
+
+class TranscriptRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    replace: bool = Field(False, description="Replace an existing transcript.")
+
+
+class ImportRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    csv: str = Field(min_length=1, max_length=5_000_000, description="The sheet as CSV (or TSV) text, header row "
+                                                                     "first.")
+    mapping: dict[str, str | None] | None = Field(
+        None, description="Column header → field (title, description, tags, target_platforms, tiktok_text, "
+                          "instagram_text, bluesky_text, threads_text, facebook_text, hashtags, transcript, topic, "
+                          "keywords, creator, content_type, original_publish_date, authorization, thumbnail_path) "
+                          "or a match key (match_url, match_id, match_file, match_name); null ignores the column. "
+                          "Omit to let Reelay guess from the headers.")
+    overwrite: bool = Field(False, description="false: only fill empty fields. true: replace what's there.")
+
+
+class ImportRowOut(BaseModel):
+    row: int = Field(description="Sheet row number (the header is row 1).")
+    video_id: int | None = None
+    matched_by: str | None = None
+    fields: list[str] = Field(description="Fields this row sets.")
+    kept: list[str] = Field(description="Fields left as they were (already filled, or already scheduled).")
+    problems: list[str] = Field(description="Why the row is skipped, if it is.")
+
+
+class ImportReport(BaseModel):
+    applied: bool = Field(description="false for a dry run.")
+    changed: int = Field(description="Tickets changed (or that would change).")
+    mapping: dict[str, str | None]
+    summary: str
+    rows: list[ImportRowOut]
+
+
+class SourcePatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = Field(None, min_length=1, max_length=80)
+    mine: bool | None = None
 
 
 class RevisionOut(BaseModel):
@@ -504,6 +572,7 @@ def create_app(store: Store, pipeline: Pipeline, accounts: AccountService, token
             provenance=Provenance(source_platform=row.ticket.source_platform, source_url=row.ticket.source_url,
                                   imported_at=parse_utc(row.ticket.imported_at),
                                   authorization=row.ticket.authorization),
+            archived=bool(row.archived_at),
             publishing_history={p: [to_history(e) for e in entries]
                                 for p, entries in pipeline.publishing_history(row.id).items()},
             source=SourceInfo(platform=item.platform, url=item.url, caption=item.description, hook=item.hook,
@@ -545,13 +614,17 @@ def create_app(store: Store, pipeline: Pipeline, accounts: AccountService, token
         stage: StageName | None = Query(None, description="Only this board column."),
         limit: int = Query(50, ge=1, le=200, description="Page size (1-200)."),
         offset: int = Query(0, ge=0, description="Videos to skip (from next_offset of the previous page)."),
+        archived: bool = Query(False, description="true lists archived videos instead."),
     ) -> BoardPage:
         """Videos in board order (Backlog → Staging → Scheduled → Published), with their post metadata, target
         platforms, per-platform status, and the original caption and stats. Videos fetched but not yet
-        downloaded aren't on the board."""
+        downloaded aren't on the board, and archived videos only appear with archived=true."""
         prof = find_profile(profile)
-        columns = pipeline.board(prof.id)
-        cards = [c for s in Stage.ALL if stage in (None, s) for c in columns[s]]
+        if archived:
+            cards = [pipeline.card(r.id) for r in pipeline.archived(prof.id) if stage in (None, r.stage)]
+        else:
+            columns = pipeline.board(prof.id)
+            cards = [c for s in Stage.ALL if stage in (None, s) for c in columns[s]]
         channels = {a.id: a for a in store.list_accounts(prof.id, YOUTUBE)}
         page = cards[offset:offset + limit]
         return BoardPage(profile=ProfileRef(id=prof.id, name=prof.name), stage=stage, total=len(cards),
@@ -636,6 +709,121 @@ def create_app(store: Store, pipeline: Pipeline, accounts: AccountService, token
         return HistoryItem(method="manual", status="posted", at=parse_utc(manual.posted_at), url=manual.url or None,
                            note=manual.note or None, id=manual.id)
 
+    @app.post("/v1/videos/bulk-update", response_model=BulkResult, operation_id="bulkUpdateVideos",
+              summary="Apply the same edit to many videos", responses={k: ERRORS[k] for k in (401, 404, 422)}, **v1)
+    def bulk_update(body: BulkUpdate) -> BulkResult:
+        """Same rules as PATCH /v1/videos/{video_id}, for many videos at once, in one transaction: if any video
+        has a problem, nothing is written and every problem is listed (422)."""
+        changes = body.changes.model_dump(exclude_unset=True)
+        if not changes:
+            raise ApiError(422, "Send at least one field to change.", "invalid_request")
+        if "original_publish_date" in changes and changes["original_publish_date"] is not None:
+            changes["original_publish_date"] = changes["original_publish_date"].isoformat()
+        with store.origin("api"):
+            try:
+                changed = pipeline.bulk_update(body.video_ids, changes)
+            except PipelineError as exc:
+                raise pipeline_error(exc) from None
+        return BulkResult(changed=changed)
+
+    @app.post("/v1/videos/fill-from-original", response_model=FillResult, operation_id="fillFromOriginal",
+              summary="Fill empty copy from the original posts", responses={k: ERRORS[k] for k in (401, 404, 422)},
+              **v1)
+    def fill_from_original(body: VideoIds) -> FillResult:
+        """Fills each video's EMPTY copy blocks (and creator) from its original caption, within every platform's
+        limits; text that doesn't fit is left empty, never shortened. Copy of scheduled or published videos is
+        untouched. One transaction; each change is logged."""
+        with store.origin("api"):
+            try:
+                return FillResult(filled=pipeline.fill_from_original(body.video_ids))
+            except PipelineError as exc:
+                raise pipeline_error(exc) from None
+
+    @app.post("/v1/videos/{video_id}/archive", response_model=Video, operation_id="archiveVideo",
+              summary="Archive a video", responses={k: ERRORS[k] for k in (401, 404, 409, 422)}, **v1)
+    def archive_video(video_id: int) -> Video:
+        """Hides the video from the board and the Download page; its file, ticket and history are kept. 409 if it's
+        scheduled or uploading."""
+        with store.origin("api"):
+            try:
+                pipeline.archive([video_id], True)
+            except PipelineError as exc:
+                raise pipeline_error(exc) from None
+        return video_by_id(video_id)
+
+    @app.post("/v1/videos/{video_id}/unarchive", response_model=Video, operation_id="unarchiveVideo",
+              summary="Bring an archived video back", responses={k: ERRORS[k] for k in (401, 404, 422)}, **v1)
+    def unarchive_video(video_id: int) -> Video:
+        with store.origin("api"):
+            try:
+                pipeline.archive([video_id], False)
+            except PipelineError as exc:
+                raise pipeline_error(exc) from None
+        return video_by_id(video_id)
+
+    @app.post("/v1/videos/{video_id}/revisions/{revision_id}/restore", response_model=Video,
+              operation_id="restoreRevision", summary="Undo one logged change",
+              responses={k: ERRORS[k] for k in (401, 404, 409, 422)}, **v1)
+    def restore_revision(video_id: int, revision_id: int) -> Video:
+        """Puts the field back to the value it had before that change. The restore is itself a new, logged
+        change. Same rules as PATCH (copy is locked once scheduled)."""
+        with store.origin("api"):
+            try:
+                pipeline.restore_revision(video_id, revision_id)
+            except PipelineError as exc:
+                raise pipeline_error(exc) from None
+        return video_by_id(video_id)
+
+    @app.post("/v1/videos/{video_id}/transcript", response_model=Video, operation_id="fetchTranscript",
+              summary="Get the transcript from the original post's captions",
+              responses={k: ERRORS[k] for k in (401, 404, 422)}, **v1)
+    def fetch_transcript(video_id: int, body: TranscriptRequest | None = None) -> Video:
+        """Downloads the original post's captions (creator subtitles first, else automatic captions) and saves
+        them as the ticket's transcript. Network call; takes a few seconds. 422 no_transcript when the post has
+        no captions; 422 invalid_post when a transcript exists and replace is false."""
+        from .ytdl import base_options
+        row = store.get_video(video_id)
+        if row is None:
+            raise ApiError(404, f"No video with id {video_id}.", "not_found")
+        profile = store.get_profile(row.profile_id)
+        with store.origin("api"):
+            try:
+                pipeline.fetch_transcript(video_id, base_options(profile.cookies_browser or None),
+                                          replace_existing=bool(body and body.replace))
+            except PipelineError as exc:
+                raise pipeline_error(exc) from None
+        return video_by_id(video_id)
+
+    @app.post("/v1/import", response_model=ImportReport, operation_id="importSheet",
+              summary="Import a spreadsheet (CSV) into tickets", tags=["import"],
+              dependencies=[Depends(require_token)], responses={k: ERRORS[k] for k in (400, 401, 422)})
+    def import_sheet(body: ImportRequest,
+                     profile: str = Query(..., description="Profile name exactly as shown in Reelay's sidebar."),
+                     dry_run: bool = Query(True, description="true (default) only reports what would change.")
+                     ) -> ImportReport:
+        """Matches each row to a video (by link, video ID, file name or your name for it), maps columns to ticket
+        fields, and fills them. Empty cells never clear anything; over-limit or invalid rows are skipped and
+        reported. With dry_run=false every changing row is written in one transaction, each change logged."""
+        from .sheet_import import FIELDS, MATCH_KEYS, SheetError, guess_mapping, read_csv
+        prof = find_profile(profile)
+        try:
+            headers, rows = read_csv(body.csv)
+        except SheetError as exc:
+            raise ApiError(422, str(exc), "invalid_sheet") from None
+        mapping = guess_mapping(headers) if body.mapping is None else {h: body.mapping.get(h) for h in headers}
+        bad = sorted({t for t in mapping.values() if t and t not in FIELDS and t not in MATCH_KEYS})
+        if bad:
+            raise ApiError(422, f"Unknown field(s) in mapping: {', '.join(bad)}.", "invalid_request")
+        plan = pipeline.plan_sheet(prof.id, headers, rows, mapping, body.overwrite)
+        changed = len(plan.changing)
+        if not dry_run and changed:
+            with store.origin("api"):
+                pipeline.apply_sheet(plan)
+        return ImportReport(applied=not dry_run, changed=changed, mapping=mapping, summary=plan.summary(),
+                            rows=[ImportRowOut(row=r.number, video_id=r.video_id, matched_by=r.matched_by or None,
+                                               fields=r.fields, kept=r.kept, problems=r.problems)
+                                  for r in plan.rows])
+
     @app.get("/v1/platforms", response_model=PlatformsResponse, operation_id="getPlatforms",
              summary="Which platforms are connected for a profile", tags=["platforms"],
              dependencies=[Depends(require_token)], responses={k: ERRORS[k] for k in (400, 401, 422)})
@@ -707,6 +895,42 @@ def create_app(store: Store, pipeline: Pipeline, accounts: AccountService, token
                 raise ApiError(422, str(exc), "invalid_source") from None
         view = next(v for v in sources.all_sources(prof.id) if v.source_id == saved.id)
         return to_source(view)
+
+    def source_by_id(source_id: int):
+        view = next((v for v in sources.all_sources(store.get_source(source_id).profile_id)
+                     if v.source_id == source_id), None) if store.get_source(source_id) else None
+        if view is None:
+            raise ApiError(404, f"No saved source with id {source_id}.", "not_found")
+        return view
+
+    @app.patch("/v1/sources/{source_id}", response_model=SourceOut, operation_id="updateSource",
+               summary="Rename a saved source or mark it as yours", tags=["sources"],
+               dependencies=[Depends(require_token)], responses={k: ERRORS[k] for k in (401, 404, 422)})
+    def update_source(source_id: int, body: SourcePatch) -> SourceOut:
+        """Saved sources only (connected channels are managed in Reelay → Accounts)."""
+        source_by_id(source_id)
+        changes = body.model_dump(exclude_unset=True)
+        if not changes:
+            raise ApiError(422, "Send name and/or mine.", "invalid_request")
+        with store.origin("api"):
+            try:
+                if "name" in changes:
+                    sources.rename(source_id, changes["name"] or "")
+                if changes.get("mine") is not None:
+                    sources.set_mine(source_id, changes["mine"])
+            except SourceError as exc:
+                raise ApiError(422, str(exc), "invalid_source") from None
+        return to_source(source_by_id(source_id))
+
+    @app.delete("/v1/sources/{source_id}", status_code=204, operation_id="deleteSource",
+                summary="Remove a saved source", tags=["sources"], dependencies=[Depends(require_token)],
+                responses={k: ERRORS[k] for k in (401, 404, 422)})
+    def delete_source(source_id: int) -> Response:
+        """Removes the saved link only. Videos already listed or downloaded from it stay."""
+        source_by_id(source_id)
+        with store.origin("api"):
+            sources.remove(source_id)
+        return Response(status_code=204)
 
     # ---------------------------------------------------------------- media links (Threads)
     @app.api_route("/media/{token}", methods=["GET", "HEAD"], include_in_schema=False)

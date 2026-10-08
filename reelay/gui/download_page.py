@@ -606,14 +606,18 @@ class DownloadPage(QWidget):
             return
         pid = self.profile.id
         by_key: dict[str, VideoItem] = {}
-        for row in self.store.load_videos(pid):
+        archived: set[str] = set()
+        for row in self.store.load_videos(pid, archived=None):
+            if row.archived_at:
+                archived.add(row.item.key)   # hidden, and never re-imported from the folder
+                continue
             row.item.refresh_download_status(self.folder)
             by_key[row.item.key] = row.item
 
         imported = []
         names = self.library.load_custom_names()
         for item in self.library.load():
-            if item.key not in by_key:
+            if item.key not in by_key and item.key not in archived:
                 item.folder = str(self.folder)
                 item.custom_name = item.custom_name or names.get(item.key, "")
                 by_key[item.key] = item
@@ -623,6 +627,8 @@ class DownloadPage(QWidget):
 
         merged: list[VideoItem] = []
         for fetched in self.fetched:
+            if fetched.key in archived:
+                continue
             existing = by_key.pop(fetched.key, None)
             if existing is not None:
                 existing.merge_metadata(fetched)
