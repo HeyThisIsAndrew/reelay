@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections import defaultdict
 import uuid
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
@@ -34,6 +35,7 @@ from .models import (MANUAL_PLATFORMS, TICKET_FIELDS, Account, ContentType, Disp
                      DispatchStatus, ManualPost, Platform, Post, PostStatus, Profile, Stage, Ticket, VideoItem,
                      VideoRow)
 from .platform_text import COPY_FIELDS, resolve_text, text_problem
+from .columns import is_custom, is_stage, rank
 from .readiness import Readiness, evaluate
 from .publishers.base import PermanentError, PublishJob
 from .publishing import (DESCRIPTION_MAX_BYTES, MIN_SCHEDULE_LEAD, TAGS_MAX_CHARS, TITLE_MAX, build_resource,
@@ -225,7 +227,7 @@ class Pipeline:
         left out of the Backlog (they live on the Download page)."""
         profile = self._profile(profile_id)
         accounts = {a.id: a for a in self.store.list_accounts(profile_id)}
-        columns: dict[str, list[Card]] = {stage: [] for stage in Stage.ALL}
+        columns: dict[str, list[Card]] = defaultdict(list, {stage: [] for stage in Stage.ALL})
         for row in self.store.load_videos(profile_id):
             row.item.refresh_download_status(profile.output_folder)
             if row.stage == Stage.BACKLOG and not row.item.is_downloaded:
@@ -265,7 +267,7 @@ class Pipeline:
 
         Moving to Scheduled isn't a move: it's scheduling (see schedule()).
         Moving to Published means "posted outside Reelay"; confirm first."""
-        if target not in Stage.ALL:
+        if not is_stage(target):
             raise PipelineError(f"Unknown stage “{target}”.", "invalid_stage")
         row = self._row(row_id)
         if row.stage == target:
@@ -277,7 +279,7 @@ class Pipeline:
             raise PipelineError(LOCKED_MESSAGE, "locked")
         if target == Stage.SCHEDULED:
             raise PipelineError("Schedule the video to move it to Scheduled.", "needs_upload")
-        if target == Stage.STAGING:
+        if target == Stage.STAGING or is_custom(target):
             self.ensure_post(row_id)
         self.store.set_stage([row_id], target)
         if position is not None:
@@ -654,10 +656,9 @@ class Pipeline:
         if self._active_upload(row_id):
             return None
         target = self._stage_for(row, now or datetime.now(timezone.utc))
-        order = {s: i for i, s in enumerate(Stage.ALL)}
-        if target is None or target == row.stage:
-            return None
-        if order[target] < order[row.stage] and not allow_back:
+        if target is None or target == row.stage or (is_custom(row.stage) and target == Stage.STAGING):
+            return None                   # your own working columns count as Staging
+        if rank(target) < rank(row.stage) and not allow_back:
             return None
         self.store.set_stage([row_id], target)
         return target
@@ -686,8 +687,8 @@ class Pipeline:
         """Time passes: hand-scheduled posts whose time has come count as live.
         Moves every card that's due; returns the ids moved."""
         moved = []
-        for row in self.store.load_videos(profile_id, stages=[Stage.BACKLOG, Stage.STAGING, Stage.SCHEDULED]):
-            if self.advance(row.id, now=now):
+        for row in self.store.load_videos(profile_id):
+            if row.stage != Stage.PUBLISHED and self.advance(row.id, now=now):
                 moved.append(row.id)
         return moved
 

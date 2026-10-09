@@ -229,8 +229,19 @@ class Collapsible(QWidget):
         self.body_layout.addWidget(widget)
         return widget
 
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._fit_summary()
+
+    def _fit_summary(self) -> None:
+        text = getattr(self, "_summary_text", "")
+        width = max(self.summary.width(), 40)
+        self.summary.setText(QFontMetrics(self.summary.font()).elidedText(text, Qt.ElideRight, width))
+        self.summary.setToolTip(text)
+
     def set_summary(self, text: str, danger: bool = False) -> None:
-        self.summary.setText(text)
+        self._summary_text = text
+        self._fit_summary()
         self.summary.setProperty("faint", not danger)
         self.summary.setProperty("danger", danger)
         self.summary.style().unpolish(self.summary)

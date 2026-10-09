@@ -6,13 +6,14 @@ from __future__ import annotations
 import json
 import logging
 import time
+from dataclasses import replace
 from datetime import datetime
 
 from PySide6.QtCore import (QAbstractListModel, QItemSelectionModel, QMimeData, QModelIndex, QRect, QRectF, QSize,
                             Qt, QTimer, Signal)
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QListView, QMenu,
-                               QMessageBox, QPushButton, QSplitter, QStackedWidget, QStyle, QStyledItemDelegate,
+                               QMessageBox, QPushButton, QScrollArea, QSplitter, QStackedWidget, QStyle, QStyledItemDelegate,
                                QVBoxLayout, QWidget)
 
 from ..models import Platform, Post, PostStatus, Profile, Stage
@@ -22,6 +23,11 @@ from ..text import clock, local_text
 from ..uploads import UploadManager
 from . import theme
 from .theme import set_prop
+from ..columns import ColumnError, column_for, default_columns, is_custom
+from ..columns import add as add_column
+from ..columns import load as load_columns
+from ..columns import remove as remove_column
+from ..columns import save as save_columns
 from .board_tools import ArchivedDialog, BulkPanel, ImportDialog
 from .bridge import change_bridge
 from .post_panel import PostPanel
@@ -36,6 +42,7 @@ MIME = "application/x-reelay-cards"
 CARD_HEIGHT = 132
 COVER_W, COVER_H = 52, 92
 SYNC_EVERY_SECONDS = 600
+COLUMN_MIN_WIDTH = 190
 
 
 # ====================================================================== model / delegate
@@ -254,23 +261,44 @@ class CardDelegate(QStyledItemDelegate):
         return "✓ Ready · not started", p.text3
 
 
+STEP_TIPS = {
+    Stage.BACKLOG: "videos you've downloaded and haven't started on",
+    Stage.STAGING: "videos you're writing posts for",
+    Stage.SCHEDULED: "videos waiting to go live (cards move here once every platform is scheduled)",
+    Stage.PUBLISHED: "videos that are live (cards move here once every platform is posted)",
+}
+EMPTY_TEXT = {
+    Stage.BACKLOG: "Downloaded videos land here.",
+    Stage.STAGING: "Drag videos here to write their post.",
+    Stage.SCHEDULED: "Drop a ready post here to upload and schedule it.",
+    Stage.PUBLISHED: "Live videos show up here.",
+}
+
+
 class BoardColumn(QFrame):
-    def __init__(self, stage: str, thumbs: ThumbnailCache, parent=None):
+    renameRequested = Signal(str)        # column id
+    addRequested = Signal(str)           # add a column after this one
+    removeRequested = Signal(str)
+    editRequested = Signal()
+
+    def __init__(self, column, thumbs: ThumbnailCache, parent=None):
         super().__init__(parent)
         self.setObjectName("BoardColumn")
-        self.stage = stage
+        self.column = column
+        stage = self.stage = column.primary
         lay = QVBoxLayout(self)
         lay.setContentsMargins(10, 12, 10, 6)
         lay.setSpacing(6)
         head = QHBoxLayout()
-        title = QLabel(Stage.LABELS[stage].upper())
+        title = QLabel(column.name.upper())
         title.setProperty("section", True)
-        title.setToolTip({
-            Stage.BACKLOG: "Videos you've downloaded and haven't started on yet",
-            Stage.STAGING: "Videos you're writing posts for",
-            Stage.SCHEDULED: "Videos handed to platforms, waiting to go live",
-            Stage.PUBLISHED: "Videos that are live",
-        }[stage])
+        holds = [STEP_TIPS[s] for s in column.builtin]
+        title.setToolTip((f"{column.name}: " + "; ".join(holds) if holds else
+                          f"{column.name}: your own column. Drag cards in and out.") +
+                         "\nRight-click to rename, add or remove columns.")
+        title.setContextMenuPolicy(Qt.CustomContextMenu)
+        title.customContextMenuRequested.connect(lambda pos: self._menu(title.mapToGlobal(pos)))
+        self.title = title
         self.count = QLabel("0")
         self.count.setProperty("faint", True)
         head.addWidget(title)
@@ -278,6 +306,8 @@ class BoardColumn(QFrame):
         head.addWidget(self.count)
         lay.addLayout(head)
         self.model = BoardModel(stage, self)
+        self.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.customContextMenuRequested.connect(lambda pos: self._menu(self.mapToGlobal(pos)))
         self.view = QListView(objectName="BoardList")
         self.view.setModel(self.model)
         self.view.setItemDelegate(CardDelegate(thumbs, self.view))
@@ -292,17 +322,21 @@ class BoardColumn(QFrame):
         self.view.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
         self.view.setUniformItemSizes(True)
         self.view.setAttribute(Qt.WA_MacShowFocusRect, False)
-        self.empty = QLabel({
-            Stage.BACKLOG: "Downloaded videos land here.",
-            Stage.STAGING: "Drag videos here to write their post.",
-            Stage.SCHEDULED: "Drop a ready post here to upload and schedule it.",
-            Stage.PUBLISHED: "Live videos show up here.",
-        }[stage])
+        self.empty = QLabel(EMPTY_TEXT.get(stage, "Drag cards here."))
         self.empty.setProperty("faint", True)
         self.empty.setWordWrap(True)
         self.empty.setAlignment(Qt.AlignCenter)
         lay.addWidget(self.view, 1)
         lay.addWidget(self.empty)
+
+    def _menu(self, global_pos) -> None:
+        menu = QMenu(self)
+        menu.addAction(f"Rename “{self.column.name}”…", lambda: self.renameRequested.emit(self.column.id))
+        menu.addAction("Add a Column After This…", lambda: self.addRequested.emit(self.column.id))
+        menu.addAction("Remove This Column…", lambda: self.removeRequested.emit(self.column.id))
+        menu.addSeparator()
+        menu.addAction("Edit Columns…", self.editRequested.emit)
+        menu.exec(global_pos)
 
     def set_cards(self, cards: list[Card], total: int | None = None) -> None:
         self.model.set_cards(cards)
@@ -379,6 +413,11 @@ class BoardPage(QWidget):
                                                             "Sheets link), with a preview before anything changes")
         self.import_btn.clicked.connect(self.open_import)
         head.addWidget(self.import_btn)
+        self.columns_btn = tip(QPushButton("Edit Columns…"), "Rename, add, remove or reorder the Board's columns. "
+                                                             "You can also right-click a column's name.")
+        set_prop(self.columns_btn, "flat")
+        self.columns_btn.clicked.connect(self.edit_columns)
+        head.addWidget(self.columns_btn)
         self.archived_btn = tip(QPushButton("Archived…"), "Videos you've archived. Bring them back from here.")
         set_prop(self.archived_btn, "flat")
         self.archived_btn.clicked.connect(self.open_archived)
@@ -418,21 +457,18 @@ class BoardPage(QWidget):
         find.addWidget(self.filter_box)
         outer.addLayout(find)
 
-        cols = QWidget()
-        cl = QHBoxLayout(cols)
-        cl.setContentsMargins(0, 0, 0, 0)
-        cl.setSpacing(10)
+        cols_body = QWidget(objectName="Page")
+        self.columns_layout = QHBoxLayout(cols_body)
+        self.columns_layout.setContentsMargins(0, 0, 0, 0)
+        self.columns_layout.setSpacing(10)
         self.columns: dict[str, BoardColumn] = {}
-        for stage in Stage.ALL:
-            col = BoardColumn(stage, self.thumbs)
-            col.model.moveRequested.connect(self._on_move)
-            col.view.selectionModel().currentChanged.connect(
-                lambda cur, _prev, c=col: self._on_select(c, cur))
-            col.view.clicked.connect(lambda idx, c=col: self._on_select(c, idx))
-            col.view.selectionModel().selectionChanged.connect(lambda *_a, c=col: self._on_selection(c))
-            col.view.customContextMenuRequested.connect(lambda pos, c=col: self._card_menu(c, pos))
-            self.columns[stage] = col
-            cl.addWidget(col, 1)
+        self.column_config = default_columns()
+        self._build_columns()
+        cols = QScrollArea()                 # many columns scroll sideways instead of squeezing
+        cols.setWidgetResizable(True)
+        cols.setFrameShape(QFrame.NoFrame)
+        cols.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        cols.setWidget(cols_body)
 
         self.panel = PostPanel(self.thumbs)
         self.panel.set_enabled_platforms(self.pipeline.enabled_platforms())
@@ -441,6 +477,7 @@ class BoardPage(QWidget):
         self.panel.cancelUploadRequested.connect(self.pipeline.cancel_upload)
         self.panel.connectRequested.connect(self.openAccounts.emit)
         self.panel.readiness_for = lambda post: self.pipeline.readiness(post.video_row, post)
+        self.panel.stage_name = self.stage_name
         self.panel.ticketFieldCommitted.connect(self._commit_ticket_field)
         self.panel.markPostedRequested.connect(self._mark_posted)
         self.panel.unmarkRequested.connect(self._unmark_posted)
@@ -466,9 +503,117 @@ class BoardPage(QWidget):
         outer.addWidget(split, 1)
         self.thumbs.loaded.connect(lambda _k: [c.view.viewport().update() for c in self.columns.values()])
 
+    # ---------------------------------------------------------------- columns
+    def _build_columns(self) -> None:
+        while self.columns_layout.count():
+            w = self.columns_layout.takeAt(0).widget()
+            if w:
+                w.hide()
+                w.setParent(None)
+                w.deleteLater()
+        self.columns = {}
+        for column in self.column_config:
+            col = BoardColumn(column, self.thumbs)
+            col.model.moveRequested.connect(self._on_move)
+            col.view.selectionModel().currentChanged.connect(
+                lambda cur, _prev, c=col: self._on_select(c, cur))
+            col.view.clicked.connect(lambda idx, c=col: self._on_select(c, idx))
+            col.view.selectionModel().selectionChanged.connect(lambda *_a, c=col: self._on_selection(c))
+            col.view.customContextMenuRequested.connect(lambda pos, c=col: self._card_menu(c, pos))
+            col.renameRequested.connect(self._rename_column)
+            col.addRequested.connect(self._add_column)
+            col.removeRequested.connect(self._remove_column)
+            col.editRequested.connect(self.edit_columns)
+            col.setMinimumWidth(COLUMN_MIN_WIDTH)
+            self.columns[column.id] = col
+            self.columns_layout.addWidget(col, 1)
+        if hasattr(self, "panel"):
+            self.panel.stage_name = self.stage_name
+
+    def _column_for(self, stage: str) -> BoardColumn:
+        return self.columns[column_for(self.column_config, stage).id]
+
+    def stage_name(self, stage: str) -> str:
+        return column_for(self.column_config, stage).name
+
+    def _apply_columns(self, columns, moved: tuple[str, str] | None = None) -> bool:
+        """Save a new column setup (moving cards out of a removed column) and redraw."""
+        try:
+            self.column_config = save_columns(self.store, self.profile.id, columns)
+        except ColumnError as exc:
+            QMessageBox.warning(self, "Columns", str(exc))
+            return False
+        if moved:
+            from_stage, to_stage = moved
+            rows = [r.id for r in self.store.load_videos(self.profile.id, archived=None) if r.stage == from_stage]
+            if rows:
+                self.store.set_stage(rows, to_stage)
+        self.bulk_ids, self.selected_id = [], None
+        self.side.setCurrentWidget(self.panel)
+        self.panel.show_empty()
+        self._build_columns()
+        self.reload()
+        return True
+
+    def _rename_column(self, column_id: str) -> None:
+        from PySide6.QtWidgets import QInputDialog
+        columns = [replace(c, stages=list(c.stages)) for c in self.column_config]
+        col = next(c for c in columns if c.id == column_id)
+        name, ok = QInputDialog.getText(self, "Rename Column", "Column name:", text=col.name)
+        if ok and name.strip():
+            col.name = name.strip()
+            self._apply_columns(columns)
+
+    def _add_column(self, after_id: str) -> None:
+        from PySide6.QtWidgets import QInputDialog
+        name, ok = QInputDialog.getText(self, "Add a Column", "Name for the new column:", text="New column")
+        if not ok or not name.strip():
+            return
+        columns = [replace(c, stages=list(c.stages)) for c in self.column_config]
+        index = next(i for i, c in enumerate(columns) if c.id == after_id) + 1
+        try:
+            add_column(columns, name, index)
+        except ColumnError as exc:
+            QMessageBox.warning(self, "Columns", str(exc))
+            return
+        self._apply_columns(columns)
+
+    def _remove_column(self, column_id: str) -> None:
+        columns = [replace(c, stages=list(c.stages)) for c in self.column_config]
+        try:
+            removed, neighbour = remove_column(columns, column_id)
+        except ColumnError as exc:
+            QMessageBox.warning(self, "Columns", str(exc))
+            return
+        n = sum(1 for c in self.cards.values() if c.row.stage in removed.stages)
+        cards = f" Its {n} card{'s' if n != 1 else ''} will show in “{neighbour.name}”." if n else ""
+        if QMessageBox.question(self, "Remove Column", f"Remove the column “{removed.name}”?{cards} Nothing is "
+                                "deleted, and you can add columns back any time.") != QMessageBox.Yes:
+            return
+        own = [s for s in removed.stages if is_custom(s)]
+        self._apply_columns(columns, moved=(own[0], neighbour.primary) if own else None)
+
+    def edit_columns(self) -> None:
+        if not self.profile:
+            return
+        from .board_tools import ColumnsDialog
+        dialog = ColumnsDialog(self.column_config, {s: sum(1 for c in self.cards.values() if c.row.stage == s)
+                                                    for s in {c.row.stage for c in self.cards.values()}}, self)
+        if dialog.exec() == ColumnsDialog.Accepted:
+            columns, moves = dialog.result_columns()
+            if self._apply_columns(columns):
+                for from_stage, to_stage in moves:
+                    rows = [r.id for r in self.store.load_videos(self.profile.id, archived=None)
+                            if r.stage == from_stage]
+                    if rows:
+                        self.store.set_stage(rows, to_stage)
+                self.reload()
+
     # ---------------------------------------------------------------- data
     def set_profile(self, profile: Profile) -> None:
         self.profile = profile
+        self.column_config = load_columns(self.store, profile.id)
+        self._build_columns()
         self.selected_id = None
         self.bulk_ids = []
         self.side.setCurrentWidget(self.panel)
@@ -497,9 +642,12 @@ class BoardPage(QWidget):
         self.cards = {card.id: card for cards in columns.values() for card in cards}
         self._refresh_tag_box(self.cards.values())
         self._refresh_product_box(self.cards.values())
-        for stage, col in self.columns.items():
-            shown = [c for c in columns[stage] if self._matches(c)]
-            col.set_cards(shown, total=len(columns[stage]))
+        by_column: dict[str, list[Card]] = {c.id: [] for c in self.column_config}
+        for stage, cards in columns.items():
+            by_column[column_for(self.column_config, stage).id].extend(cards)
+        for column_id, col in self.columns.items():
+            cards = by_column.get(column_id, [])
+            col.set_cards([c for c in cards if self._matches(c)], total=len(cards))
         if self.bulk_ids:
             self._reselect_bulk()
         else:
@@ -617,7 +765,7 @@ class BoardPage(QWidget):
             self.side.setCurrentWidget(self.panel)
             self.panel.show_empty()
             return
-        col = self.columns[stages.pop()]
+        col = self._column_for(stages.pop())
         sel = col.view.selectionModel()
         sel.blockSignals(True)
         for row, c in enumerate(col.model.cards):
@@ -756,7 +904,7 @@ class BoardPage(QWidget):
         if card is None:
             self.panel.show_empty()
             return
-        col = self.columns[card.row.stage]
+        col = self._column_for(card.row.stage)
         for row, c in enumerate(col.model.cards):
             if c.id == card.id:
                 col.view.setCurrentIndex(col.model.index(row))
@@ -790,7 +938,7 @@ class BoardPage(QWidget):
         self.panel.show_errors([])
         after = self.store.get_video(row_id).stage
         if after != before:
-            self._status(f"Moved to {Stage.LABELS[after]}: "
+            self._status(f"Moved to {self.stage_name(after)}: "
                          + ("every platform it's going to is live." if after == Stage.PUBLISHED else
                             "every platform it's going to is scheduled." if after == Stage.SCHEDULED else
                             "not every platform is scheduled any more."))
@@ -871,11 +1019,15 @@ class BoardPage(QWidget):
 
     # ---------------------------------------------------------------- moves
     def _on_move(self, ids: list[int], target: str, insert_row: int) -> None:
+        column = next((c for c in self.column_config if c.primary == target), None)
         for card_id in ids:
             card = self.cards.get(card_id)
             if card is None:
                 continue
             try:
+                if column is not None and card.row.stage in column.stages and card.row.stage != target:
+                    self.pipeline.move(card_id, card.row.stage, insert_row)   # reordering within the column
+                    continue
                 if target == Stage.SCHEDULED and card.row.stage != Stage.SCHEDULED:
                     self._schedule_card(card)
                     return
@@ -976,7 +1128,7 @@ class BoardPage(QWidget):
         if card is None:
             return
         card.progress, card.queued = pct, False
-        self.columns[card.row.stage].model.refresh_card(row_id)
+        self._column_for(card.row.stage).model.refresh_card(row_id)
         self.panel.set_progress(row_id, pct)
 
     @property

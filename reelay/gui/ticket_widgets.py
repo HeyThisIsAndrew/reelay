@@ -516,21 +516,29 @@ class RevisionDialog(QDialog):
 
 # ====================================================================== platform tags
 class PlatformRow(QWidget):
-    """One platform on the ticket: its logo, where it stands, and the boxes
-    Going / Scheduled / Posted. Ticking Scheduled asks when it goes live."""
+    """One platform on the ticket: its logo, where it stands, and ONE choice:
+    Not posting · Preparing · Scheduled · Posted. Choosing Scheduled asks when
+    it goes live. (`going` is the underlying "is this a target" state, kept
+    hidden so the rest of the ticket can read it.)"""
     goingToggled = Signal(str, bool)
     markRequested = Signal(str, str, object)   # platform, "scheduled" | "posted" | "none", when (datetime | None)
 
+    CHOICES = (("skip", "Not posting"), ("preparing", "Preparing"), ("scheduled", "Scheduled"), ("posted", "Posted"))
+
     def __init__(self, platform: str, parent=None):
         super().__init__(parent)
+        from PySide6.QtWidgets import QButtonGroup
+
         from ..models import Platform
         from .logos import platform_pixmap
         self.platform = platform
         self.label = Platform.LABELS.get(platform, platform)
         self._loading = False
+        self._choice = "skip"
+        self._default_when = None
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 2, 0, 4)
-        outer.setSpacing(2)
+        outer.setContentsMargins(0, 2, 0, 6)
+        outer.setSpacing(4)
         top = QHBoxLayout()
         top.setSpacing(8)
         logo = QLabel()
@@ -544,43 +552,67 @@ class PlatformRow(QWidget):
         self.state.setWordWrap(True)
         top.addWidget(self.state, 1)
         outer.addLayout(top)
-        lay = QHBoxLayout()
-        lay.setContentsMargins(28, 0, 0, 0)
-        lay.setSpacing(14)
-        outer.addLayout(lay)
-        self.going = tip(QCheckBox("Going"), f"This video is going to {self.label}. Its logo shows on the card.")
-        self.scheduled = tip(QCheckBox("Scheduled"), f"You scheduled it in {self.label}'s own app. Reelay asks "
-                                                     "when it goes live and moves the card to Published then.")
-        self.posted = tip(QCheckBox("Posted"), f"It's live on {self.label}. When every platform it's going to is "
-                                               "posted, the card moves to Published.")
-        for box in (self.going, self.scheduled, self.posted):
-            lay.addWidget(box)
-        lay.addStretch()
+        seg = QHBoxLayout()
+        seg.setContentsMargins(0, 0, 0, 0)
+        seg.setSpacing(0)
+        self.group = QButtonGroup(self)
+        self.group.setExclusive(True)
+        self.buttons: dict[str, QPushButton] = {}
+        hints = {"skip": f"This video isn't going to {self.label}.",
+                 "preparing": f"You plan to post it on {self.label} but haven't scheduled it yet. Its logo shows "
+                              "(faded) on the card.",
+                 "scheduled": f"You've scheduled it in {self.label}'s app. Reelay asks when it goes live, and moves "
+                              "the card to Published after that time.",
+                 "posted": f"It's live on {self.label}. When every platform it's going to is posted, the card "
+                           "moves to Published."}
+        for n, (key, text) in enumerate(self.CHOICES):
+            btn = QPushButton(text)
+            btn.setCheckable(True)
+            btn.setProperty("segment", "first" if n == 0 else "last" if n == len(self.CHOICES) - 1 else "middle")
+            tip(btn, hints[key])
+            self.group.addButton(btn)
+            self.buttons[key] = btn
+            seg.addWidget(btn)
+            btn.clicked.connect(lambda _=False, k=key: self.choose(k))
+        seg.addStretch()
+        outer.addLayout(seg)
+        self.going = QCheckBox()          # hidden model of "target"
+        self.going.setVisible(False)
         self.going.toggled.connect(lambda on: not self._loading and self.goingToggled.emit(self.platform, on))
-        self.scheduled.toggled.connect(self._on_scheduled)
-        self.posted.toggled.connect(self._on_posted)
 
-    def _on_scheduled(self, on: bool) -> None:
-        if self._loading:
+    def choose(self, key: str) -> None:
+        """What happens when a choice is clicked."""
+        if self._loading or key == self._choice:
             return
-        if not on:
-            self.markRequested.emit(self.platform, "none", None)
-            return
-        dialog = WhenDialog(self.label, self.window(), self._default_when)
-        if dialog.exec() != QDialog.Accepted:
-            self._set(self.scheduled, False)
-            return
-        self.markRequested.emit(self.platform, "scheduled", dialog.when())
+        previous, marked = self._choice, self._choice in ("scheduled", "posted")
+        if key == "scheduled":
+            dialog = WhenDialog(self.label, self.window(), self._default_when)
+            if dialog.exec() != QDialog.Accepted:
+                self._show_choice(previous)
+                return
+            self._choice = key
+            self._set_going(True, quiet=True)
+            self.markRequested.emit(self.platform, "scheduled", dialog.when())
+        elif key == "posted":
+            self._choice = key
+            self._set_going(True, quiet=True)
+            self.markRequested.emit(self.platform, "posted", None)
+        else:
+            self._choice = key
+            if marked:
+                self.markRequested.emit(self.platform, "none", None)
+            self._set_going(key == "preparing", quiet=False)
 
-    def _on_posted(self, on: bool) -> None:
-        if not self._loading:
-            self.markRequested.emit(self.platform, "posted" if on else "none", None)
+    def _set_going(self, on: bool, quiet: bool) -> None:
+        if quiet:
+            self.going.blockSignals(True)
+        self.going.setChecked(on)
+        if quiet:
+            self.going.blockSignals(False)
 
-    @staticmethod
-    def _set(box: QCheckBox, on: bool) -> None:
-        box.blockSignals(True)
-        box.setChecked(on)
-        box.blockSignals(False)
+    def _show_choice(self, key: str) -> None:
+        self._choice = key
+        self.buttons[key].setChecked(True)
 
     def set_state(self, state, auto_enabled: bool, default_when: str | None = None) -> None:
         """state: pipeline.PlatformState."""
@@ -589,26 +621,31 @@ class PlatformRow(QWidget):
         try:
             self.going.setChecked(state.target)
             live = state.state == "published"
-            self.scheduled.setChecked(state.state in ("scheduled", "sending") or (live and state.manual_kind == "scheduled"))
-            self.posted.setChecked(live)
-            by_reelay = state.automatic or (state.state in ("scheduled", "sending", "failed") and not state.manual_kind
-                                            and state.state != "none")
-            for box in (self.scheduled, self.posted):
-                box.setEnabled(not by_reelay)
-            self.going.setEnabled(not by_reelay)
+            if live:
+                choice = "posted"
+            elif state.state in ("scheduled", "sending"):
+                choice = "scheduled"
+            elif state.target:
+                choice = "preparing"
+            else:
+                choice = "skip"
+            self._show_choice(choice)
+            by_reelay = state.automatic or (state.state in ("scheduled", "sending", "failed") and not state.manual_kind)
+            for btn in self.buttons.values():
+                btn.setEnabled(not by_reelay)
             when = local_text(state.at) if state.at else ""
-            text = {"none": "Not scheduled yet" if state.target else "Not going here",
+            text = {"none": "Preparing: not scheduled yet" if state.target else "",
                     "failed": "Reelay couldn't post it", "sending": "Reelay is posting it now",
-                    "scheduled": f"Scheduled{' · ' + when if when else ''}",
-                    "published": f"Live{' · ' + when if when else ''}"}[state.state]
+                    "scheduled": f"Goes live {when}" if when else "Scheduled",
+                    "published": f"Live since {when}" if when else "Live"}[state.state]
             if by_reelay and state.state != "published":
                 text += " (by Reelay)"
             elif state.state == "none" and state.target and auto_enabled:
-                text = "Reelay can post it: use Schedule below"
+                text = "Preparing: Reelay can post it for you (Schedule below)"
             self.state.setText(text)
             set_prop(self.state, "danger", state.state == "failed")
             set_prop(self.state, "success", live)
-            self.setToolTip("" if not by_reelay else f"Reelay is handling {self.label}; this updates on its own.")
+            self.setToolTip(f"Reelay is handling {self.label}; this updates on its own." if by_reelay else "")
         finally:
             self._loading = False
 

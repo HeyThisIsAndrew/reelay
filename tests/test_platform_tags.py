@@ -182,19 +182,22 @@ def test_ticket_platform_rows_drive_the_card(ticket):
     _window, store, b, row = ticket
     panel = b.panel
     tiktok, instagram = panel.platform_rows["tiktok"], panel.platform_rows["instagram"]
-    assert tiktok.going.isChecked() and not instagram.going.isChecked()
-    assert tiktok.state.text() == "Not scheduled yet"
-    instagram.going.setChecked(True)                                # Going commits straight away
+    assert tiktok.buttons["preparing"].isChecked() and instagram.buttons["skip"].isChecked()
+    assert tiktok.state.text() == "Preparing: not scheduled yet"
+    instagram.buttons["preparing"].click()                          # commits straight away
     assert store.get_post(row).target_platforms == ["tiktok", "instagram"]
-    tiktok.posted.setChecked(True)
+    tiktok.buttons["posted"].click()
     assert store.get_video(row).stage == Stage.STAGING             # Instagram still to do
     b.reload()
     instagram = b.panel.platform_rows["instagram"]
-    instagram.posted.setChecked(True)
+    instagram.buttons["posted"].click()
     assert store.get_video(row).stage == Stage.PUBLISHED
     b.reload()
     assert b.panel.platform_rows["tiktok"].state.text().startswith("Live")
-    assert "2 going · 0 scheduled · 2 live" == b.panel.platforms_section.summary.text()
+    assert b.panel.platform_rows["tiktok"].buttons["posted"].isChecked()
+    assert "0 preparing · 0 scheduled · 2 posted" == b.panel.platforms_section.summary.toolTip()
+    b.panel.platform_rows["instagram"].buttons["skip"].click()       # not posting there after all
+    assert store.get_post(row).target_platforms == ["tiktok"] and not store.manual_posts(row)[1:]
     card = b.columns[Stage.PUBLISHED].model.cards[0]
     tip = b.columns[Stage.PUBLISHED].model.data(b.columns[Stage.PUBLISHED].model.index(0), 3)   # ToolTipRole
     assert card.id == row and "TikTok: live" in tip and "Instagram: live" in tip
@@ -206,14 +209,14 @@ def test_scheduled_box_asks_when(ticket, monkeypatch):
     later = datetime.now(timezone.utc) + timedelta(days=2)
     monkeypatch.setattr(ticket_widgets.WhenDialog, "exec", lambda self: ticket_widgets.QDialog.Accepted)
     monkeypatch.setattr(ticket_widgets.WhenDialog, "when", lambda self: later)
-    b.panel.platform_rows["tiktok"].scheduled.setChecked(True)
+    b.panel.platform_rows["tiktok"].buttons["scheduled"].click()
     [mark] = store.manual_posts(row)
     assert mark.kind == "scheduled" and store.get_video(row).stage == Stage.SCHEDULED
     monkeypatch.setattr(ticket_widgets.WhenDialog, "exec", lambda self: ticket_widgets.QDialog.Rejected)
     b.reload()
     row_widget = b.panel.platform_rows["instagram"]
-    row_widget.scheduled.setChecked(True)                           # cancelled: nothing recorded
-    assert not row_widget.scheduled.isChecked() and len(store.manual_posts(row)) == 1
+    row_widget.buttons["scheduled"].click()                         # cancelled: nothing recorded
+    assert row_widget.buttons["skip"].isChecked() and len(store.manual_posts(row)) == 1
 
 
 def test_copy_sections_collapse_with_logos_and_summaries(ticket):

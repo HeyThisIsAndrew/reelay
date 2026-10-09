@@ -60,7 +60,10 @@ It's a native desktop app for macOS (Windows builds included) in a monotone Ligh
 
   Over-limit text is reported and the save is refused. Nothing is ever cut short.
 - Copying an empty block gives what Reelay would use instead: the title (plus the description if it fits) for Bluesky and Threads, and the description for TikTok, Instagram and Facebook.
-- **Platform tags.** Every ticket has a row per platform (YouTube, TikTok, Instagram, Bluesky, Threads, Facebook), each with its logo and **Going**, **Scheduled** (asks when it goes live) and **Posted** boxes.
+- **Custom columns:** **Edit Columns…** (or right-click a column's name) renames, adds, removes and reorders the Board's columns per profile. The default stays Backlog / Staging / Scheduled / Published.
+  - Reelay's four steps always live in some column; removing one hands its steps and cards to the neighbour, so automatic moves keep working.
+  - Added columns are your own manual steps (`custom:…`, also in the API's `columns`).
+- **Platform tags.** Every ticket has a row per platform (YouTube, TikTok, Instagram, Bluesky, Threads, Facebook), each with its logo and one choice: **Not posting / Preparing / Scheduled** (asks when it goes live) **/ Posted**.
   - **Cards move themselves:** to Scheduled once every Going platform is scheduled or live, and to Published once every one is live. A scheduled time passing counts as live, and unticking moves a card back.
   - **When it's checked:** every minute, by the background dispatcher, whether the app is open or running headless. Facebook posts that Reelay scheduled count as live once their time passes; YouTube is still confirmed with YouTube.
   - **On the Board,** cards show the logos: faded = to do, solid = scheduled, green dot = live, red dot = failed.

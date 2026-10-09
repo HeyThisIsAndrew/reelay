@@ -37,7 +37,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from . import __version__
 from .accounts import YOUTUBE, AccountService
 from .media import MediaLinks, public_base_url
-from .models import MANUAL_PLATFORMS, ContentType, Platform, Profile, Stage
+from .models import MANUAL_PLATFORMS, ContentType, Platform, Profile
 from .pipeline import Card, HistoryEntry, Pipeline, PipelineError
 from .products import video_products
 from .flags import env_var
@@ -53,7 +53,7 @@ DEFAULT_PORT = 8471
 CONTRACT_PATH = Path(__file__).resolve().parent.parent / "api" / "openapi.yaml"
 
 PlatformName = Literal["youtube", "bluesky", "threads", "facebook"]
-StageName = Literal["backlog", "staging", "scheduled", "published"]
+StageName = str   # backlog | staging | scheduled | published, or one of your own columns' steps ("custom:…")
 PublicationStatus = Literal["pending", "dispatching", "scheduled", "published", "failed"]
 Visibility = Literal["public", "unlisted", "private"]
 SourcePlatform = Literal["tiktok", "instagram", "youtube"]
@@ -263,9 +263,18 @@ class Video(BaseModel):
     updated_at: datetime | None = None
 
 
+class ColumnOut(BaseModel):
+    name: str = Field(description="The column's name on the board (you can rename, add and remove columns).")
+    stage: str = Field(description="Where a card moved to this column goes.")
+    stages: list[str] = Field(description="Every step shown in this column. The built-in steps are backlog, "
+                                          "staging, scheduled and published; your own columns' steps start with "
+                                          "custom:.")
+
+
 class BoardPage(BaseModel):
     profile: ProfileRef
     stage: StageName | None = Field(None, description="The stage filter applied, if any.")
+    columns: list[ColumnOut] = Field(description="The board's columns, in order, as set up in Reelay.")
     total: int = Field(description="Videos matching the filter.")
     limit: int
     offset: int
@@ -655,18 +664,27 @@ def create_app(store: Store, pipeline: Pipeline, accounts: AccountService, token
         offset: int = Query(0, ge=0, description="Videos to skip (from next_offset of the previous page)."),
         archived: bool = Query(False, description="true lists archived videos instead."),
     ) -> BoardPage:
-        """Videos in board order (Backlog → Staging → Scheduled → Published), with their post metadata, target
+        """Videos in board order (the profile's columns, left to right), with their post metadata, target
         platforms, per-platform status, and the original caption and stats. Videos fetched but not yet
         downloaded aren't on the board, and archived videos only appear with archived=true."""
+        from .columns import is_stage
+        from .columns import load as load_columns
         prof = find_profile(profile)
+        if stage is not None and not is_stage(stage):
+            raise ApiError(422, f"Unknown stage “{stage}”: use backlog, staging, scheduled, published, or a "
+                                "column's custom: step from `columns`.", "invalid_stage")
+        board_columns = load_columns(store, prof.id)
         if archived:
             cards = [pipeline.card(r.id) for r in pipeline.archived(prof.id) if stage in (None, r.stage)]
         else:
             columns = pipeline.board(prof.id)
-            cards = [c for s in Stage.ALL if stage in (None, s) for c in columns[s]]
+            order = [s for col in board_columns for s in col.stages]
+            order += [s for s in columns if s not in order]
+            cards = [c for s in order if stage in (None, s) for c in columns[s]]
         channels = {a.id: a for a in store.list_accounts(prof.id, YOUTUBE)}
         page = cards[offset:offset + limit]
         return BoardPage(profile=ProfileRef(id=prof.id, name=prof.name), stage=stage, total=len(cards),
+                         columns=[ColumnOut(name=c.name, stage=c.primary, stages=c.stages) for c in board_columns],
                          limit=limit, offset=offset,
                          next_offset=offset + limit if offset + limit < len(cards) else None,
                          videos=[to_video(c, prof, channels) for c in page])

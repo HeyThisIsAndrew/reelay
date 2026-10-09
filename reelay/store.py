@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Callable, Iterable, Iterator
 
 from .models import (TICKET_FIELDS, Account, Dispatch, DispatchStatus, ManualPost, Post, PostStatus, Profile,
-                     Revision, Source, Stage, Ticket, VideoItem, VideoRow)
+                     Revision, Source, Ticket, VideoItem, VideoRow)
 
 log = logging.getLogger("reelay")
 
@@ -495,7 +495,8 @@ class Store:
 
     def set_stage(self, row_ids: Iterable[int], stage: str, position: float | None = None) -> None:
         row_ids = list(row_ids)
-        if stage not in Stage.ALL:
+        from .columns import is_stage
+        if not is_stage(stage):
             raise ValueError(f"unknown stage {stage!r}")
         now = utcnow()
         with self.tx() as c:

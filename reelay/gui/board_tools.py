@@ -6,8 +6,8 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
-                               QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QPushButton, QScrollArea,
-                               QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
+                               QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidgetItem, QPushButton,
+                               QScrollArea, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from ..models import ContentType
 from ..sheet_import import FIELDS, LABELS, MATCH_KEYS, SheetError, fetch_google_sheet, google_export_url, read_file
@@ -406,3 +406,145 @@ class ArchivedDialog(QDialog):
             self.pipeline.archive(ids, archived=False)
             self.restored += len(ids)
             self.refresh()
+
+
+# ====================================================================== columns
+class ColumnsDialog(QDialog):
+    """Rename, add, remove and reorder the Board's columns."""
+
+    def __init__(self, columns, counts: dict[str, int], parent=None):
+        super().__init__(parent)
+        from dataclasses import replace
+
+        from PySide6.QtWidgets import QListWidget
+        self.setWindowTitle("Edit Columns")
+        self.resize(520, 460)
+        self.columns = [replace(c, stages=list(c.stages)) for c in columns]
+        self.counts = counts
+        self.moves: list[tuple[str, str]] = []
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(20, 16, 20, 14)
+        lay.setSpacing(10)
+        lay.addWidget(_label("Name your columns however you like, drag to reorder, add your own or remove ones you "
+                             "don't need. Reelay's own steps (Backlog, Staging, Scheduled, Published) always live in "
+                             "some column: removing a column hands them to its neighbour, and cards keep moving "
+                             "automatically when they're scheduled or posted.", "muted"))
+        self.list = QListWidget()
+        self.list.setDragDropMode(QAbstractItemView.InternalMove)
+        self.list.setEditTriggers(QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed |
+                                  QAbstractItemView.SelectedClicked)
+        tip(self.list, "Double-click a name to rename it. Drag to change the order.")
+        self.list.itemChanged.connect(self._renamed)
+        lay.addWidget(self.list, 1)
+        row = QHBoxLayout()
+        add = tip(QPushButton("Add Column"), "Add your own column after the highlighted one")
+        add.clicked.connect(self._add)
+        remove = tip(QPushButton("Remove Column"), "Remove the highlighted column (its cards move to the neighbour)")
+        remove.clicked.connect(self._remove)
+        rename = tip(QPushButton("Rename"), "Rename the highlighted column")
+        rename.clicked.connect(lambda: self.list.currentItem() and self.list.editItem(self.list.currentItem()))
+        reset = tip(QPushButton("Reset to Default"), "Back to Backlog, Staging, Scheduled, Published")
+        set_prop(reset, "flat")
+        reset.clicked.connect(self._reset)
+        for b in (add, remove, rename):
+            row.addWidget(b)
+        row.addStretch()
+        row.addWidget(reset)
+        lay.addLayout(row)
+        self.error = _label(prop="danger")
+        lay.addWidget(self.error)
+        buttons = QDialogButtonBox(QDialogButtonBox.Cancel | QDialogButtonBox.Save)
+        buttons.accepted.connect(self._save)
+        buttons.rejected.connect(self.reject)
+        lay.addWidget(buttons)
+        self._fill()
+
+    def _holds(self, col) -> str:
+        from ..models import Stage
+        steps = [Stage.LABELS[s] for s in col.builtin]
+        n = sum(self.counts.get(s, 0) for s in col.stages)
+        cards = f" · {n} card{'s' if n != 1 else ''}" if n else ""
+        return (f"Holds Reelay's {', '.join(steps)} step{'s' if len(steps) != 1 else ''}" if steps
+                else "Your own column") + cards
+
+    def _fill(self, select: str | None = None) -> None:
+        self.list.blockSignals(True)
+        self.list.clear()
+        for col in self.columns:
+            item = QListWidgetItem(col.name)
+            item.setData(Qt.UserRole, col.id)
+            item.setToolTip(self._holds(col))
+            item.setFlags(item.flags() | Qt.ItemIsEditable | Qt.ItemIsDragEnabled)
+            self.list.addItem(item)
+            hint = QListWidgetItem("      " + self._holds(col))
+            hint.setFlags(Qt.NoItemFlags)
+            hint.setData(Qt.UserRole, None)
+            hint.setForeground(QColor(theme.P.text3))
+            self.list.addItem(hint)
+            if col.id == select:
+                self.list.setCurrentItem(item)
+        self.list.blockSignals(False)
+
+    def _sync_order(self) -> None:
+        order = [self.list.item(i).data(Qt.UserRole) for i in range(self.list.count())]
+        by_id = {c.id: c for c in self.columns}
+        self.columns = [by_id[i] for i in order if i in by_id]
+
+    def _current(self):
+        item = self.list.currentItem()
+        cid = item.data(Qt.UserRole) if item else None
+        return next((c for c in self.columns if c.id == cid), None)
+
+    def _renamed(self, item) -> None:
+        cid = item.data(Qt.UserRole)
+        col = next((c for c in self.columns if c.id == cid), None)
+        if col is not None:
+            col.name = item.text().strip() or col.name
+
+    def _add(self) -> None:
+        from ..columns import ColumnError, add
+        self._sync_order()
+        current = self._current()
+        index = self.columns.index(current) + 1 if current else len(self.columns)
+        try:
+            col = add(self.columns, "New column", index)
+        except ColumnError as exc:
+            self.error.setText(str(exc))
+            return
+        self._fill(select=col.id)
+        self.list.editItem(self.list.currentItem())
+
+    def _remove(self) -> None:
+        from ..columns import ColumnError, is_custom, remove
+        self._sync_order()
+        current = self._current()
+        if current is None:
+            self.error.setText("Highlight a column to remove.")
+            return
+        try:
+            removed, neighbour = remove(self.columns, current.id)
+        except ColumnError as exc:
+            self.error.setText(str(exc))
+            return
+        self.moves += [(s, neighbour.primary) for s in removed.stages if is_custom(s)]
+        self.error.setText("")
+        self._fill(select=neighbour.id)
+
+    def _reset(self) -> None:
+        from ..columns import default_columns, is_custom
+        self.moves += [(s, "staging") for c in self.columns for s in c.stages if is_custom(s)]
+        self.columns = default_columns()
+        self._fill()
+
+    def _save(self) -> None:
+        from ..columns import ColumnError, validate
+        self._sync_order()
+        try:
+            validate(self.columns)
+        except ColumnError as exc:
+            self.error.setText(str(exc))
+            return
+        self.accept()
+
+    def result_columns(self):
+        return self.columns, self.moves

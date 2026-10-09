@@ -166,6 +166,7 @@ class PostPanel(QFrame):
         self.accounts: list[Account] = []
         self.enabled: frozenset[str] = frozenset({Platform.YOUTUBE})
         self.readiness_for = None   # callable(Post) -> Readiness, set by the Board
+        self.stage_name = None      # callable(stage) -> column name, set by the Board
         self._readiness_timer = QTimer(self, singleShot=True, interval=200, timeout=self._refresh_readiness)
 
         self.stack = QStackedWidget()
@@ -418,7 +419,8 @@ class PostPanel(QFrame):
         bits = [fmt_date(item.upload_date) if item.upload_date else "", fmt_duration(item.duration),
                 f"{fmt_count(item.view_count)} views on {item.platform}" if item.view_count is not None else item.platform]
         self.meta.setText(" · ".join(b for b in bits if b and b != "—"))
-        self.stage_label.setText(f"In {Stage.LABELS.get(card.row.stage, card.row.stage)}")
+        name = self.stage_name(card.row.stage) if self.stage_name else Stage.LABELS.get(card.row.stage, card.row.stage)
+        self.stage_label.setText(f"In {name}")
 
         post = card.post or default_post(card.id, item, accounts[0].id if accounts else None)
         locked = self._locked()
@@ -491,8 +493,9 @@ class PostPanel(QFrame):
         going = [s for s in states.values() if s.target]
         live = sum(1 for s in going if s.state == "published")
         sched = sum(1 for s in going if s.state in ("scheduled", "sending"))
+        prep = len(going) - sched - live
         self.platforms_section.set_summary(
-            f"{len(going)} going · {sched} scheduled · {live} live" if going else "Tick where it's going")
+            f"{prep} preparing · {sched} scheduled · {live} posted" if going else "Choose where it's going")
 
     def _sync_platforms(self) -> None:
         youtube = Platform.YOUTUBE in self._targets()

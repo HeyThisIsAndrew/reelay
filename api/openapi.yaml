@@ -7,15 +7,14 @@ info:
   description: 'Read a creator''s video board (each video is a content ticket with a readiness checklist), apply
     approved edits, record manual posts, and schedule posts to YouTube, Bluesky, Threads and Facebook. All /v1 routes
     need `Authorization: Bearer <token>`. Changes show up immediately on the Reelay desktop board.'
-  version: 0.9.0
+  version: 0.10.0
 paths:
   /v1/board:
     get:
       tags:
       - videos
       summary: List a profile's videos on the board
-      description: 'Videos in board order (Backlog → Staging → Scheduled → Published), with their post metadata,
-        target
+      description: 'Videos in board order (the profile''s columns, left to right), with their post metadata, target
 
         platforms, per-platform status, and the original caption and stats. Videos fetched but not yet
 
@@ -37,12 +36,7 @@ paths:
         required: false
         schema:
           anyOf:
-          - enum:
-            - backlog
-            - staging
-            - scheduled
-            - published
-            type: string
+          - type: string
           - type: 'null'
           description: Only this board column.
           title: Stage
@@ -999,14 +993,15 @@ components:
         stage:
           anyOf:
           - type: string
-            enum:
-            - backlog
-            - staging
-            - scheduled
-            - published
           - type: 'null'
           title: Stage
           description: The stage filter applied, if any.
+        columns:
+          items:
+            $ref: '#/components/schemas/ColumnOut'
+          type: array
+          title: Columns
+          description: The board's columns, in order, as set up in Reelay.
         total:
           type: integer
           title: Total
@@ -1031,6 +1026,7 @@ components:
       type: object
       required:
       - profile
+      - columns
       - total
       - limit
       - offset
@@ -1083,6 +1079,29 @@ components:
       - id
       - name
       title: ChannelRef
+    ColumnOut:
+      properties:
+        name:
+          type: string
+          title: Name
+          description: The column's name on the board (you can rename, add and remove columns).
+        stage:
+          type: string
+          title: Stage
+          description: Where a card moved to this column goes.
+        stages:
+          items:
+            type: string
+          type: array
+          title: Stages
+          description: Every step shown in this column. The built-in steps are backlog, staging, scheduled and published;
+            your own columns' steps start with custom:.
+      type: object
+      required:
+      - name
+      - stage
+      - stages
+      title: ColumnOut
     ErrorBody:
       properties:
         detail:
@@ -1807,11 +1826,6 @@ components:
           title: Video Id
         stage:
           type: string
-          enum:
-          - backlog
-          - staging
-          - scheduled
-          - published
           title: Stage
         scheduled_at:
           anyOf:
@@ -2140,11 +2154,6 @@ components:
           description: Profile (creator) the video belongs to.
         stage:
           type: string
-          enum:
-          - backlog
-          - staging
-          - scheduled
-          - published
           title: Stage
           description: Board column.
         title:

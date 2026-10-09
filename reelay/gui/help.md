@@ -60,13 +60,16 @@ For full control, choose **Custom pattern…** and combine pieces such as `{date
 
 ## Tickets (Board)
 
-The Board has four columns: **Backlog → Staging → Scheduled → Published**. Drag cards between them.
+The Board starts with four columns: **Backlog → Staging → Scheduled → Published**. Drag cards between them.
+
+**Make the columns your own.** Click **Edit Columns…** (or right-click a column's name) to rename, add, remove or reorder columns. For example, you could have just *Ready* and *Posted*, or six columns of your own. Reelay's four steps always live in some column: removing a column hands its steps (and cards) to the neighbouring column, so cards still move by themselves when they're scheduled or posted. Columns you add are your own steps that you drag cards in and out of. Each profile has its own columns, and many columns scroll sideways.
 
 Click a card to open its ticket:
 
 - **Ready check.** The top of the ticket lists each platform the video is going to, with a ✓ or a ⚠. The badge says **READY** when at least one of those platforms is ready to go, and **NOT READY** when none are. Platforms Reelay doesn't post to automatically are marked *posted by hand* and never block.
-- **Platforms.** One row per platform (YouTube, TikTok, Instagram, Bluesky, Threads, Facebook), each with its logo and three boxes:
-  - **Going:** the video is going there. Its logo shows on the card.
+- **Platforms.** One row per platform (YouTube, TikTok, Instagram, Bluesky, Threads, Facebook), each with its logo and one choice:
+  - **Not posting:** it isn't going there.
+  - **Preparing:** you'll post it there; it isn't scheduled yet. Its logo shows faded on the card.
   - **Scheduled:** you scheduled it in that platform's own app. Reelay asks when it goes live.
   - **Posted:** it's live.
 

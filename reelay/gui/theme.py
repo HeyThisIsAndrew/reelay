@@ -104,6 +104,13 @@ QWidget#Page, QWidget#TopBar, QWidget#BottomBar {{ background: {p.bg}; }}
 QWidget#Sidebar {{ background: {p.surface}; border-right: 1px solid {p.divider}; }}
 QWidget#ListArea, QFrame#Card {{ background: {p.surface}; border: 1px solid {p.divider}; border-radius: 10px; }}
 QWidget#CardBody {{ background: transparent; }}
+QPushButton[segment] {{ border-radius: 0; padding: 4px 7px; min-height: 18px; font-size: {BASE_PT - 1}pt;
+                        background: {p.raised}; color: {p.text2}; border: 1px solid {p.border}; margin-left: -1px; }}
+QPushButton[segment="first"] {{ border-top-left-radius: 7px; border-bottom-left-radius: 7px; margin-left: 0; }}
+QPushButton[segment="last"] {{ border-top-right-radius: 7px; border-bottom-right-radius: 7px; }}
+QPushButton[segment]:checked {{ background: {p.text}; color: {p.bg}; border-color: {p.text}; font-weight: 600; }}
+QPushButton[segment]:disabled {{ color: {p.text3}; }}
+QPushButton[segment]:checked:disabled {{ background: {p.text3}; color: {p.bg}; }}
 QFrame#SelectionStrip {{ background: {p.raised}; border: 1px solid {p.border}; border-radius: 8px; }}
 QFrame#Card QFrame#Card {{ background: {p.raised}; }}
 QWidget#DetailPanel, QScrollArea#DetailScroll, QWidget#DetailBody {{ background: {p.surface}; }}
