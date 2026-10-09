@@ -283,9 +283,17 @@ class DownloadPage(QWidget):
         self.search.setMinimumWidth(220)
         tip(self.search, "Filter the list. Matches captions, the names you've given videos, and file names.")
         bar.addWidget(self.search, 2)
-        self.select_btn = QToolButton(text="Choose Videos  ▾")
+        self.select_all_btn = QPushButton("Select All")
+        tip(self.select_all_btn, "Select every video in the list for downloading (when you've searched, only the "
+                                 "videos the search shows). Videos already downloaded are skipped.")
+        bar.addWidget(self.select_all_btn, 0, Qt.AlignTop)
+        self.unselect_all_btn = QPushButton("Unselect All")
+        tip(self.unselect_all_btn, "Clear every selection, so nothing will download until you choose again")
+        bar.addWidget(self.unselect_all_btn, 0, Qt.AlignTop)
+        self.select_btn = QToolButton(text="More  ▾")
         self.select_btn.setPopupMode(QToolButton.InstantPopup)
-        tip(self.select_btn, "Tick or untick many videos at once: all, the newest few, or what your search shows")
+        tip(self.select_btn, "More ways to select: only the newest few, only what your search shows, or the "
+                             "highlighted rows")
         bar.addWidget(self.select_btn, 0, Qt.AlignTop)
         ll.addLayout(bar)
 
@@ -362,15 +370,18 @@ class DownloadPage(QWidget):
         self.progress.setTextVisible(False)
         self.progress.setRange(0, 1000)
         self.progress.setVisible(False)
+        tip(self.progress, "Progress of the current list or download")
         bl.addWidget(self.progress)
         brow = QHBoxLayout()
         self.status = muted("")
+        tip(self.status, "What Reelay is doing, and what to do next")
         brow.addWidget(self.status, 1)
         self.manifest_btn = QPushButton("Open Video List")
         tip(self.manifest_btn, "Open manifest.md: a table of every downloaded video with its date, caption and file")
         brow.addWidget(self.manifest_btn)
         brow.addSpacing(8)
         self.count_label = muted("")
+        tip(self.count_label, "How many videos are selected for downloading, out of those not downloaded yet")
         brow.addWidget(self.count_label)
         self.cancel_btn = QPushButton("Stop")
         tip(self.cancel_btn, "Stop after the current video. Finished downloads are kept.")
@@ -381,20 +392,18 @@ class DownloadPage(QWidget):
         set_prop(self.download_btn, "primary")
         self.download_btn.setMinimumHeight(36)
         self.download_btn.setMinimumWidth(190)
-        tip(self.download_btn, "Download the ticked videos into the folder above. They appear on the Board's Backlog.")
+        tip(self.download_btn, "Download the selected videos into the folder above. They appear on the Board, in "
+                               "Backlog. Nothing is selected until you choose: use Select All or tick boxes.")
         brow.addWidget(self.download_btn)
         bl.addLayout(brow)
         outer.addLayout(bl)
 
         sel = QMenu(self)
-        sel.addAction("Tick All", lambda: self._check_all(True))
-        sel.addAction("Untick All", lambda: self._check_all(False))
+        sel.addAction("Select Only the Newest…", self._check_newest)
+        sel.addAction("Select Only What the Search Shows", self._check_visible)
         sel.addSeparator()
-        sel.addAction("Tick Highlighted Rows", lambda: self._check_selected(True))
-        sel.addAction("Untick Highlighted Rows", lambda: self._check_selected(False))
-        sel.addSeparator()
-        sel.addAction("Tick Only the Newest…", self._check_newest)
-        sel.addAction("Tick Only What the Search Shows", self._check_visible)
+        sel.addAction("Select Highlighted Rows", lambda: self._check_selected(True))
+        sel.addAction("Unselect Highlighted Rows", lambda: self._check_selected(False))
         self.select_btn.setMenu(sel)
 
         auto = QMenu(self)
@@ -446,6 +455,8 @@ class DownloadPage(QWidget):
         self.open_folder_btn.clicked.connect(self.open_output_folder)
         self.manifest_btn.clicked.connect(self.open_manifest)
         self.download_btn.clicked.connect(self._start_download)
+        self.select_all_btn.clicked.connect(self.select_all)
+        self.unselect_all_btn.clicked.connect(self.unselect_all)
         self.cancel_btn.clicked.connect(self._cancel_download)
         self.apply_btn.clicked.connect(self._apply_names)
         self.search.textChangedTo.connect(self.proxy.set_query)
@@ -548,7 +559,11 @@ class DownloadPage(QWidget):
         self.list_stack.setCurrentIndex(1 if items else 0)
         checked = len(self.model.checked_items())
         done = sum(1 for i in items if i.is_downloaded)
-        parts = [f"{checked} of {len(items) - done} selected"]
+        pending = len(items) - done
+        parts = [f"{checked} of {pending} selected" if checked else
+                 (f"None of {pending} selected" if pending else "Nothing left to download")]
+        self.select_all_btn.setEnabled(pending > 0 and checked < pending)
+        self.unselect_all_btn.setEnabled(checked > 0)
         if done:
             parts.append(f"{done} downloaded")
         self.count_label.setText(" · ".join(parts) if items else "")
@@ -605,6 +620,7 @@ class DownloadPage(QWidget):
         if not self.profile or not self.library:
             return
         pid = self.profile.id
+        previous = {i.key: i.checked for i in self.model.items()}   # what the person selected so far
         by_key: dict[str, VideoItem] = {}
         archived: set[str] = set()
         for row in self.store.load_videos(pid, archived=None):
@@ -636,6 +652,8 @@ class DownloadPage(QWidget):
             else:
                 merged.append(replace(fetched))
         merged.extend(sorted(by_key.values(), key=lambda i: i.upload_date, reverse=True))
+        for item in merged:   # new videos arrive unselected; choices already made are kept
+            item.checked = previous.get(item.key, False) and not item.is_downloaded
         self.model.set_items(merged)
         self.table.sortByColumn(Col.DATE, Qt.DescendingOrder)
         self._update_counts()
@@ -822,15 +840,15 @@ class DownloadPage(QWidget):
         self.sources = urls
         self.reload()
         held = [i for i in self.model.items() if not i.is_downloaded and not downloadable_by_default(i)]
-        if held:  # private / scheduled YouTube videos need the owner's login cookies
+        if held:  # private / scheduled YouTube videos need the owner's login cookies: never preselected
             self.model.set_checked([i.key for i in held], False)
         self.store.save_videos(self.profile.id, self.model.items(),
                                authorization=authorization or self._authorization_for(urls))
         new = sum(1 for i in self.model.items() if not i.is_downloaded)
-        note = (f" {len(held)} private or scheduled video{'s are' if len(held) != 1 else ' is'} left unticked: "
+        note = (f" {len(held)} private or scheduled video{'s' if len(held) != 1 else ''} can't download yet: "
                 "downloading those needs “Use browser sign-in” set to a browser signed into that channel.") if held else ""
         self._set_status(f"Found {len(items)} videos · {new} not downloaded yet. "
-                         "Tick the ones you want, name them if you like, then click Download." + note)
+                         "Nothing is selected yet: click Select All, or tick the ones you want, then click Download." + note)
         self._start_details()
 
     def _start_details(self) -> None:
@@ -858,6 +876,23 @@ class DownloadPage(QWidget):
     # ================================================================ selection & names
     def _check_all(self, on: bool) -> None:
         self.model.set_checked([i.key for i in self.model.items()], on)
+
+    def _shown_items(self) -> list[VideoItem]:
+        return [self.model.item(self.proxy.mapToSource(self.proxy.index(r, 0)).row())
+                for r in range(self.proxy.rowCount())]
+
+    def select_all(self) -> None:
+        """Select every video the list shows (all of them unless a search is active)."""
+        shown = self._shown_items()
+        self.model.set_checked([i.key for i in shown], True)
+        n = sum(1 for i in shown if not i.is_downloaded)
+        self._set_status(f"Selected {n} video{'s' if n != 1 else ''}" +
+                         (" (the ones your search shows)." if self.proxy.rowCount() < self.model.rowCount() else ".")
+                         if n else "Every video shown is already downloaded.")
+
+    def unselect_all(self) -> None:
+        self._check_all(False)
+        self._set_status("Nothing selected.")
 
     def _check_selected(self, on: bool) -> None:
         self.model.set_checked([i.key for i in self._selected_items()], on)

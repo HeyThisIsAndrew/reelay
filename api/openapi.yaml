@@ -7,7 +7,7 @@ info:
   description: 'Read a creator''s video board (each video is a content ticket with a readiness checklist), apply
     approved edits, record manual posts, and schedule posts to YouTube, Bluesky, Threads and Facebook. All /v1 routes
     need `Authorization: Bearer <token>`. Changes show up immediately on the Reelay desktop board.'
-  version: 0.7.0
+  version: 0.7.1
 paths:
   /v1/board:
     get:

@@ -191,10 +191,10 @@ def test_connected_channel_is_a_source_without_a_link(page_env, qtbot, monkeypat
     chips(page)[0].fetch_btn.click()
     qtbot.waitUntil(lambda: page.model.rowCount() == 2, timeout=5000)
     rows = {i.video_id: i for i in page.model.items()}
-    assert rows["pub"].checked and not rows["priv"].checked          # private left unticked
+    assert not rows["pub"].checked and not rows["priv"].checked      # nothing is preselected
     assert page.model._status_text(rows["priv"]) == "Private on YouTube"
     assert page.url.text() == ""                                      # no link was needed
-    assert "Use browser sign-in" in page.status.text()
+    assert "Use browser sign-in" in page.status.text() and "Nothing is selected yet" in page.status.text()
 
 
 def test_save_pasted_link_and_remove_with_duplicates(page_env, qtbot, monkeypatch):

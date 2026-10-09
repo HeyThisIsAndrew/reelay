@@ -128,6 +128,7 @@ def test_rename_applies_new_template_to_files(app_window, qtbot, monkeypatch):
     window, store, _ = app_window
     page = fetch_fake(window, qtbot, monkeypatch, make_items(2))
     fake_download(monkeypatch)
+    page.select_all_btn.click()
     page._start_download()
     qtbot.waitUntil(lambda: not page.busy and all(i.is_downloaded for i in page.model.items()), timeout=10000)
     from reelay.gui import download_page

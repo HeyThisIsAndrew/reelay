@@ -246,3 +246,75 @@ def test_help_is_in_the_sidebar_and_works_offline(ui):
     text = window.help_page.browser.toPlainText()
     assert "Reelay Help" in text and "Videos come in" in text and "Sign in with Google" in text
     assert store.get_setting("last_page") == "download"                       # Help never becomes the start page
+
+
+# ------------------------------------------------------------------ selection on the Download page
+def _list_videos(window, qtbot, monkeypatch, n=4):
+    import reelay.gui.workers as workers
+    items = [VideoItem(platform="TikTok", video_id=str(500 + i), url=f"https://www.tiktok.com/@x/video/{500 + i}",
+                       description=f"{'letting go' if i % 2 else 'healing'} caption {i}", upload_date=f"2026100{i + 1}")
+             for i in range(n)]
+    monkeypatch.setattr(workers, "list_videos", lambda url, opts, limit=None: ("x", [VideoItem(**i.__dict__)
+                                                                                   for i in items]))
+    page = window.download
+    page.url.setText("https://www.tiktok.com/@livingood.lifestyle")
+    page._fetch()
+    qtbot.waitUntil(lambda: page.fetch_btn.isEnabled() and page.model.rowCount() == n, timeout=5000)
+    return page
+
+
+def test_new_videos_arrive_unselected(ui, qtbot, monkeypatch):
+    window, *_ = ui
+    page = _list_videos(window, qtbot, monkeypatch)
+    assert page.model.checked_items() == []
+    assert page.count_label.text() == "None of 4 selected" and not page.download_btn.isEnabled()
+    assert page.select_all_btn.isEnabled() and not page.unselect_all_btn.isEnabled()
+    assert "Nothing is selected yet" in page.status.text()
+
+
+def test_select_all_and_unselect_all(ui, qtbot, monkeypatch):
+    window, *_ = ui
+    page = _list_videos(window, qtbot, monkeypatch)
+    page.select_all_btn.click()
+    assert len(page.model.checked_items()) == 4 and page.download_btn.text() == "Download 4 Videos"
+    assert not page.select_all_btn.isEnabled() and page.unselect_all_btn.isEnabled()
+    page.unselect_all_btn.click()
+    assert page.model.checked_items() == [] and page.status.text() == "Nothing selected."
+    page.search.setPlainText("letting go")                         # Select All follows the search
+    page.select_all_btn.click()
+    assert {i.video_id for i in page.model.checked_items()} == {"501", "503"}
+    assert "search" in page.status.text()
+
+
+def test_selections_survive_a_reload_and_new_videos_stay_unselected(ui, qtbot, monkeypatch):
+    window, *_ = ui
+    page = _list_videos(window, qtbot, monkeypatch, n=3)
+    first = page.model.items()[0].key
+    page.model.set_checked([first], True)
+    page.reload()                                                   # e.g. after changing folders
+    assert [i.key for i in page.model.checked_items()] == [first]
+    _list_videos(window, qtbot, monkeypatch, n=5)                   # list again: two new videos
+    assert [i.key for i in page.model.checked_items()] == [first]
+
+
+def test_tooltips_explain_the_selection_and_actually_show(ui, qtbot, monkeypatch):
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QToolTip
+    from reelay.gui.table_model import Col
+    window, *_ = ui
+    page = _list_videos(window, qtbot, monkeypatch, n=2)
+    model = page.model
+    cell = model.index(0, Col.CHECK)
+    assert "Not selected" in model.data(cell, Qt.ToolTipRole)
+    page.select_all_btn.click()
+    assert "Selected: downloads" in model.data(cell, Qt.ToolTipRole)
+    assert "won't download" not in model.data(model.index(0, Col.STATUS), Qt.ToolTipRole)
+    for widget in (page.select_all_btn, page.unselect_all_btn, page.select_btn, page.count_label, page.status,
+                   page.download_btn, page.fetch_btn, page.naming.combo, page.search):
+        assert len(widget.toolTip()) > 20, widget
+    # a real hover shows the tip (tips are on by default), and the Settings switch hides it
+    btn = page.unselect_all_btn
+    point = btn.rect().center()
+    QApplication.sendEvent(btn, QHelpEvent(QEvent.ToolTip, point, btn.mapToGlobal(point)))
+    qtbot.waitUntil(lambda: QToolTip.isVisible() and "Clear every selection" in QToolTip.text(), timeout=2000)
+    QToolTip.hideText()

@@ -22,7 +22,11 @@ It's a native desktop app for macOS (Windows builds included) in a monotone Ligh
   - To add one, paste a profile link and click **Save This Link…**. From a source's **⋯** menu you can rename it, mark it as one of the profile's own accounts, or remove it. Saving the same link twice is fine: it's shown once.
 - Or paste a profile link (or several video links) and click **List Videos** to see every video first: cover, date, caption, length and views.
 - Downloading pulls videos **in**. Posting pushes videos **out** to the accounts you connect under **Accounts**, from the Board.
-- Choose what to download: tick boxes, **Choose Videos ▾** (all, the newest few, or what the search shows), search, or press Space on highlighted rows.
+- Choose what to download. Newly listed videos start **unselected**, and choices you've made are kept when the list refreshes. Then:
+  - **Select All** (every video shown, so a search narrows it) or **Unselect All**;
+  - tick boxes;
+  - **More ▾** (the newest few, what the search shows, or the highlighted rows);
+  - or press Space on highlighted rows.
 - **Name files** offers plain choices with a live example: *Platform, date and video ID* (the default), *Date and your name*, and others. Patterns like `{date}_{custom}` are still available under **Custom pattern…**. **Suggest Names ▾** fills names from captions, or you can type your own.
 - TikTok downloads are always the clean, watermark-free stream with the creator's own audio. The post's separate "sound" track is never merged in.
 - **Rename Files…** batch-renames files you've already downloaded, with a preview first.

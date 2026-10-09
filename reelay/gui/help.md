@@ -14,7 +14,7 @@ Hover over almost anything to see what it does. You can turn those tips off in *
 ## Getting started
 
 1. **Pick a profile.** The name at the top of the sidebar is the current profile. Each creator or channel gets their own profile, with its own videos, board and accounts. Click it to switch profiles or make a new one.
-2. **Bring videos in.** On **Download**, paste a profile link and click **List Videos**. Tick the ones you want, then click **Download**.
+2. **Bring videos in.** On **Download**, paste a profile link and click **List Videos**. Nothing is selected at first: click **Select All**, or tick the ones you want, then click **Download**.
 3. **Write the posts.** On **Board**, click a video to open its ticket. Fill in the captions, then check the readiness list at the top.
 4. **Post.** Copy each caption into the platform's app, or connect YouTube under **Accounts** and let Reelay schedule it for you.
 
@@ -27,7 +27,12 @@ Only import media you own or have permission to manage.
 - **Saved sources** are buttons for links you use often. Click **List Videos** on one to see its videos. To add one, paste a link and click **Save This Link…**. Use the **⋯** menu on a source to rename it, mark it as one of your own accounts, or remove it.
 - **Connected YouTube channels** (from Accounts) appear as sources automatically and don't need a link. Private and scheduled videos are shown but left unticked.
 - **Pasting a link:** paste a profile link, or several video links separated by spaces, then click **List Videos**. Nothing is downloaded until you click **Download**.
-- **Choosing videos:** tick the boxes, use **Choose Videos ▾** (all, the newest few, or what your search shows), or press **Space** on highlighted rows.
+- **Choosing videos:** newly listed videos start unselected, so nothing downloads by surprise. Your choices are kept when the list refreshes.
+  - **Select All** selects every video shown (if you've searched, only the search results).
+  - **Unselect All** clears the selection.
+  - **More ▾** selects only the newest few, only what your search shows, or the highlighted rows.
+  - You can also tick boxes one by one, or press **Space** on highlighted rows.
+  - The count at the bottom shows how many are selected.
 - **Search** matches captions, the names you've given videos, and file names.
 - **Use browser sign-in** borrows your sign-in from a web browser. Instagram usually needs it, as do your own private YouTube videos. Reelay never sees your password.
 - **TikTok** downloads are the clean original without the watermark, with the creator's own audio.

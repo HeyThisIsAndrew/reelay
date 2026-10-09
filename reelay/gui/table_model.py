@@ -33,7 +33,7 @@ HEADERS = {
     Col.FILENAME: "FILE NAME", Col.STATUS: "STATUS",
 }
 HEADER_TIPS = {
-    Col.CHECK: "Ticked videos are downloaded when you click Download",
+    Col.CHECK: "Selected videos download when you click Download. Click a box to select or unselect a video.",
     Col.COVER: "Cover image",
     Col.DATE: "When the video was first posted",
     Col.HOOK: "The start of the video's caption",
@@ -285,6 +285,13 @@ class VideoTableModel(QAbstractTableModel):
         }.get(col, "")
 
     def _tooltip(self, item: VideoItem, col: Col):
+        if col == Col.CHECK:
+            if item.is_downloaded:
+                return "Already downloaded. It's on the Board, in Backlog."
+            return ("Selected: downloads when you click Download. Click to unselect." if item.checked else
+                    "Not selected. Click to select it for downloading.")
+        if col == Col.COVER:
+            return "Click the row to see this video's caption, details and file name on the right."
         if col == Col.HOOK:
             return item.hook
         if col == Col.DATE and item.upload_date:
@@ -298,6 +305,17 @@ class VideoTableModel(QAbstractTableModel):
             return f"Currently: {item.filename}\nClick “Rename Files…” to rename it."
         if col == Col.CUSTOM and not item.custom_name:
             return "Double-click to give this video your own name"
+        if col == Col.STATUS:
+            if item.status == Status.DOWNLOADED:
+                return "Downloaded. Find it on the Board, in Backlog."
+            if item.status in (Status.DOWNLOADING, Status.QUEUED):
+                return "Downloading now, or waiting its turn."
+            return ("Selected: downloads when you click Download." if item.checked else
+                    "Not selected, so it won't download. Tick its box or click Select All.")
+        if col == Col.VIEWS:
+            return "Views on the original platform when the list was made"
+        if col == Col.LENGTH:
+            return "How long the video is"
         return None
 
     def _foreground(self, item: VideoItem, col: Col):
