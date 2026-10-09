@@ -7,7 +7,7 @@ info:
   description: 'Read a creator''s video board (each video is a content ticket with a readiness checklist), apply
     approved edits, record manual posts, and schedule posts to YouTube, Bluesky, Threads and Facebook. All /v1 routes
     need `Authorization: Bearer <token>`. Changes show up immediately on the Reelay desktop board.'
-  version: 0.8.1
+  version: 0.9.0
 paths:
   /v1/board:
     get:
@@ -1517,6 +1517,37 @@ components:
       - profile
       - platforms
       title: PlatformsResponse
+    ProductOut:
+      properties:
+        id:
+          type: string
+          title: Id
+          description: 'The platform''s product id: the same product has the same id on every video.'
+        name:
+          type: string
+          title: Name
+          description: Short name shown on the video.
+        title:
+          type: string
+          title: Title
+          description: The product's full listing title (usually starts with the brand).
+        platform:
+          type: string
+          title: Platform
+          description: Where the product is tagged, e.g. tiktok (TikTok Shop).
+        url:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Url
+          description: The product's page, when the platform gives one.
+      type: object
+      required:
+      - id
+      - name
+      - title
+      - platform
+      title: ProductOut
     ProfileRef:
       properties:
         id:
@@ -1904,6 +1935,14 @@ components:
           title: Creator
         stats:
           $ref: '#/components/schemas/Stats'
+        products:
+          anyOf:
+          - items:
+              $ref: '#/components/schemas/ProductOut'
+            type: array
+          - type: 'null'
+          title: Products
+          description: Products tagged on the original post (TikTok Shop). [] = none; null = not looked up yet.
       type: object
       required:
       - platform

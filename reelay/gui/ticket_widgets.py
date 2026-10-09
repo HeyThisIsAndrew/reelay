@@ -284,7 +284,7 @@ class TicketDetails(QWidget):
             self.thumbnail.setText(path)
             self._commit("thumbnail_path", path)
 
-    def set_ticket(self, ticket: Ticket, row_id: int, others: list[tuple[int, str]]) -> None:
+    def set_ticket(self, ticket: Ticket, row_id: int, others: list[tuple[int, str]], products=()) -> None:
         """Fill the fields. `others`: (video id, title) for the "Cut from" choice."""
         self._loading = True
         try:
@@ -317,6 +317,9 @@ class TicketDetails(QWidget):
                 parts.append(" · ".join(x for x in (source, link) if x))
             if ticket.imported_at:
                 parts.append(f"Imported {local_text(ticket.imported_at)}")
+            for p in products:
+                link = f" · <a href='{html.escape(p.url)}'>shop page</a>" if p.url else ""
+                parts.append(f"Tagged product: {html.escape(p.label)}{link}")
             self.origin.setText("<br>".join(parts) or "Not recorded (made before Reelay kept provenance).")
             if not self.authorization.lineEdit().hasFocus():
                 self.authorization.setEditText(ticket.authorization or "")

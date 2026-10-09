@@ -22,6 +22,10 @@ It's a native desktop app for macOS (Windows builds included) in a monotone Ligh
   - To add one, paste a profile link and click **Save This Link…**. From a source's **⋯** menu you can rename it, mark it as one of the profile's own accounts, or remove it. Saving the same link twice is fine: it's shown once.
 - Or paste a profile link (or several video links) and click **List Videos** to see every video first: cover, date, caption, length and views.
 - Downloading pulls videos **in**. Posting pushes videos **out** to the accounts you connect under **Accounts**, from the Board.
+- **Tagged products (TikTok Shop):** each TikTok video's tagged products are read from its public page in the background.
+  - **All products ▾** filters to every video for one product, even with different captions, and search matches product names and brands.
+  - Products also appear in the side panel, on the ticket, and in the API (`source.products`).
+  - YouTube's Data API has no product tags, and Instagram's need the owner's Meta app, so those aren't read yet.
 - **Search and hashtag categories:** the search matches captions and hashtags, and **All hashtags ▾** filters the list to one hashtag (with counts). You can also click a hashtag in the side panel. The Board has the same search and hashtag filter.
 - Choose what to download in the **selection strip** above the list, which always says what's selected. Newly listed videos start **unselected**, and choices you've made are kept when the list refreshes. Then:
   - **Select All** (every video shown, so a search narrows it) or **Unselect All**;

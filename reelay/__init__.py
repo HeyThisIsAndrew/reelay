@@ -5,4 +5,4 @@ Download (watermark-free), review, rename, stage and schedule videos.
 
 APP_NAME = "Reelay"
 APP_ID = "Reelay"
-__version__ = "0.8.1"
+__version__ = "0.9.0"

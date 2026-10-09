@@ -82,6 +82,49 @@ class DetailsWorker(QThread):
             return None
 
 
+class ProductsWorker(QThread):
+    """Looks up the products tagged on TikTok videos (one page read each, a
+    couple at a time). Videos it can't read are left for a later try."""
+
+    loaded = Signal(str, object)   # key, list of product records (may be empty)
+    finishedAll = Signal(int)      # how many videos had at least one product
+
+    def __init__(self, items: list[VideoItem], ydl_opts: dict, lookup=None, parent=None):
+        super().__init__(parent)
+        self.items = [replace(i) for i in items]
+        self.ydl_opts = ydl_opts
+        self._stop = threading.Event()
+        if lookup is None:
+            from ..products import tiktok_products as lookup
+        self.lookup = lookup
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    def run(self) -> None:
+        tagged = 0
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = {pool.submit(self._one, item): item for item in self.items}
+            for future in as_completed(futures):
+                if self._stop.is_set():
+                    pool.shutdown(wait=False, cancel_futures=True)
+                    return
+                found = future.result()
+                if found is not None:
+                    tagged += bool(found)
+                    self.loaded.emit(futures[future].key, [p.to_record() for p in found])
+        self.finishedAll.emit(tagged)
+
+    def _one(self, item: VideoItem):
+        if self._stop.is_set():
+            return None
+        try:
+            return self.lookup(item.url, self.ydl_opts)
+        except Exception as exc:  # noqa: BLE001 — best-effort; tried again next time
+            log.debug("products for %s failed: %s", item.key, exc)
+            return None
+
+
 class DownloadWorker(QThread):
     itemStarted = Signal(str, int, int)      # key, number (1-based), total
     itemProgress = Signal(str, object)       # key, Progress

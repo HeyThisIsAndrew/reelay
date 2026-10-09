@@ -459,7 +459,8 @@ class PostPanel(QFrame):
         """The ticket fields and publishing history for the card on show."""
         if self.card is None:
             return
-        self.details.set_ticket(self.card.row.ticket, self.card.id, others)
+        from ..products import video_products
+        self.details.set_ticket(self.card.row.ticket, self.card.id, others, video_products(self.card.row.item))
         self.history.set_history(history)
 
     def _refresh_readiness(self) -> None:

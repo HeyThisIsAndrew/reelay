@@ -337,6 +337,7 @@ class BoardPage(QWidget):
         self.bulk_ids: list[int] = []
         self.filter = "all"
         self.tag = ""
+        self.product = ""
         self.query = ""
         self.sync_worker: CallWorker | None = None
         self.task_worker: CallWorker | None = None
@@ -393,7 +394,7 @@ class BoardPage(QWidget):
         find.setSpacing(10)
         self.search = tip(QLineEdit(), "Find tickets by words in the title, caption, any platform's copy, hashtags, "
                                        "topic or keywords")
-        self.search.setPlaceholderText("Search tickets: titles, captions, hashtags, topics…")
+        self.search.setPlaceholderText("Search tickets: titles, captions, hashtags, products, topics…")
         self.search.setClearButtonEnabled(True)
         self.search.setAttribute(Qt.WA_MacShowFocusRect, False)
         self.search.textChanged.connect(self._on_search)
@@ -406,6 +407,14 @@ class BoardPage(QWidget):
         self.tag_box.addItem("All hashtags", "")
         self.tag_box.currentIndexChanged.connect(self._on_filter)
         find.addWidget(self.tag_box)
+        self.product_box = tip(QComboBox(), "Show only tickets tagged with one product (TikTok Shop), even when their "
+                                            "captions and hashtags differ")
+        self.product_box.setMinimumWidth(170)
+        self.product_box.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.product_box.setMinimumContentsLength(14)
+        self.product_box.addItem("All products", "")
+        self.product_box.currentIndexChanged.connect(self._on_filter)
+        find.addWidget(self.product_box)
         find.addWidget(self.filter_box)
         outer.addLayout(find)
 
@@ -487,6 +496,7 @@ class BoardPage(QWidget):
             return
         self.cards = {card.id: card for cards in columns.values() for card in cards}
         self._refresh_tag_box(self.cards.values())
+        self._refresh_product_box(self.cards.values())
         for stage, col in self.columns.items():
             shown = [c for c in columns[stage] if self._matches(c)]
             col.set_cards(shown, total=len(columns[stage]))
@@ -499,6 +509,8 @@ class BoardPage(QWidget):
     def _matches(self, card: Card) -> bool:
         from ..tags import video_tags
         if self.tag and self.tag not in video_tags(card.row.item, card.post):
+            return False
+        if self.product and not any(p.get("id") == self.product for p in card.row.item.products or []):
             return False
         if self.query and not all(word in self._haystack(card) for word in self.query.split()):
             return False
@@ -515,7 +527,7 @@ class BoardPage(QWidget):
     def _haystack(card: Card) -> str:
         item, post, t = card.row.item, card.post, card.row.ticket
         parts = [card.title, item.hook, item.description, item.custom_name, t.topic or "", t.keywords or "",
-                 t.creator or ""]
+                 t.creator or "", *(f"{p.get('name', '')} {p.get('title', '')}" for p in item.products or [])]
         if post is not None:
             parts += [post.title, post.description, " ".join(post.tags), post.hashtags or "",
                       *(getattr(post, f) or "" for f in ("tiktok_text", "instagram_text", "bluesky_text",
@@ -542,6 +554,30 @@ class BoardPage(QWidget):
             self.tag = ""
         self.tag_box.blockSignals(False)
 
+    def _refresh_product_box(self, cards) -> None:
+        from collections import Counter
+
+        from ..products import video_products
+        products, count = {}, Counter()
+        for c in cards:
+            for p in video_products(c.row.item):
+                products.setdefault(p.id, p)
+                count[p.id] += 1
+        ordered = sorted(products.values(), key=lambda p: (-count[p.id], p.label.lower()))
+        wanted = [("", "All products")] + [(p.id, f"{p.label}  ({count[p.id]})") for p in ordered]
+        if [(self.product_box.itemData(i), self.product_box.itemText(i))
+                for i in range(self.product_box.count())] == wanted:
+            return
+        self.product_box.blockSignals(True)
+        self.product_box.clear()
+        for pid, label in wanted:
+            self.product_box.addItem(label, pid)
+        index = self.product_box.findData(self.product)
+        self.product_box.setCurrentIndex(max(index, 0))
+        if index < 0:
+            self.product = ""
+        self.product_box.blockSignals(False)
+
     def filter_by_tag(self, tag: str) -> None:
         index = self.tag_box.findData(tag.lstrip("#").lower())
         if index >= 0:
@@ -550,6 +586,7 @@ class BoardPage(QWidget):
     def _on_filter(self) -> None:
         self.filter = self.filter_box.currentData()
         self.tag = self.tag_box.currentData() or ""
+        self.product = self.product_box.currentData() or ""
         self.reload()
 
     # ---------------------------------------------------------------- multi-select & bulk

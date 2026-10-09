@@ -35,6 +35,8 @@ Only import media you own or have permission to manage.
   - The count at the bottom shows how many are selected.
 - **Search** matches captions (hashtags included), the names you've given videos, and file names.
 - **Hashtags as categories.** The menu next to the search (**All hashtags ▾**) lists every hashtag in the list, with how many videos have it. Pick one to show only those videos. You can also click a hashtag in the side panel. **Select All** then selects just what's shown.
+- **Tagged products (TikTok Shop).** Reelay looks up which products are tagged on each TikTok video, in the background. **All products ▾** (next to the hashtags) lists them with how many videos have each; pick one to see every video for that product, even when the captions and hashtags are worded differently. Search finds product names too: typing a brand finds every video tagged with its products. Products also show in the side panel (click one to filter) and on the ticket, under *Where it came from*.
+  - YouTube and Instagram product tags aren't read yet. YouTube's API doesn't include them, and Instagram's need the account owner's Meta app.
 - **The selection strip** right above the list always says what will download ("Nothing selected yet" or "12 selected"), and holds **Select All**, **Unselect All** and **More ▾**.
 - **Use browser sign-in** borrows your sign-in from a web browser. Instagram usually needs it, as do your own private YouTube videos. Reelay never sees your password.
 - **TikTok** downloads are the clean original without the watermark, with the creator's own audio.

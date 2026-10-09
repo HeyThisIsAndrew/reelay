@@ -39,6 +39,7 @@ from .accounts import YOUTUBE, AccountService
 from .media import MediaLinks, public_base_url
 from .models import MANUAL_PLATFORMS, ContentType, Platform, Profile, Stage
 from .pipeline import Card, HistoryEntry, Pipeline, PipelineError
+from .products import video_products
 from .flags import env_var
 from .platform_text import (BLUESKY_MAX_GRAPHEMES, FACEBOOK_MAX_CHARS, INSTAGRAM_MAX_CHARS, INSTAGRAM_MAX_HASHTAGS,
                             THREADS_MAX_CHARS, TIKTOK_MAX_CHARS)
@@ -105,6 +106,14 @@ class Stats(BaseModel):
     duration_seconds: float | None = None
 
 
+class ProductOut(BaseModel):
+    id: str = Field(description="The platform's product id: the same product has the same id on every video.")
+    name: str = Field(description="Short name shown on the video.")
+    title: str = Field(description="The product's full listing title (usually starts with the brand).")
+    platform: str = Field(description="Where the product is tagged, e.g. tiktok (TikTok Shop).")
+    url: str | None = Field(None, description="The product's page, when the platform gives one.")
+
+
 class SourceInfo(BaseModel):
     platform: str = Field(description="Where the video was originally posted (TikTok, Instagram, YouTube).")
     url: str = Field(description="The original post's URL.")
@@ -113,6 +122,8 @@ class SourceInfo(BaseModel):
     uploaded_on: str | None = Field(None, description="Original upload date, YYYY-MM-DD.")
     creator: str | None = None
     stats: Stats
+    products: list[ProductOut] | None = Field(None, description="Products tagged on the original post (TikTok "
+                                                                "Shop). [] = none; null = not looked up yet.")
 
 
 class Overrides(BaseModel):
@@ -604,7 +615,10 @@ def create_app(store: Store, pipeline: Pipeline, accounts: AccountService, token
                               uploaded_on=f"{date[:4]}-{date[4:6]}-{date[6:]}" if len(date) == 8 else None,
                               creator=item.uploader or None,
                               stats=Stats(views=item.view_count, likes=item.like_count,
-                                          comments=item.comment_count, duration_seconds=item.duration)),
+                                          comments=item.comment_count, duration_seconds=item.duration),
+                              products=None if item.products is None else [
+                                  ProductOut(id=p.id, name=p.name, title=p.title, platform=p.platform,
+                                             url=p.url or None) for p in video_products(item)]),
             updated_at=parse_utc(row.updated_at),
         )
 

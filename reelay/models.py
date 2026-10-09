@@ -99,6 +99,7 @@ class VideoItem:
     watermark_free: bool | None = None
     downloaded_at: str = ""
     availability: str = ""         # YouTube listing via the Data API: public | unlisted | private | scheduled
+    products: list | None = None   # products tagged on the post (TikTok Shop); None = not looked up yet
     # runtime-only
     checked: bool = True
     status: str = Status.NEW
@@ -180,6 +181,8 @@ class VideoItem:
             value = getattr(other, name)
             if value not in (None, "", []):
                 setattr(self, name, value)
+        if other.products is not None:
+            self.products = other.products
 
     def to_record(self) -> dict:
         return {k: v for k, v in asdict(self).items() if k not in RUNTIME_FIELDS}

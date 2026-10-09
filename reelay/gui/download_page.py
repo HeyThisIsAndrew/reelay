@@ -36,7 +36,7 @@ from .theme import set_prop
 from .tips import tip
 from .widgets import GrowingSearch, NamingPicker
 from .thumbnails import ThumbnailCache
-from .workers import CallWorker, DetailsWorker, DownloadWorker, FetchWorker
+from .workers import CallWorker, DetailsWorker, DownloadWorker, FetchWorker, ProductsWorker
 
 log = logging.getLogger("reelay")
 OWN_CONTENT = "Own content"
@@ -173,6 +173,7 @@ class DownloadPage(QWidget):
         self.failures: list[tuple[str, str]] = []
         self.fetch_worker: FetchWorker | None = None
         self.details_worker: DetailsWorker | None = None
+        self.products_worker: ProductsWorker | None = None
         self.download_worker: DownloadWorker | None = None
         self._dl_total = self._dl_index = 0
         self._loading_profile = False
@@ -279,7 +280,7 @@ class DownloadPage(QWidget):
         ll.setSpacing(10)
         bar = QHBoxLayout()
         bar.setSpacing(10)
-        self.search = GrowingSearch("Search captions, hashtags, your names and file names")
+        self.search = GrowingSearch("Search captions, hashtags, tagged products, your names, file names")
         self.search.setMinimumWidth(220)
         tip(self.search, "Filter the list. Matches captions (hashtags included), the names you've given videos, "
                          "and file names.")
@@ -291,6 +292,14 @@ class DownloadPage(QWidget):
         self.tag_filter.setMinimumContentsLength(14)
         self.tag_filter.addItem("All hashtags", "")
         bar.addWidget(self.tag_filter, 0, Qt.AlignTop)
+        self.product_filter = tip(QComboBox(), "Show only videos tagged with one product (TikTok Shop), even when "
+                                               "the captions and hashtags are different. The number is how many "
+                                               "videos have it. Reelay looks up tagged products in the background.")
+        self.product_filter.setMinimumWidth(170)
+        self.product_filter.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.product_filter.setMinimumContentsLength(14)
+        self.product_filter.addItem("All products", "")
+        bar.addWidget(self.product_filter, 0, Qt.AlignTop)
         ll.addLayout(bar)
 
         # ---- selection strip: what will download, and the buttons to change it
@@ -525,8 +534,11 @@ class DownloadPage(QWidget):
         self.apply_btn.clicked.connect(self._apply_names)
         self.search.textChangedTo.connect(lambda text: (self.proxy.set_query(text), self._update_counts()))
         self.tag_filter.currentIndexChanged.connect(self._on_tag_filter)
+        self.product_filter.currentIndexChanged.connect(self._on_product_filter)
+        self.detail.productClicked.connect(self.filter_by_product)
         self.detail.tagClicked.connect(self.filter_by_tag)
         self._tags_timer = QTimer(self, singleShot=True, interval=400, timeout=self._refresh_tags)
+        self._products_timer = QTimer(self, singleShot=True, interval=600, timeout=self._refresh_products)
         self.naming.templateChanged.connect(self._on_template)
         self.quality.currentIndexChanged.connect(self._save_profile_prefs)
         self.cookies.currentIndexChanged.connect(self._save_profile_prefs)
@@ -644,6 +656,7 @@ class DownloadPage(QWidget):
         set_prop(self.select_all_btn, "primary", pending > 0 and not checked)   # the obvious next step
         set_prop(self.download_btn, "primary", checked > 0)
         self._tags_timer.start()
+        self._products_timer.start()
         if done:
             parts.append(f"{done} downloaded")
         self.count_label.setText(" · ".join(parts) if items else "")
@@ -932,6 +945,7 @@ class DownloadPage(QWidget):
         self._start_details()
 
     def _start_details(self) -> None:
+        self._start_products()
         needing = [i for i in self.model.items() if not i.has_details and not i.is_downloaded]
         if not needing or (self.details_worker and self.details_worker.isRunning()):
             return
@@ -942,6 +956,72 @@ class DownloadPage(QWidget):
     def _stop_details(self) -> None:
         if self.details_worker and self.details_worker.isRunning():
             self.details_worker.stop()
+        if self.products_worker and self.products_worker.isRunning():
+            self.products_worker.stop()
+
+    # ================================================================ tagged products (TikTok Shop)
+    def _start_products(self) -> None:
+        needing = [i for i in self.model.items() if i.platform == "TikTok" and i.products is None and i.url]
+        if not needing or (self.products_worker and self.products_worker.isRunning()):
+            return
+        self.products_worker = ProductsWorker(needing, self._opts(), parent=self)
+        self.products_worker.loaded.connect(self._on_products)
+        self.products_worker.finishedAll.connect(self._products_done)
+        self.products_worker.start()
+
+    def _on_products(self, key: str, records: list) -> None:
+        item = self.model.find(key)
+        if item is None or not self.profile:
+            return
+        item.products = records
+        self.store.save_video(self.profile.id, item)
+        self._products_timer.start()
+        if records and self.detail.item is not None and self.detail.item.key == key:
+            self._refresh_detail()
+
+    def _products_done(self, tagged: int) -> None:
+        self._refresh_products()
+        if tagged:
+            self._set_status(f"Found tagged products on {tagged} video{'s' if tagged != 1 else ''}. Use "
+                             "“All products” above the list to see every video for one product.")
+
+    def _refresh_products(self) -> None:
+        """Rebuild the product list from the videos on the page, keeping the choice."""
+        from collections import Counter
+
+        from ..products import video_products
+        current = self.product_filter.currentData() or ""
+        products, count = {}, Counter()
+        for item in self.model.items():
+            for p in video_products(item):
+                products.setdefault(p.id, p)
+                count[p.id] += 1
+        ordered = sorted(products.values(), key=lambda p: (-count[p.id], p.label.lower()))
+        wanted = [("", "All products")] + [(p.id, f"{p.label}  ({count[p.id]})") for p in ordered]
+        if [(self.product_filter.itemData(i), self.product_filter.itemText(i))
+                for i in range(self.product_filter.count())] == wanted:
+            return
+        self.product_filter.blockSignals(True)
+        self.product_filter.clear()
+        for pid, label in wanted:
+            self.product_filter.addItem(label, pid)
+            self.product_filter.setItemData(self.product_filter.count() - 1,
+                                            products[pid].title if pid else "Every video", Qt.ToolTipRole)
+        index = self.product_filter.findData(current)
+        self.product_filter.setCurrentIndex(max(index, 0))
+        self.product_filter.blockSignals(False)
+        if index < 0 and current:
+            self._on_product_filter()
+
+    def _on_product_filter(self) -> None:
+        self.proxy.set_product(self.product_filter.currentData())
+        self._update_counts()
+
+    def filter_by_product(self, product_id: str) -> None:
+        self._refresh_products()
+        index = self.product_filter.findData(product_id)
+        if index >= 0:
+            self.product_filter.setCurrentIndex(index)
 
     def _on_details(self, key: str, fresh: VideoItem) -> None:
         item = self.model.find(key)
@@ -1224,6 +1304,8 @@ class DownloadPage(QWidget):
         self._stop_details()
         if self.details_worker:
             self.details_worker.wait(3000)
+        if self.products_worker:
+            self.products_worker.wait(3000)
         if self._save_timer.isActive():
             self._save_timer.stop()
             self._persist_names()

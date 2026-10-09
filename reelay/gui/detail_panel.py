@@ -76,6 +76,7 @@ class DetailPanel(QFrame):
     checkSelected = Signal(bool)          # for multi-selection
     autoNameSelected = Signal()
     tagClicked = Signal(str)              # a hashtag, without #
+    productClicked = Signal(str)          # a tagged product's id
 
     def __init__(self, thumbs: ThumbnailCache, parent=None):
         super().__init__(parent)
@@ -160,6 +161,17 @@ class DetailPanel(QFrame):
         tip(self.tags, "Click a hashtag to show only videos with it")
         lay.addWidget(self.tags_header)
         lay.addWidget(self.tags)
+
+        self.products_header = tip(_label("TAGGED PRODUCTS", prop="section"),
+                                   "Products tagged on this post (TikTok Shop). Click one to show every video "
+                                   "tagged with it.")
+        self.products = _label(prop="muted")
+        self.products.setTextFormat(Qt.RichText)
+        self.products.setTextInteractionFlags(Qt.LinksAccessibleByMouse)
+        self.products.linkActivated.connect(lambda href: self.productClicked.emit(href.removeprefix("product:")))
+        tip(self.products, "Click a product to show every video tagged with it")
+        lay.addWidget(self.products_header)
+        lay.addWidget(self.products)
 
         lay.addSpacing(6)
         lay.addWidget(tip(_label("DETAILS", prop="section"), "Facts about the original post"))
@@ -251,6 +263,12 @@ class DetailPanel(QFrame):
                                               f"{html.escape(t)}</a>" for t in tags))
         self.tags_header.setVisible(bool(tags))
         self.tags.setVisible(bool(tags))
+        from ..products import video_products
+        found = video_products(item)
+        self.products.setText("<br>".join(f"• <a href='product:{html.escape(p.id)}' style='text-decoration:none'>"
+                                          f"{html.escape(p.label)}</a>" for p in found))
+        self.products_header.setVisible(bool(found))
+        self.products.setVisible(bool(found))
 
         rows = [("Platform", item.platform), ("Video ID", item.video_id),
                 ("Creator", item.uploader or "—"),
