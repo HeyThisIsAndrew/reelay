@@ -11,7 +11,7 @@ from datetime import datetime
 from PySide6.QtCore import (QAbstractListModel, QItemSelectionModel, QMimeData, QModelIndex, QRect, QRectF, QSize,
                             Qt, QTimer, Signal)
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPen
-from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFrame, QHBoxLayout, QLabel, QListView, QMenu,
+from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QListView, QMenu,
                                QMessageBox, QPushButton, QSplitter, QStackedWidget, QStyle, QStyledItemDelegate,
                                QVBoxLayout, QWidget)
 
@@ -336,6 +336,8 @@ class BoardPage(QWidget):
         self.selected_id: int | None = None
         self.bulk_ids: list[int] = []
         self.filter = "all"
+        self.tag = ""
+        self.query = ""
         self.sync_worker: CallWorker | None = None
         self.task_worker: CallWorker | None = None
         self._last_sync = 0.0
@@ -372,7 +374,6 @@ class BoardPage(QWidget):
                            *((f"blocking:{p}", f"Show: Blocking {Platform.LABELS[p]}") for p in Platform.ALL)):
             self.filter_box.addItem(label, key)
         self.filter_box.currentIndexChanged.connect(self._on_filter)
-        head.addWidget(self.filter_box)
         self.import_btn = tip(QPushButton("Import Sheet…"), "Fill tickets from a spreadsheet (CSV file or a Google "
                                                             "Sheets link), with a preview before anything changes")
         self.import_btn.clicked.connect(self.open_import)
@@ -386,6 +387,27 @@ class BoardPage(QWidget):
         self.sync_btn.clicked.connect(lambda: self.sync(force=True))
         head.addWidget(self.sync_btn)
         outer.addLayout(head)
+
+        # ---- find tickets: search, hashtag (category), readiness
+        find = QHBoxLayout()
+        find.setSpacing(10)
+        self.search = tip(QLineEdit(), "Find tickets by words in the title, caption, any platform's copy, hashtags, "
+                                       "topic or keywords")
+        self.search.setPlaceholderText("Search tickets: titles, captions, hashtags, topics…")
+        self.search.setClearButtonEnabled(True)
+        self.search.setAttribute(Qt.WA_MacShowFocusRect, False)
+        self.search.textChanged.connect(self._on_search)
+        find.addWidget(self.search, 1)
+        self.tag_box = tip(QComboBox(), "Show only tickets with one hashtag, like a category. The number is how many "
+                                        "tickets have it.")
+        self.tag_box.setMinimumWidth(170)
+        self.tag_box.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.tag_box.setMinimumContentsLength(14)
+        self.tag_box.addItem("All hashtags", "")
+        self.tag_box.currentIndexChanged.connect(self._on_filter)
+        find.addWidget(self.tag_box)
+        find.addWidget(self.filter_box)
+        outer.addLayout(find)
 
         cols = QWidget()
         cl = QHBoxLayout(cols)
@@ -464,6 +486,7 @@ class BoardPage(QWidget):
         except PipelineError:  # profile was just deleted
             return
         self.cards = {card.id: card for cards in columns.values() for card in cards}
+        self._refresh_tag_box(self.cards.values())
         for stage, col in self.columns.items():
             shown = [c for c in columns[stage] if self._matches(c)]
             col.set_cards(shown, total=len(columns[stage]))
@@ -474,6 +497,11 @@ class BoardPage(QWidget):
 
     # ---------------------------------------------------------------- filter
     def _matches(self, card: Card) -> bool:
+        from ..tags import video_tags
+        if self.tag and self.tag not in video_tags(card.row.item, card.post):
+            return False
+        if self.query and not all(word in self._haystack(card) for word in self.query.split()):
+            return False
         r = card.readiness
         if self.filter == "all" or r is None:
             return True
@@ -483,8 +511,45 @@ class BoardPage(QWidget):
             return bool(r.blocking)
         return self.filter.split(":", 1)[1] in r.blocking
 
+    @staticmethod
+    def _haystack(card: Card) -> str:
+        item, post, t = card.row.item, card.post, card.row.ticket
+        parts = [card.title, item.hook, item.description, item.custom_name, t.topic or "", t.keywords or "",
+                 t.creator or ""]
+        if post is not None:
+            parts += [post.title, post.description, " ".join(post.tags), post.hashtags or "",
+                      *(getattr(post, f) or "" for f in ("tiktok_text", "instagram_text", "bluesky_text",
+                                                         "threads_text", "facebook_text"))]
+        return " ".join(parts).lower()
+
+    def _on_search(self, text: str) -> None:
+        self.query = text.strip().lower()
+        self._reload_timer.start()
+
+    def _refresh_tag_box(self, cards) -> None:
+        from ..tags import counts, video_tags
+        found = counts(video_tags(c.row.item, c.post) for c in cards)
+        wanted = [("", "All hashtags")] + [(t, f"#{t}  ({n})") for t, n in found]
+        if [(self.tag_box.itemData(i), self.tag_box.itemText(i)) for i in range(self.tag_box.count())] == wanted:
+            return
+        self.tag_box.blockSignals(True)
+        self.tag_box.clear()
+        for tag, label in wanted:
+            self.tag_box.addItem(label, tag)
+        index = self.tag_box.findData(self.tag)
+        self.tag_box.setCurrentIndex(max(index, 0))
+        if index < 0:
+            self.tag = ""
+        self.tag_box.blockSignals(False)
+
+    def filter_by_tag(self, tag: str) -> None:
+        index = self.tag_box.findData(tag.lstrip("#").lower())
+        if index >= 0:
+            self.tag_box.setCurrentIndex(index)
+
     def _on_filter(self) -> None:
         self.filter = self.filter_box.currentData()
+        self.tag = self.tag_box.currentData() or ""
         self.reload()
 
     # ---------------------------------------------------------------- multi-select & bulk

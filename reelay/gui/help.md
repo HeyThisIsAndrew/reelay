@@ -33,7 +33,9 @@ Only import media you own or have permission to manage.
   - **More ▾** selects only the newest few, only what your search shows, or the highlighted rows.
   - You can also tick boxes one by one, or press **Space** on highlighted rows.
   - The count at the bottom shows how many are selected.
-- **Search** matches captions, the names you've given videos, and file names.
+- **Search** matches captions (hashtags included), the names you've given videos, and file names.
+- **Hashtags as categories.** The menu next to the search (**All hashtags ▾**) lists every hashtag in the list, with how many videos have it. Pick one to show only those videos. You can also click a hashtag in the side panel. **Select All** then selects just what's shown.
+- **The selection strip** right above the list always says what will download ("Nothing selected yet" or "12 selected"), and holds **Select All**, **Unselect All** and **More ▾**.
 - **Use browser sign-in** borrows your sign-in from a web browser. Instagram usually needs it, as do your own private YouTube videos. Reelay never sees your password.
 - **TikTok** downloads are the clean original without the watermark, with the creator's own audio.
 
@@ -90,7 +92,8 @@ Click a card to open its ticket:
 
 - **⌘-click or Shift-click** cards in a column to select several. The side panel then sets the same permission, type, topic, keywords, creator or hashtags on all of them at once, fills them from their original posts, gets their transcripts, or archives them.
 - **Right-click a card** for the same actions on one card or the selection.
-- **Show: …** (top of the Board) narrows the Board to tickets that are ready, not ready, or blocked on a particular platform. Each column shows how many of its cards are visible ("3 of 12").
+- **Search tickets** and **All hashtags ▾** (under the Board's title) find tickets by any words in their copy, topic or keywords, or by a hashtag from the caption or the ticket's hashtag block.
+- **Show: …** narrows the Board to tickets that are ready, not ready, or blocked on a particular platform. Each column shows how many of its cards are visible ("3 of 12").
 - **Archive** hides videos from the Board and the Download page without deleting anything. **Archived…** brings them back.
 - **Change History…** lists every saved change. Highlight one and click **Restore the Earlier Value** to undo it. The undo is saved as a new change, so nothing is ever lost.
 

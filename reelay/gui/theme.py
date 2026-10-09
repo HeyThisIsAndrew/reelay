@@ -104,6 +104,7 @@ QWidget#Page, QWidget#TopBar, QWidget#BottomBar {{ background: {p.bg}; }}
 QWidget#Sidebar {{ background: {p.surface}; border-right: 1px solid {p.divider}; }}
 QWidget#ListArea, QFrame#Card {{ background: {p.surface}; border: 1px solid {p.divider}; border-radius: 10px; }}
 QWidget#CardBody {{ background: transparent; }}
+QFrame#SelectionStrip {{ background: {p.raised}; border: 1px solid {p.border}; border-radius: 8px; }}
 QFrame#Card QFrame#Card {{ background: {p.raised}; }}
 QWidget#DetailPanel, QScrollArea#DetailScroll, QWidget#DetailBody {{ background: {p.surface}; }}
 QFrame#DetailFrame {{ background: {p.surface}; border: 1px solid {p.divider}; border-radius: 10px; }}

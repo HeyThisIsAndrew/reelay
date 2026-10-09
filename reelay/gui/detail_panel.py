@@ -75,6 +75,7 @@ class DetailPanel(QFrame):
     customNameEdited = Signal(str, str)   # key, name
     checkSelected = Signal(bool)          # for multi-selection
     autoNameSelected = Signal()
+    tagClicked = Signal(str)              # a hashtag, without #
 
     def __init__(self, thumbs: ThumbnailCache, parent=None):
         super().__init__(parent)
@@ -150,8 +151,13 @@ class DetailPanel(QFrame):
         self.caption = _label(select=True)
         lay.addWidget(self.caption)
 
-        self.tags_header = tip(_label("HASHTAGS", prop="section"), "Hashtags found in the caption")
-        self.tags = _label(prop="muted", select=True)
+        self.tags_header = tip(_label("HASHTAGS", prop="section"),
+                               "Hashtags found in the caption. Click one to show only videos with it.")
+        self.tags = _label(prop="muted")
+        self.tags.setTextFormat(Qt.RichText)
+        self.tags.setTextInteractionFlags(Qt.LinksAccessibleByMouse)
+        self.tags.linkActivated.connect(lambda href: self.tagClicked.emit(href.removeprefix("tag:")))
+        tip(self.tags, "Click a hashtag to show only videos with it")
         lay.addWidget(self.tags_header)
         lay.addWidget(self.tags)
 
@@ -241,7 +247,8 @@ class DetailPanel(QFrame):
         caption = (item.description or "").strip()
         self.caption.setText(caption or "No caption.")
         tags = item.hashtags or [t.lower() for t in item.tags]
-        self.tags.setText("  ".join(f"#{t}" for t in tags))
+        self.tags.setText("&nbsp;&nbsp;".join(f"<a href='tag:{html.escape(t)}' style='text-decoration:none'>#"
+                                              f"{html.escape(t)}</a>" for t in tags))
         self.tags_header.setVisible(bool(tags))
         self.tags.setVisible(bool(tags))
 

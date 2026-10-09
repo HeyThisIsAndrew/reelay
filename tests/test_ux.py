@@ -316,5 +316,56 @@ def test_tooltips_explain_the_selection_and_actually_show(ui, qtbot, monkeypatch
     btn = page.unselect_all_btn
     point = btn.rect().center()
     QApplication.sendEvent(btn, QHelpEvent(QEvent.ToolTip, point, btn.mapToGlobal(point)))
-    qtbot.waitUntil(lambda: QToolTip.isVisible() and "Clear every selection" in QToolTip.text(), timeout=2000)
+    qtbot.waitUntil(lambda: QToolTip.isVisible() and "Untick every video" in QToolTip.text(), timeout=2000)
     QToolTip.hideText()
+
+
+# ------------------------------------------------------------------ hashtags as categories, and the selection strip
+def test_selection_strip_says_what_to_do(ui, qtbot, monkeypatch):
+    window, *_ = ui
+    page = _list_videos(window, qtbot, monkeypatch)
+    hint = page.selection_hint.text()
+    assert "Nothing selected yet" in hint and "Select All" in hint
+    assert page.select_all_btn.property("primary") is True and not page.download_btn.property("primary")
+    page.select_all_btn.click()
+    assert "4 selected" in page.selection_hint.text() and "Download 4 Videos" in page.selection_hint.text()
+    assert page.download_btn.property("primary") is True and not page.select_all_btn.property("primary")
+
+
+def test_hashtag_filter_on_the_download_page(ui, qtbot, monkeypatch):
+    window, *_ = ui
+    page = _list_videos(window, qtbot, monkeypatch)
+    for item in page.model.items():                       # captions get hashtags
+        item.description += " #healing" if item.video_id in ("500", "501") else " #growth"
+    page.model.refresh_all()
+    page._refresh_tags()
+    labels = [page.tag_filter.itemText(i) for i in range(page.tag_filter.count())]
+    assert labels[0] == "All hashtags" and "#growth  (2)" in labels and "#healing  (2)" in labels
+    page.filter_by_tag("#healing")                         # e.g. clicked in the side panel
+    shown = {page.model.item(page.proxy.mapToSource(page.proxy.index(r, 0)).row()).video_id
+             for r in range(page.proxy.rowCount())}
+    assert shown == {"500", "501"} and "2 of 4 shown" in page.selection_hint.text()
+    page.select_all_btn.click()                            # Select All follows the hashtag
+    assert {i.video_id for i in page.model.checked_items()} == {"500", "501"}
+    page.tag_filter.setCurrentIndex(0)
+    assert page.proxy.rowCount() == 4
+
+
+def test_board_search_and_hashtag_filter(ui, qtbot):
+    from reelay.models import Post, Stage
+    from tests.test_gui import seed_board
+    window, store, _ = ui
+    items, ids = seed_board(store, window.profile, None, n=3)   # captions carry #tag0, #tag1, #tag2
+    store.save_post(Post(video_row=ids[items[0].key], title="Letting go", description="", hashtags="#growth"))
+    window.go("board")
+    b = window.board
+    col = b.columns[Stage.BACKLOG]
+    labels = [b.tag_box.itemText(i) for i in range(b.tag_box.count())]
+    assert "#growth  (1)" in labels and "#tag1  (1)" in labels
+    b.filter_by_tag("growth")                              # from the ticket's hashtag block
+    assert [c.id for c in col.model.cards] == [ids[items[0].key]] and col.count.text() == "1 of 3"
+    b.tag_box.setCurrentIndex(0)
+    b.search.setText("number 2")
+    qtbot.waitUntil(lambda: [c.id for c in col.model.cards] == [ids[items[2].key]], timeout=2000)
+    b.search.clear()
+    qtbot.waitUntil(lambda: col.model.rowCount() == 3, timeout=2000)

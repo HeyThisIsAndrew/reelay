@@ -279,23 +279,42 @@ class DownloadPage(QWidget):
         ll.setSpacing(10)
         bar = QHBoxLayout()
         bar.setSpacing(10)
-        self.search = GrowingSearch("Search captions, your names and file names")
+        self.search = GrowingSearch("Search captions, hashtags, your names and file names")
         self.search.setMinimumWidth(220)
-        tip(self.search, "Filter the list. Matches captions, the names you've given videos, and file names.")
+        tip(self.search, "Filter the list. Matches captions (hashtags included), the names you've given videos, "
+                         "and file names.")
         bar.addWidget(self.search, 2)
+        self.tag_filter = tip(QComboBox(), "Show only videos with one hashtag, like a category. The number is how "
+                                           "many videos have it. Tip: click a hashtag in the side panel too.")
+        self.tag_filter.setMinimumWidth(170)
+        self.tag_filter.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.tag_filter.setMinimumContentsLength(14)
+        self.tag_filter.addItem("All hashtags", "")
+        bar.addWidget(self.tag_filter, 0, Qt.AlignTop)
+        ll.addLayout(bar)
+
+        # ---- selection strip: what will download, and the buttons to change it
+        strip = QFrame(objectName="SelectionStrip")
+        sl = QHBoxLayout(strip)
+        sl.setContentsMargins(12, 6, 8, 6)
+        sl.setSpacing(10)
+        self.selection_hint = QLabel()
+        self.selection_hint.setWordWrap(True)
+        tip(self.selection_hint, "Ticked videos download when you click Download (bottom right)")
+        sl.addWidget(self.selection_hint, 1)
         self.select_all_btn = QPushButton("Select All")
-        tip(self.select_all_btn, "Select every video in the list for downloading (when you've searched, only the "
-                                 "videos the search shows). Videos already downloaded are skipped.")
-        bar.addWidget(self.select_all_btn, 0, Qt.AlignTop)
+        tip(self.select_all_btn, "Tick every video in the list for downloading (when you've searched or picked a "
+                                 "hashtag, only the videos shown). Videos already downloaded are skipped.")
+        sl.addWidget(self.select_all_btn)
         self.unselect_all_btn = QPushButton("Unselect All")
-        tip(self.unselect_all_btn, "Clear every selection, so nothing will download until you choose again")
-        bar.addWidget(self.unselect_all_btn, 0, Qt.AlignTop)
+        tip(self.unselect_all_btn, "Untick every video, so nothing will download until you choose again")
+        sl.addWidget(self.unselect_all_btn)
         self.select_btn = QToolButton(text="More  ▾")
         self.select_btn.setPopupMode(QToolButton.InstantPopup)
         tip(self.select_btn, "More ways to select: only the newest few, only what your search shows, or the "
                              "highlighted rows")
-        bar.addWidget(self.select_btn, 0, Qt.AlignTop)
-        ll.addLayout(bar)
+        sl.addWidget(self.select_btn)
+        ll.addWidget(strip)
 
         bar2 = QHBoxLayout()
         bar2.setSpacing(10)
@@ -504,7 +523,10 @@ class DownloadPage(QWidget):
         self.unselect_all_btn.clicked.connect(self.unselect_all)
         self.cancel_btn.clicked.connect(self._cancel_download)
         self.apply_btn.clicked.connect(self._apply_names)
-        self.search.textChangedTo.connect(self.proxy.set_query)
+        self.search.textChangedTo.connect(lambda text: (self.proxy.set_query(text), self._update_counts()))
+        self.tag_filter.currentIndexChanged.connect(self._on_tag_filter)
+        self.detail.tagClicked.connect(self.filter_by_tag)
+        self._tags_timer = QTimer(self, singleShot=True, interval=400, timeout=self._refresh_tags)
         self.naming.templateChanged.connect(self._on_template)
         self.quality.currentIndexChanged.connect(self._save_profile_prefs)
         self.cookies.currentIndexChanged.connect(self._save_profile_prefs)
@@ -609,6 +631,19 @@ class DownloadPage(QWidget):
                  (f"None of {pending} selected" if pending else "Nothing left to download")]
         self.select_all_btn.setEnabled(pending > 0 and checked < pending)
         self.unselect_all_btn.setEnabled(checked > 0)
+        shown = self.proxy.rowCount()
+        narrowed = f" ({shown} of {len(items)} shown)" if self.proxy.filtering else ""
+        if not pending:
+            hint = "Every video here is already downloaded." if items else ""
+        elif not checked:
+            hint = (f"<b>Nothing selected yet.</b> Tick the videos you want, or click <b>Select All</b>.{narrowed}")
+        else:
+            hint = (f"<b>{checked} selected</b> to download.{narrowed} Click <b>Download {checked} "
+                    f"Video{'s' if checked != 1 else ''}</b> at the bottom right.")
+        self.selection_hint.setText(hint)
+        set_prop(self.select_all_btn, "primary", pending > 0 and not checked)   # the obvious next step
+        set_prop(self.download_btn, "primary", checked > 0)
+        self._tags_timer.start()
         if done:
             parts.append(f"{done} downloaded")
         self.count_label.setText(" · ".join(parts) if items else "")
@@ -932,12 +967,43 @@ class DownloadPage(QWidget):
         self.model.set_checked([i.key for i in shown], True)
         n = sum(1 for i in shown if not i.is_downloaded)
         self._set_status(f"Selected {n} video{'s' if n != 1 else ''}" +
-                         (" (the ones your search shows)." if self.proxy.rowCount() < self.model.rowCount() else ".")
+                         (" (the ones shown by your search or hashtag)." if self.proxy.filtering else ".")
                          if n else "Every video shown is already downloaded.")
 
     def unselect_all(self) -> None:
         self._check_all(False)
         self._set_status("Nothing selected.")
+
+    # ================================================================ hashtags (categories)
+    def _refresh_tags(self) -> None:
+        """Rebuild the hashtag list from the videos on the page, keeping the choice."""
+        from ..tags import counts
+        current = self.tag_filter.currentData() or ""
+        found = counts(i.hashtags for i in self.model.items())
+        wanted = [("", "All hashtags")] + [(t, f"#{t}  ({n})") for t, n in found]
+        if [(self.tag_filter.itemData(i), self.tag_filter.itemText(i))
+                for i in range(self.tag_filter.count())] == wanted:
+            return
+        self.tag_filter.blockSignals(True)
+        self.tag_filter.clear()
+        for tag, label in wanted:
+            self.tag_filter.addItem(label, tag)
+        index = self.tag_filter.findData(current)
+        self.tag_filter.setCurrentIndex(max(index, 0))
+        self.tag_filter.blockSignals(False)
+        if index < 0 and current:
+            self._on_tag_filter()
+
+    def _on_tag_filter(self) -> None:
+        self.proxy.set_tag(self.tag_filter.currentData())
+        self._update_counts()
+
+    def filter_by_tag(self, tag: str) -> None:
+        """Show only videos with this hashtag (e.g. a hashtag clicked in the side panel)."""
+        self._refresh_tags()
+        index = self.tag_filter.findData(tag.lstrip("#").lower())
+        if index >= 0:
+            self.tag_filter.setCurrentIndex(index)
 
     def _check_selected(self, on: bool) -> None:
         self.model.set_checked([i.key for i in self._selected_items()], on)

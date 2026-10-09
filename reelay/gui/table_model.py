@@ -337,6 +337,7 @@ class VideoFilterProxy(QSortFilterProxyModel):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._query = ""
+        self._tag = ""
         self.setSortRole(SORT_ROLE)
         self.setDynamicSortFilter(False)  # don't reshuffle rows while downloading
 
@@ -344,10 +345,21 @@ class VideoFilterProxy(QSortFilterProxyModel):
         self._query = text.strip().lower()
         self.invalidateFilter()
 
+    def set_tag(self, tag: str | None) -> None:
+        """Only videos with this hashtag (no #); empty shows every video."""
+        self._tag = (tag or "").lstrip("#").lower()
+        self.invalidateFilter()
+
+    @property
+    def filtering(self) -> bool:
+        return bool(self._query or self._tag)
+
     def filterAcceptsRow(self, source_row: int, source_parent) -> bool:
+        item = self.sourceModel().item(source_row)
+        if self._tag and self._tag not in item.hashtags:
+            return False
         if not self._query:
             return True
-        item = self.sourceModel().item(source_row)
         haystack = " ".join([item.hook, item.description, item.custom_name,
                              self.sourceModel().planned_filename(item), item.video_id]).lower()
         return all(word in haystack for word in self._query.split())
