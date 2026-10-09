@@ -131,6 +131,10 @@ class Dispatcher:
             log.warning("Requeued stale %s dispatch for video %s (claimed by %s at %s).",
                         d.platform, d.video_row, "an earlier run" if d.claimed_by != self.instance_id
                         else "this run", d.claimed_at or "unknown time")
+        try:
+            self.pipeline.settle_due(now)   # scheduled times that have passed: cards move on
+        except Exception:  # noqa: BLE001 — never let bookkeeping stop posting
+            log.exception("Couldn't update cards whose scheduled time passed")
         handled = 0
         while not self._stop.is_set():
             claimed = self.store.claim_due(utc_iso(self.clock()), self.instance_id, limit=5,

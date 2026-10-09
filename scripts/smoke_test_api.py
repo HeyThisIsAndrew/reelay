@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""End-to-end smoke test of the Reelay agent API (v0.7.0), fully isolated.
+"""End-to-end smoke test of the Reelay agent API (v0.8.0), fully isolated.
 
 Seeds a throwaway data folder (REELAY_HOME) with videos from a library folder
 (default: lydia_archive/), starts `python -m reelay.api` on a free port with a
@@ -222,6 +222,12 @@ def main() -> int:
                   f"{status} {body}")
             status, body = call(base, "POST", f"/v1/videos/{vid}/unarchive")
             check(status == 200 and body.get("archived") is False, "unarchive", f"{status} {body}")
+            status, body = call(base, "POST", f"/v1/videos/{vid}/platforms/tiktok", {"state": "posted"})
+            check(status == 200 and body["platform_states"]["tiktok"]["state"] == "published"
+                  and "tiktok" in body["target_platforms"], "tick TikTok as posted (platform tags)", f"{status} {body}")
+            status, body = call(base, "POST", f"/v1/videos/{vid}/platforms/tiktok", {"state": "none"})
+            check(status == 200 and body["platform_states"]["tiktok"]["state"] == "none", "untick it again",
+                  f"{status}")
             status, revs = call(base, "GET", f"/v1/videos/{vid}/revisions")
             topic = next(r for r in revs["revisions"] if r["field"] == "topic" and r["origin"] == "api")
             status, body = call(base, "POST", f"/v1/videos/{vid}/revisions/{topic['id']}/restore")

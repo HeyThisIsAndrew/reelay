@@ -60,7 +60,8 @@ def test_value_conversion_and_link_ids():
     assert parse_date("someday") is None
     assert convert("tags", "#growth, healing;  #self") == (["growth", "healing", "self"], None)
     assert convert("target_platforms", "YouTube, Bluesky") == (["youtube", "bluesky"], None)
-    assert convert("target_platforms", "TikTok")[1]                      # can't auto-post there
+    assert convert("target_platforms", "TikTok, Instagram") == (["tiktok", "instagram"], None)   # posted by hand
+    assert convert("target_platforms", "MySpace")[1]
     assert convert("content_type", "Long Form") == ("long-form", None) and convert("content_type", "movie")[1]
 
 

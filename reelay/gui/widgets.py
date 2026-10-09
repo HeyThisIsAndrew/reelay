@@ -157,3 +157,81 @@ class GrowingSearch(QPlainTextEdit):
         lines = max(1, min(3, content))
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded if content > 3 else Qt.ScrollBarAlwaysOff)
         self.setFixedHeight(line * lines + 18)
+
+
+class Collapsible(QWidget):
+    """A section with a clickable header (arrow, optional logo, title, and a
+    one-line summary on the right) that shows or hides its body. Whether it's
+    open is remembered per `key`."""
+
+    toggled = Signal(bool)
+
+    def __init__(self, title: str, key: str = "", icon=None, expanded: bool = False, hint: str = "", parent=None):
+        super().__init__(parent)
+        from PySide6.QtCore import QSettings, QSize
+        from PySide6.QtWidgets import QFrame, QToolButton, QVBoxLayout
+        self._key = f"sections/{key}" if key else ""
+        if self._key:
+            stored = QSettings().value(self._key)
+            if stored is not None:
+                expanded = str(stored).lower() in ("true", "1")
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(4)
+        head = QFrame(objectName="SectionHeader")
+        hl = QHBoxLayout(head)
+        hl.setContentsMargins(0, 2, 0, 2)
+        hl.setSpacing(6)
+        self.button = QToolButton()
+        self.button.setCheckable(True)
+        self.button.setAutoRaise(True)
+        self.button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.button.setProperty("section", True)
+        self._title = title
+        if icon is not None:
+            self.button.setIcon(icon)
+            self.button.setIconSize(QSize(16, 16))
+        self.button.setToolTip(hint or f"Show or hide {title.lower()}")
+        hl.addWidget(self.button)
+        self.summary = QLabel()
+        self.summary.setProperty("faint", True)
+        self.summary.setToolTip(hint)
+        self.summary.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.summary.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)   # clips rather than widening
+        self.summary.setMinimumWidth(40)
+        hl.addWidget(self.summary, 1)
+        outer.addWidget(head)
+        self.body = QWidget()
+        self.body_layout = QVBoxLayout(self.body)
+        self.body_layout.setContentsMargins(0, 0, 0, 4)
+        self.body_layout.setSpacing(6)
+        outer.addWidget(self.body)
+        self.button.toggled.connect(self._toggle)
+        self.button.setChecked(expanded)
+        self._toggle(expanded, save=False)
+
+    def _toggle(self, on: bool, save: bool = True) -> None:
+        from PySide6.QtCore import QSettings
+        self.body.setVisible(on)
+        self.button.setText(self._title + ("  ▾" if on else "  ▸"))
+        if save and self._key:
+            QSettings().setValue(self._key, on)
+        self.toggled.emit(on)
+
+    def set_expanded(self, on: bool) -> None:
+        self.button.setChecked(on)
+
+    @property
+    def expanded(self) -> bool:
+        return self.button.isChecked()
+
+    def add(self, widget: QWidget) -> QWidget:
+        self.body_layout.addWidget(widget)
+        return widget
+
+    def set_summary(self, text: str, danger: bool = False) -> None:
+        self.summary.setText(text)
+        self.summary.setProperty("faint", not danger)
+        self.summary.setProperty("danger", danger)
+        self.summary.style().unpolish(self.summary)
+        self.summary.style().polish(self.summary)

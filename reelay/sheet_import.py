@@ -190,12 +190,12 @@ def convert(target: str, value: str) -> tuple[object, str | None]:
     if target == "tags":
         return [t.strip().lstrip("#") for t in re.split(r"[,;\n]", value) if t.strip().lstrip("#")], None
     if target == "target_platforms":
-        names = {**{p: p for p in Platform.ALL}, **{v.lower(): k for k, v in Platform.LABELS.items()},
+        names = {**{p: p for p in Platform.LABELS}, **{v.lower(): k for k, v in Platform.LABELS.items()},
                  "yt": "youtube", "fb": "facebook", "bsky": "bluesky"}
         parts = [p.strip().lower() for p in re.split(r"[,;/\n]", value) if p.strip()]
         unknown = [p for p in parts if p not in names]
         if unknown:
-            return None, f"Reelay can't post to {', '.join(unknown)} automatically."
+            return None, f"Unknown platform(s): {', '.join(unknown)}."
         return list(dict.fromkeys(names[p] for p in parts)), None
     if target == "content_type":
         key = re.sub(r"[\s_]+", "-", value.lower()).replace("longform", "long-form")

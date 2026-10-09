@@ -32,7 +32,7 @@ from .models import (TICKET_FIELDS, Account, Dispatch, DispatchStatus, ManualPos
 
 log = logging.getLogger("reelay")
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 # Post fields whose edits are logical metadata commits (logged as revisions).
 # Status, remote ids and errors are publishing state, tracked by dispatches.
@@ -204,6 +204,9 @@ _MIGRATIONS: dict[int, str] = {
     """,
     6: """
     ALTER TABLE videos ADD COLUMN archived_at TEXT;
+    """,
+    7: """
+    ALTER TABLE manual_posts ADD COLUMN kind TEXT NOT NULL DEFAULT 'posted';
     """,
 }
 
@@ -481,6 +484,11 @@ class Store:
         rows = self.conn.execute(sql + " ORDER BY position, id", args).fetchall()
         return [self._video_row(r) for r in rows]
 
+    def video_row_id(self, profile_id: int, platform: str, video_id: str) -> int | None:
+        row = self.conn.execute("SELECT id FROM videos WHERE profile_id=? AND platform=? AND video_id=?",
+                                (profile_id, platform, video_id)).fetchone()
+        return row["id"] if row else None
+
     def get_video(self, row_id: int) -> VideoRow | None:
         row = self.conn.execute("SELECT * FROM videos WHERE id = ?", (row_id,)).fetchone()
         return self._video_row(row) if row else None
@@ -595,10 +603,10 @@ class Store:
         post.created_at = utcnow()
         post.origin = self._state().origin
         with self.tx() as c:
-            cur = c.execute("INSERT INTO manual_posts (video_row, platform, posted_at, url, note, origin, created_at) "
-                            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            cur = c.execute("INSERT INTO manual_posts (video_row, platform, posted_at, url, note, origin, created_at, "
+                            "kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                             (post.video_row, post.platform, post.posted_at, post.url, post.note, post.origin,
-                             post.created_at))
+                             post.created_at, post.kind))
         post.id = cur.lastrowid
         self._emit("video", (post.video_row,), self._profile_of_videos([post.video_row]))
         return post
@@ -607,8 +615,25 @@ class Store:
         rows = self.conn.execute("SELECT * FROM manual_posts WHERE video_row=? ORDER BY posted_at, id",
                                  (video_row,)).fetchall()
         return [ManualPost(id=r["id"], video_row=r["video_row"], platform=r["platform"], posted_at=r["posted_at"],
-                           url=r["url"], note=r["note"], origin=r["origin"], created_at=r["created_at"])
-                for r in rows]
+                           url=r["url"], note=r["note"], origin=r["origin"], created_at=r["created_at"],
+                           kind=r["kind"]) for r in rows]
+
+    def replace_manual_posts(self, video_row: int, platform: str, kinds: tuple[str, ...],
+                             new: ManualPost | None = None) -> None:
+        """Remove a platform's hand-made records of these kinds and optionally add
+        one, in one transaction (a checkbox on the ticket)."""
+        if new is not None:
+            new.created_at, new.origin = utcnow(), self._state().origin
+        with self.tx() as c:
+            c.execute(f"DELETE FROM manual_posts WHERE video_row=? AND platform=? AND kind IN "
+                      f"({','.join('?' * len(kinds))})", (video_row, platform, *kinds))
+            if new is not None:
+                cur = c.execute("INSERT INTO manual_posts (video_row, platform, posted_at, url, note, origin, "
+                                "created_at, kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                                (new.video_row, new.platform, new.posted_at, new.url, new.note, new.origin,
+                                 new.created_at, new.kind))
+                new.id = cur.lastrowid
+        self._emit("video", (video_row,), self._profile_of_videos([video_row]))
 
     def delete_manual_post(self, manual_id: int) -> None:
         row = self.conn.execute("SELECT video_row FROM manual_posts WHERE id=?", (manual_id,)).fetchone()

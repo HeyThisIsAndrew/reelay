@@ -319,11 +319,13 @@ def open_ticket(window, store, monkeypatch):
     return board.panel, row
 
 
-def test_ticket_offers_only_enabled_platforms(app_window, monkeypatch):
+def test_ticket_lists_every_platform_and_posts_only_enabled_ones(app_window, monkeypatch):
     window, store, _ = app_window
     panel, _row = open_ticket(window, store, monkeypatch)
-    visible = {p for p, box in panel.platform_boxes.items() if not box.isHidden()}
-    assert visible == {"youtube"}
+    assert set(panel.platform_rows) == {"youtube", "tiktok", "instagram", "bluesky", "threads", "facebook"}
+    going = {p for p, box in panel.platform_boxes.items() if box.isChecked()}
+    assert going == {"youtube", "threads"}                               # the ticket's targets
+    assert panel._targets() == ["youtube"]                              # only YouTube posts automatically
     assert "Bluesky, Threads, Facebook: automatic posting is off" in panel.manual_note.text()
     assert not panel.manual_note.isHidden()
 

@@ -341,6 +341,8 @@ class DownloadPage(QWidget):
         self.table.setColumnWidth(Col.FILENAME, 150)
         hh.setContextMenuPolicy(Qt.CustomContextMenu)
         hh.customContextMenuRequested.connect(self._column_menu)
+        self.table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._row_menu)
         hidden = QSettings().value("hidden_columns", []) or []
         for col in hidden:
             if int(col) in (Col.LENGTH, Col.VIEWS, Col.CUSTOM, Col.FILENAME, Col.STATUS):
@@ -425,6 +427,49 @@ class DownloadPage(QWidget):
             act.setChecked(not self.table.isColumnHidden(col))
             act.toggled.connect(lambda on, c=col: self._set_column_visible(c, on))
         menu.exec(self.table.horizontalHeader().mapToGlobal(pos))
+
+    def _row_menu(self, pos) -> None:
+        """Right-click a video (or highlighted videos)."""
+        index = self.table.indexAt(pos)
+        if not index.isValid():
+            return
+        if not self.table.selectionModel().isRowSelected(index.row(), index.parent()):
+            self.table.selectRow(index.row())
+        items = self._selected_items()
+        if not items:
+            return
+        n = len(items)
+        plural = "s" if n > 1 else ""
+        menu = QMenu(self)
+        menu.addAction("Select for Download", lambda: self._check_selected(True))
+        menu.addAction("Unselect", lambda: self._check_selected(False))
+        if n == 1 and items[0].url:
+            menu.addAction("Open Original Post", lambda: QDesktopServices.openUrl(QUrl(items[0].url)))
+        menu.addSeparator()
+        menu.addAction(f"Archive {n} Video{plural}…" if n > 1 else "Archive…", lambda: self._archive(items))
+        menu.exec(self.table.viewport().mapToGlobal(pos))
+
+    def _archive(self, items: list[VideoItem]) -> None:
+        """Hide videos from this list and the Board (nothing is deleted)."""
+        if not self.profile:
+            return
+        n = len(items)
+        if QMessageBox.question(self, "Archive", f"Archive {n} video{'s' if n > 1 else ''}? "
+                                f"{'They' if n > 1 else 'It'} disappear{'' if n > 1 else 's'} from this list and the "
+                                "Board. Files and tickets are kept; bring them back from Board → Archived….") \
+                != QMessageBox.Yes:
+            return
+        from ..models import DispatchStatus
+        self.store.save_videos(self.profile.id, items)   # videos only listed so far get a row first
+        ids = [self.store.video_row_id(self.profile.id, i.platform, i.video_id) for i in items]
+        ids = [i for i in ids if i is not None]
+        if any(d.status in DispatchStatus.ACTIVE for i in ids for d in self.store.dispatches_for(i)):
+            QMessageBox.warning(self, APP_NAME, "Videos that are scheduled or uploading can't be archived; "
+                                                "cancel them on the Board first.")
+            return
+        self.store.set_archived(ids, True)
+        self._set_status(f"Archived {n} video{'s' if n > 1 else ''}. Board → Archived… brings them back.")
+        self.reload()
 
     def _set_column_visible(self, col: int, visible: bool) -> None:
         self.table.setColumnHidden(col, not visible)

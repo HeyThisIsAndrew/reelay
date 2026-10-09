@@ -61,7 +61,14 @@ The Board has four columns: **Backlog → Staging → Scheduled → Published**.
 Click a card to open its ticket:
 
 - **Ready check.** The top of the ticket lists each platform the video is going to, with a ✓ or a ⚠. The badge says **READY** when at least one of those platforms is ready to go, and **NOT READY** when none are. Platforms Reelay doesn't post to automatically are marked *posted by hand* and never block.
-- **Captions.** There's one box per platform, each with a **Copy** button and a live count against that platform's limit. Red means the text is too long. Reelay never cuts your text short.
+- **Platforms.** One row per platform (YouTube, TikTok, Instagram, Bluesky, Threads, Facebook), each with its logo and three boxes:
+  - **Going:** the video is going there. Its logo shows on the card.
+  - **Scheduled:** you scheduled it in that platform's own app. Reelay asks when it goes live.
+  - **Posted:** it's live.
+
+  The card moves by itself. When every platform it's going to is scheduled or live, it moves to **Scheduled**; when every one is live (a scheduled time passing counts), it moves to **Published**. Unticking a box moves it back. Platforms Reelay posts itself (like YouTube) update on their own.
+- **On the Board,** each card shows its platforms' logos: faded means not scheduled yet, solid means scheduled, a green dot means live, and a red dot means failed. Hover a card for the details.
+- **Captions.** Each platform's copy is in its own section, with its logo. Click a section's name to open or close it; the right side shows its length against the limit, "empty", or "⚠ too long". Reelay remembers which sections you keep open. Each box has a **Copy** button and a live count. Red means the text is too long, and Reelay never cuts your text short.
   - An empty TikTok, Instagram or Facebook box copies the YouTube description instead.
   - An empty Bluesky or Threads box copies the title, plus the description if it fits.
 - **Details.** The transcript, cover image, content type, topic, keywords, creator, original publish date, and where the video came from.

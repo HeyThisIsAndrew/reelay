@@ -55,6 +55,11 @@ It's a native desktop app for macOS (Windows builds included) in a monotone Ligh
 
   Over-limit text is reported and the save is refused. Nothing is ever cut short.
 - Copying an empty block gives what Reelay would use instead: the title (plus the description if it fits) for Bluesky and Threads, and the description for TikTok, Instagram and Facebook.
+- **Platform tags.** Every ticket has a row per platform (YouTube, TikTok, Instagram, Bluesky, Threads, Facebook), each with its logo and **Going**, **Scheduled** (asks when it goes live) and **Posted** boxes.
+  - **Cards move themselves:** to Scheduled once every Going platform is scheduled or live, and to Published once every one is live. A scheduled time passing counts as live, and unticking moves a card back.
+  - **When it's checked:** every minute, by the background dispatcher, whether the app is open or running headless. Facebook posts that Reelay scheduled count as live once their time passes; YouTube is still confirmed with YouTube.
+  - **On the Board,** cards show the logos: faded = to do, solid = scheduled, green dot = live, red dot = failed.
+- **Collapsible ticket sections:** each platform's copy has its own section with its logo, its count against the limit in the header, and remembered open/closed state.
 - **Readiness.** The top of every ticket shows a per-platform checklist (✓ ready or ⚠ blocking) and a **READY / NOT READY** badge. The checks:
   - each platform's own copy is written: YouTube's title and description, and the Bluesky, Threads and Facebook posts;
   - the copy is within that platform's limits;
@@ -199,6 +204,7 @@ For a stable address, create a named tunnel in the Cloudflare dashboard. Every `
 | `POST /v1/videos/{id}/archive`, `…/unarchive` | Hides or restores a video. `GET /v1/board?archived=true` lists archived ones. `409` while it's scheduled or uploading. |
 | `POST /v1/videos/{id}/revisions/{revision_id}/restore` | Puts a field back to its value before that change (logged as a new change). |
 | `PATCH /v1/sources/{id}`, `DELETE /v1/sources/{id}` | Rename a saved source or mark it as yours; remove it (`204`). Connected channels are managed in the app. |
+| `POST /v1/videos/{id}/platforms/{platform}` | Ticks a platform's tag: `{"state": "scheduled", "at": "…"}`, `{"state": "posted"}` or `{"state": "none"}`. The card then moves on its own. Videos carry `platform_states`, and `target_platforms` accepts all six platforms. |
 | `GET /v1/videos/{id}/revisions` | The ticket's change log, newest first: `at`, `origin` (`local` = the app, `api` = an agent), `field`, `old_value` and `new_value`. |
 | `POST /v1/videos/{id}/manual-posts` | Records a post made by hand: `{"platform": "tiktok", "posted_at": "…" (optional, not in the future), "url": "…", "note": "…"}`. Returns `201`. It doesn't post anything or move the card. |
 | `GET /v1/sources?profile=…` | The profile's download sources: connected YouTube channels (`kind: "account"`, with an `account` reference) and saved profile links (`kind: "saved"`, with `url`, `mine`, `last_fetched_at`). Duplicates are listed as stored. |
@@ -344,10 +350,10 @@ Secrets are only ever in the system keychain (macOS Keychain or Windows Credenti
 ## Tests
 
 ```bash
-python -m pytest                              # 215 tests: engine, database + migrations, pipeline, readiness,
+python -m pytest                              # 231 tests: engine, database + migrations, pipeline, readiness,
                                               #   agent API + contract, dispatcher, platform publishers,
                                               #   YouTube client, headless GUI (incl. setup guides)
-python scripts/smoke_test_api.py              # 47 end-to-end API checks in a throwaway data folder
+python scripts/smoke_test_api.py              # 49 end-to-end API checks in a throwaway data folder
 python -m pytest --run-network -m network     # optional live checks against TikTok
 python run_app.py --self-test                 # environment check (also works on packaged builds)
 ```

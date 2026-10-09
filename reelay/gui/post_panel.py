@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDateTimeEdit, QFrame, QHBo
                                QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QSizePolicy,
                                QStackedWidget, QVBoxLayout, QWidget)
 
-from ..models import Account, Platform, Post, PostStatus, Privacy, Stage
+from ..models import MANUAL_PLATFORMS, Account, Platform, Post, PostStatus, Privacy, Stage
 from ..pipeline import Card
 from ..platform_text import (BLUESKY_MAX_BYTES, BLUESKY_MAX_GRAPHEMES, FACEBOOK_MAX_CHARS, INSTAGRAM_MAX_CHARS,
                              INSTAGRAM_MAX_HASHTAGS, THREADS_MAX_CHARS, TIKTOK_MAX_CHARS, grapheme_count,
@@ -32,7 +32,20 @@ from .table_model import fmt_count, fmt_date, fmt_duration
 from .theme import set_prop
 from .tips import tip
 from .thumbnails import ThumbnailCache
-from .ticket_widgets import PublishingHistory, ReadinessHeader, TicketDetails
+from .logos import platform_icon
+from .ticket_widgets import PlatformRow, PublishingHistory, ReadinessHeader, TicketDetails
+from .widgets import Collapsible
+
+# Copy sections in the ticket: (platform for the logo, title, copy blocks).
+COPY_SECTIONS = [
+    ("youtube", "YOUTUBE", ("title", "description", "tags")),
+    ("tiktok", "TIKTOK", ("tiktok_text",)),
+    ("instagram", "INSTAGRAM", ("instagram_text",)),
+    ("bluesky", "BLUESKY", ("bluesky_text",)),
+    ("threads", "THREADS", ("threads_text",)),
+    ("facebook", "FACEBOOK", ("facebook_text",)),
+    (None, "HASHTAGS (ALL PLATFORMS)", ("hashtags",)),
+]
 
 PRIVACY_LABELS = {Privacy.PUBLIC: "Public", Privacy.UNLISTED: "Unlisted", Privacy.PRIVATE: "Private"}
 
@@ -141,6 +154,8 @@ class PostPanel(QFrame):
     revisionsRequested = Signal(int)                  # video row id
     fillRequested = Signal(int)                       # video row id
     transcriptRequested = Signal(int)                 # video row id
+    targetsChanged = Signal(int, list)                # video row id, target platforms
+    platformMarkRequested = Signal(int, str, str, object)   # row id, platform, state, when
 
     def __init__(self, thumbs: ThumbnailCache, parent=None):
         super().__init__(parent)
@@ -233,8 +248,25 @@ class PostPanel(QFrame):
         lay.addSpacing(8)
         lay.addWidget(self.status_box)
 
-        # ---- copy blocks (the ticket)
+        # ---- where it's going: one row per platform (the ticket's tags)
         lay.addSpacing(6)
+        self.platforms_section = Collapsible(
+            "PLATFORMS", key="platforms", expanded=True,
+            hint="Where this video is going, and how far it's got on each. When every platform it's going to is "
+                 "scheduled the card moves to Scheduled; when every one is live, to Published.")
+        self.platform_rows: dict[str, PlatformRow] = {}
+        for platform in MANUAL_PLATFORMS:
+            row = PlatformRow(platform)
+            row.goingToggled.connect(self._on_going)
+            row.markRequested.connect(
+                lambda p, state, when: self.card and self.platformMarkRequested.emit(self.card.id, p, state, when))
+            self.platform_rows[platform] = row
+            self.platforms_section.add(row)
+        self.platform_boxes: dict[str, QCheckBox] = {p: r.going for p, r in self.platform_rows.items()}
+        lay.addWidget(self.platforms_section)
+
+        # ---- copy, one collapsible section per platform
+        lay.addSpacing(4)
         fill_row = QHBoxLayout()
         fill_row.addStretch()
         self.fill_btn = tip(QPushButton("Fill Empty from Original Post"),
@@ -245,10 +277,21 @@ class PostPanel(QFrame):
         fill_row.addWidget(self.fill_btn)
         lay.addLayout(fill_row)
         self.blocks: dict[str, CopyBlock] = {}
-        for key, label, multiline, placeholder in BLOCKS:
-            block = CopyBlock(key, label, multiline, placeholder, self._copy, self._update_counts)
-            self.blocks[key] = block
-            lay.addWidget(block)
+        self.copy_sections: dict[str, Collapsible] = {}
+        specs = {key: (label, multiline, placeholder) for key, label, multiline, placeholder in BLOCKS}
+        for platform, title, keys in COPY_SECTIONS:
+            section = Collapsible(title, key=f"copy.{platform or 'hashtags'}",
+                                  icon=platform_icon(platform, 16) if platform else None,
+                                  expanded=platform == Platform.YOUTUBE,
+                                  hint=f"Show or hide the {title.title()} copy. The right side shows its length "
+                                       "against the limit.")
+            for key in keys:
+                label, multiline, placeholder = specs[key]
+                block = CopyBlock(key, label, multiline, placeholder, self._copy, self._update_counts)
+                self.blocks[key] = block
+                section.add(block)
+            self.copy_sections[platform or "hashtags"] = section
+            lay.addWidget(section)
         self.copied = QLabel()
         self.copied.setProperty("faint", True)
         lay.addWidget(self.copied)
@@ -259,18 +302,6 @@ class PostPanel(QFrame):
         fl = QVBoxLayout(self.form)
         fl.setContentsMargins(0, 8, 0, 0)
         fl.setSpacing(6)
-        fl.addWidget(tip(_section("POST AUTOMATICALLY TO"),
-                         "Reelay posts to the ticked platforms for you. Everything else, you copy and paste "
-                         "from the text above."))
-        self.platform_row = QHBoxLayout()
-        self.platform_boxes: dict[str, QCheckBox] = {}
-        for platform in Platform.ALL:
-            box = tip(QCheckBox(Platform.LABELS[platform]), f"Let Reelay post this video to {Platform.LABELS[platform]}")
-            box.toggled.connect(self._sync_platforms)
-            self.platform_boxes[platform] = box
-            self.platform_row.addWidget(box)
-        self.platform_row.addStretch()
-        fl.addLayout(self.platform_row)
         self.manual_note = QLabel()
         self.manual_note.setProperty("faint", True)
         self.manual_note.setWordWrap(True)
@@ -317,7 +348,12 @@ class PostPanel(QFrame):
         fl.addSpacing(4)
         fl.addWidget(self.shorts)
         fl.addWidget(self.kids)
-        lay.addWidget(self.form)
+        self.auto_section = Collapsible(
+            "POST AUTOMATICALLY", key="auto", expanded=True,
+            hint="Reelay posts to the platforms marked Going that it can post to itself (YouTube, and others "
+                 "you've turned on in Settings). Everything else, you post by hand and tick Scheduled or Posted.")
+        self.auto_section.add(self.form)
+        lay.addWidget(self.auto_section)
 
         self.errors = QLabel()
         self.errors.setProperty("danger", True)
@@ -342,13 +378,16 @@ class PostPanel(QFrame):
         self.details.fieldCommitted.connect(
             lambda key, value: self.card and self.ticketFieldCommitted.emit(self.card.id, key, value))
         self.details.transcriptRequested.connect(lambda: self.card and self.transcriptRequested.emit(self.card.id))
-        lay.addWidget(self.details)
+        lay.addWidget(self.details)   # collapsible on its own ("Details and provenance")
         lay.addSpacing(10)
         self.history = PublishingHistory()
         self.history.markRequested.connect(lambda: self.card and self.markPostedRequested.emit(self.card.id))
         self.history.unmarkRequested.connect(self.unmarkRequested.emit)
         self.history.revisionsRequested.connect(lambda: self.card and self.revisionsRequested.emit(self.card.id))
-        lay.addWidget(self.history)
+        self.history_section = Collapsible("WHERE IT'S BEEN POSTED", key="history", expanded=False,
+                                           hint="Every post of this video, automatic or by hand, per platform")
+        self.history_section.add(self.history)
+        lay.addWidget(self.history_section)
         lay.addStretch()
         scroll.setWidget(body)
         return scroll
@@ -357,12 +396,12 @@ class PostPanel(QFrame):
     def set_enabled_platforms(self, enabled: frozenset[str]) -> None:
         """Platforms Reelay may post to automatically; the others are copy-paste only."""
         self.enabled = frozenset(enabled) | {Platform.YOUTUBE}
-        for platform, box in self.platform_boxes.items():
-            box.setVisible(platform in self.enabled)
         off = [Platform.LABELS[p] for p in Platform.ALL if p not in self.enabled]
         off_text = f"{', '.join(off)}: automatic posting is off (turn it on in Settings). " if off else ""
-        self.manual_note.setText(off_text + "TikTok and Instagram: copy the caption above and post in their apps. "
-                                 "(TikTok only allows automatic posting for apps it has approved.)")
+        self.manual_note.setText("Reelay posts automatically to the Going platforms it can post to. " + off_text +
+                                 "TikTok and Instagram are always posted by hand: copy the caption, post in their "
+                                 "app, then tick Scheduled or Posted above. (TikTok only allows automatic posting "
+                                 "for apps it has approved.)")
         self.manual_note.setVisible(True)
 
     def show_empty(self) -> None:
@@ -386,7 +425,7 @@ class PostPanel(QFrame):
         if not same or locked:
             for platform, box in self.platform_boxes.items():
                 box.blockSignals(True)
-                box.setChecked(platform in post.target_platforms and platform in self.enabled)
+                box.setChecked(platform in post.target_platforms)
                 box.blockSignals(False)
             for key, block in self.blocks.items():
                 value = getattr(post, key)
@@ -433,7 +472,26 @@ class PostPanel(QFrame):
             pass
 
     def _targets(self) -> list[str]:
+        """Going platforms Reelay can post to itself."""
         return [p for p, box in self.platform_boxes.items() if box.isChecked() and p in self.enabled]
+
+    def _going(self) -> list[str]:
+        return [p for p in MANUAL_PLATFORMS if self.platform_boxes[p].isChecked()]
+
+    def _on_going(self, _platform: str, _on: bool) -> None:
+        self._sync_platforms()
+        if self.card is not None and self._going():
+            self.targetsChanged.emit(self.card.id, self._going())
+
+    def set_platform_states(self, states: dict, default_when: str | None) -> None:
+        """Refresh the Platforms rows (pipeline.platform_states) and their summary."""
+        for platform, row in self.platform_rows.items():
+            row.set_state(states[platform], platform in self.enabled, default_when)
+        going = [s for s in states.values() if s.target]
+        live = sum(1 for s in going if s.state == "published")
+        sched = sum(1 for s in going if s.state in ("scheduled", "sending"))
+        self.platforms_section.set_summary(
+            f"{len(going)} going · {sched} scheduled · {live} live" if going else "Tick where it's going")
 
     def _sync_platforms(self) -> None:
         youtube = Platform.YOUTUBE in self._targets()
@@ -472,6 +530,16 @@ class PostPanel(QFrame):
                     and not b[key].text():
                 text, over = "empty", False
             b[key].set_count(text, over)
+        for name, section in self.copy_sections.items():
+            keys = next(k for p, _t, k in COPY_SECTIONS if (p or "hashtags") == name)
+            overs = [k for k in keys if b[k].counter.property("danger")]
+            filled = [k for k in keys if b[k].text().strip()]
+            if overs:
+                section.set_summary("⚠ too long", danger=True)
+            elif not filled:
+                section.set_summary("empty")
+            else:
+                section.set_summary(" · ".join(b[k].counter.text() for k in keys if b[k].text().strip()))
         self._readiness_timer.start()
 
     def _copy(self, block: CopyBlock) -> None:
@@ -581,9 +649,7 @@ class PostPanel(QFrame):
         tags = [t.strip().lstrip("#") for t in b["tags"].text().split(",") if t.strip()]
         copy = {key: (b[key].text().strip() or None) for key in
                 ("tiktok_text", "instagram_text", "bluesky_text", "threads_text", "facebook_text", "hashtags")}
-        # Keep copy-paste-only targets (set by agents) alongside the auto-post choices.
-        manual = [p for p in base.target_platforms if p not in self.enabled]
-        targets = self._targets() + manual or [Platform.YOUTUBE]
+        targets = self._going() or [Platform.YOUTUBE]
         return replace(base, account_id=self.account.currentData(), title=b["title"].text().strip(),
                        description=b["description"].text().strip(), tags=tags,
                        privacy=self.privacy.currentData(), publish_at=when, made_for_kids=self.kids.isChecked(),

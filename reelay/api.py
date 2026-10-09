@@ -163,6 +163,24 @@ class PlatformReadinessOut(BaseModel):
     checks: list[ReadinessCheck] = Field(description="Empty when not_checked.")
 
 
+class PlatformStateOut(BaseModel):
+    target: bool = Field(description="The video is going to this platform.")
+    state: Literal["none", "failed", "scheduled", "sending", "published"] = Field(
+        description="none = not scheduled yet; scheduled = waiting to go live (by Reelay, or scheduled by hand in the "
+                    "platform's app); sending = Reelay is posting it now; published = live; failed = Reelay gave up.")
+    at: datetime | None = Field(None, description="When it goes or went live (UTC).")
+    automatic: bool = Field(description="Reelay is posting it itself; its state updates on its own.")
+
+
+class PlatformMark(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    state: Literal["scheduled", "posted", "none"] = Field(
+        description="scheduled = you scheduled it in the platform's own app (give `at`, when it goes live); posted = "
+                    "it's live (`at` defaults to now, can't be in the future); none = clear what was marked.")
+    at: AwareDatetime | None = None
+
+
 class TicketFields(BaseModel):
     transcript: str | None = None
     thumbnail_path: str | None = Field(None, description="Local path of the cover image.")
@@ -202,7 +220,8 @@ class Video(BaseModel):
     title: str = Field(description="Title used for YouTube and Facebook (and as default post text).")
     description: str
     tags: list[str]
-    target_platforms: list[PlatformName] = Field(description="Where this video will be posted when scheduled.")
+    target_platforms: list[ManualPlatformName] = Field(description="Where this video is going: platforms Reelay "
+                                                       "posts to itself, and ones posted by hand (TikTok, Instagram).")
     overrides: Overrides = Field(description="Per-platform copy (the card's copy blocks).")
     hashtags: str | None = Field(None, description="The card's shared hashtag block, e.g. \"#growth #healing\".")
     youtube_channel: ChannelRef | None = Field(None, description="Connected YouTube channel the video posts to.")
@@ -220,7 +239,10 @@ class Video(BaseModel):
     ready: bool = Field(description="READY: at least one of the video's target platforms is ready (platforms with "
                                     "automatic posting off count as ready). Scheduling refuses platforms that "
                                     "aren't (422 ticket_not_ready) unless forced.")
-    readiness: dict[PlatformName, PlatformReadinessOut] = Field(description="Checklist per target platform.")
+    readiness: dict[ManualPlatformName, PlatformReadinessOut] = Field(description="Checklist per target platform.")
+    platform_states: dict[ManualPlatformName, PlatformStateOut] = Field(
+        description="Every platform's tag: whether the video is going there and how far it has got. The card moves to "
+                    "Scheduled once every target is scheduled or live, and to Published once every target is live.")
     ticket: TicketFields
     provenance: Provenance
     archived: bool = Field(False, description="Archived videos are hidden from the board (files and history kept).")
@@ -248,8 +270,8 @@ class VideoPatch(BaseModel):
                        description="Title (1-100 characters, no < or >). Used on YouTube and Facebook.")
     description: str = Field(None, description="Description (max 5,000 bytes, no < or >).")
     tags: list[str] = Field(None, description="Tags without '#', 500 characters in total.")
-    target_platforms: list[PlatformName] = Field(None, min_length=1,
-                                                 description="Platforms to post to when scheduled.")
+    target_platforms: list[ManualPlatformName] = Field(None, min_length=1,
+                                                       description="Where the video is going (any of the six).")
     bluesky_text: str | None = Field(None, description=f"Bluesky post text, max {BLUESKY_MAX_GRAPHEMES} characters "
                                                        "(grapheme clusters, so an emoji counts once). null clears it.")
     threads_text: str | None = Field(None, description=f"Threads post text, max {THREADS_MAX_CHARS} characters "
@@ -395,7 +417,7 @@ class ScheduleResponse(BaseModel):
     stage: StageName
     scheduled_at: datetime | None = Field(None, description="When it goes live (UTC); null = as soon as possible.")
     target_platforms: list[PlatformName] = Field(description="Platforms Reelay will post to.")
-    manual_platforms: list[PlatformName] = Field(default_factory=list, description="The video's other targets, "
+    manual_platforms: list[ManualPlatformName] = Field(default_factory=list, description="The video's other targets, "
                                                  "which have automatic posting turned off: post these by hand.")
     jobs: list[QueueJob]
 
@@ -573,6 +595,9 @@ def create_app(store: Store, pipeline: Pipeline, accounts: AccountService, token
                                   imported_at=parse_utc(row.ticket.imported_at),
                                   authorization=row.ticket.authorization),
             archived=bool(row.archived_at),
+            platform_states={p: PlatformStateOut(target=s.target, state=s.state, at=parse_utc(s.at) if s.at else None,
+                                                 automatic=s.automatic)
+                             for p, s in (card.platform_states or pipeline.platform_states(row.id)).items()},
             publishing_history={p: [to_history(e) for e in entries]
                                 for p, entries in pipeline.publishing_history(row.id).items()},
             source=SourceInfo(platform=item.platform, url=item.url, caption=item.description, hook=item.hook,
@@ -738,6 +763,21 @@ def create_app(store: Store, pipeline: Pipeline, accounts: AccountService, token
                 return FillResult(filled=pipeline.fill_from_original(body.video_ids))
             except PipelineError as exc:
                 raise pipeline_error(exc) from None
+
+    @app.post("/v1/videos/{video_id}/platforms/{platform}", response_model=Video, operation_id="markPlatform",
+              summary="Tick a platform as scheduled or posted (by hand)",
+              responses={k: ERRORS[k] for k in (401, 404, 409, 422)}, **v1)
+    def mark_platform(video_id: int, platform: ManualPlatformName, body: PlatformMark) -> Video:
+        """The ticket's per-platform checkboxes, for posts made in the platform's own app. Marking makes the
+        platform a target if it wasn't. Then the card moves on its own: to Scheduled when every target is
+        scheduled or live, to Published when every target is live (a scheduled time passing counts). 409 for a
+        platform Reelay is posting itself."""
+        with store.origin("api"):
+            try:
+                pipeline.set_platform_state(video_id, platform, body.state, body.at)
+            except PipelineError as exc:
+                raise pipeline_error(exc) from None
+        return video_by_id(video_id)
 
     @app.post("/v1/videos/{video_id}/archive", response_model=Video, operation_id="archiveVideo",
               summary="Archive a video", responses={k: ERRORS[k] for k in (401, 404, 409, 422)}, **v1)

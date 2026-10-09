@@ -91,6 +91,7 @@ class Card:
     queued: bool = False
     dispatches: list[Dispatch] = field(default_factory=list)
     readiness: Readiness | None = None
+    platform_states: dict = field(default_factory=dict)   # platform → PlatformState
 
     @property
     def id(self) -> int:
@@ -127,6 +128,27 @@ class HistoryEntry:
     note: str = ""
     origin: str = ""
     id: int | None = None    # dispatch id or manual post id
+
+
+NONE, FAILED, SCHEDULED, SENDING, PUBLISHED = "none", "failed", "scheduled", "sending", "published"
+_RANK = {NONE: 0, FAILED: 1, SCHEDULED: 2, SENDING: 3, PUBLISHED: 4}
+
+
+@dataclass
+class PlatformState:
+    """One platform's progress on a ticket (the ticket's tag)."""
+    platform: str
+    target: bool
+    state: str = NONE
+    at: str | None = None            # when it goes or went live
+    automatic: bool = False          # Reelay is posting it
+    manual_kind: str | None = None   # "scheduled" | "posted" when marked by hand
+
+    def offer(self, state: str, at: str | None, automatic: bool, manual_kind: str | None = None) -> None:
+        if _RANK[state] >= _RANK[self.state]:
+            self.state, self.at = state, at
+            self.automatic = automatic or (self.automatic and state != PUBLISHED)
+            self.manual_kind = manual_kind if not automatic else self.manual_kind
 
 
 @dataclass
@@ -220,7 +242,8 @@ class Pipeline:
         post = self.store.get_post(row.id)
         return Card(row=row, post=post, account=accounts.get(post.account_id) if post else None,
                     progress=self.uploads.progress_of(row.id), queued=self.uploads.is_queued(row.id),
-                    dispatches=self.store.dispatches_for(row.id), readiness=self._readiness(row, post))
+                    dispatches=self.store.dispatches_for(row.id), readiness=self._readiness(row, post),
+                    platform_states=self.platform_states(row.id))
 
     # ================================================================ readiness
     def _readiness(self, row: VideoRow, post: Post | None = None, targets: list[str] | None = None) -> Readiness:
@@ -304,8 +327,10 @@ class Pipeline:
         row = self._row(row_id)
         post_changes = {k: v for k, v in changes.items() if k in POST_FIELDS}
         ticket_changes = {k: v for k, v in changes.items() if k in EDITABLE_TICKET_FIELDS}
-        if post_changes and (any(d.status in DispatchStatus.ACTIVE + (DispatchStatus.PUBLISHED,)
-                                 for d in self.store.dispatches_for(row_id)) or row.stage == Stage.PUBLISHED):
+        sent = {d.platform for d in self.store.dispatches_for(row_id)
+                if d.status in DispatchStatus.ACTIVE + (DispatchStatus.PUBLISHED,)}
+        locked_copy = {k for k in post_changes if k != "target_platforms" or not sent <= set(post_changes[k] or [])}
+        if locked_copy and (sent or (row.stage == Stage.PUBLISHED and not self._hand_managed(row_id))):
             raise PipelineError("This video is already scheduled or published; its details were sent to the "
                                 "platforms and can't be changed here.", "locked")
         post, _saved = self.post_or_default(row)
@@ -530,7 +555,141 @@ class Pipeline:
         return len(edits)
 
     def unmark_posted(self, manual_id: int) -> None:
+        row = self.store.conn.execute("SELECT video_row FROM manual_posts WHERE id=?", (manual_id,)).fetchone()
         self.store.delete_manual_post(manual_id)
+        if row:
+            self.advance(row["video_row"], allow_back=True)
+
+    # ================================================================ per-platform tags & automatic stages
+    def platform_states(self, row_id: int, now: datetime | None = None) -> dict[str, PlatformState]:
+        """For every platform: is it a target, and how far has it got (none,
+        failed, scheduled, sending, published)? Reelay's own posts and the ones
+        marked by hand are combined; a hand-scheduled post counts as published
+        once its time has passed."""
+        now_iso = utc_iso(now or datetime.now(timezone.utc))
+        row = self._row(row_id)
+        post = self.store.get_post(row_id)
+        targets = set(post.target_platforms) if post else set()
+        states = {p: PlatformState(p, p in targets) for p in MANUAL_PLATFORMS}
+        word = {DispatchStatus.PENDING: SCHEDULED, DispatchStatus.SCHEDULED: SCHEDULED,
+                DispatchStatus.DISPATCHING: SENDING, DispatchStatus.PUBLISHED: PUBLISHED, DispatchStatus.FAILED: FAILED}
+        for d in self.store.dispatches_for(row_id):
+            if d.platform in states:
+                states[d.platform].offer(word.get(d.status, NONE), d.publish_at or d.due_at, automatic=True)
+        for m in self.store.manual_posts(row_id):
+            if m.platform in states:
+                live = m.kind == "posted" or m.posted_at <= now_iso
+                states[m.platform].offer(PUBLISHED if live else SCHEDULED, m.posted_at, automatic=False,
+                                         manual_kind=m.kind)
+        del row
+        return states
+
+    def _hand_managed(self, row_id: int) -> bool:
+        """The card's stage follows hand-made records (no Reelay posts at all)."""
+        return not self.store.dispatches_for(row_id) and bool(self.store.manual_posts(row_id))
+
+    def set_targets(self, row_id: int, platforms: list[str]) -> Post:
+        """Which platforms this video is going to (any of the six)."""
+        post = self.update_metadata(row_id, {"target_platforms": list(platforms)})
+        self.advance(row_id, allow_back=True)
+        return post
+
+    def set_platform_state(self, row_id: int, platform: str, state: str, when: str | datetime | None = None,
+                           now: datetime | None = None) -> None:
+        """The ticket's checkboxes. state: "scheduled" (scheduled by hand in the
+        platform's app, going live at `when`), "posted" (live, at `when` or now)
+        or "none" (clear what was marked by hand). Platforms Reelay is posting
+        itself can't be changed here. The card then moves on its own: Scheduled
+        when every target is scheduled or live, Published when every one is live."""
+        now = now or datetime.now(timezone.utc)
+        row = self._row(row_id)
+        if platform not in MANUAL_PLATFORMS:
+            raise PipelineError(f"Unknown platform “{platform}”.", "invalid_platform")
+        if state not in ("scheduled", "posted", "none"):
+            raise PipelineError("state must be scheduled, posted or none.", "invalid_request")
+        if any(d.platform == platform for d in self.store.dispatches_for(row_id)):
+            raise PipelineError(f"Reelay is posting this to {Platform.LABELS[platform]} itself; its status "
+                                "updates on its own.", "locked")
+        if state == "none":
+            self.store.replace_manual_posts(row_id, platform, ("scheduled", "posted"))
+            self.advance(row_id, allow_back=True)
+            return
+        when_dt = now if when is None else _parse_aware(when)
+        if when_dt is None:
+            raise PipelineError("The time must be an ISO 8601 time with a timezone.", "invalid_time")
+        if state == "posted" and when_dt > now + timedelta(minutes=5):
+            raise PipelineError("That time is in the future: mark it as scheduled instead.", "invalid_time")
+        post, saved = self.post_or_default(row)
+        if platform not in post.target_platforms or not saved:   # ticking a platform makes it a target
+            targets = list(dict.fromkeys([*post.target_platforms, platform])) if saved else [platform]
+            self.update_metadata(row_id, {"target_platforms": targets})
+        self.store.replace_manual_posts(
+            row_id, platform, ("scheduled", "posted"),
+            ManualPost(video_row=row_id, platform=platform, posted_at=utc_iso(when_dt), kind=state))
+        self.advance(row_id, allow_back=True, now=now)   # a new target can mean "not everywhere yet"
+
+    def _stage_for(self, row: VideoRow, now: datetime) -> str | None:
+        """Where the card belongs by its platforms' progress, or None to leave it."""
+        post = self.store.get_post(row.id)
+        if post is None or not post.target_platforms:
+            return None
+        dispatches = self.store.dispatches_for(row.id)
+        manual = self.store.manual_posts(row.id)
+        if not dispatches and not manual:
+            return None                       # nothing marked yet: leave it where it is
+        states = self.platform_states(row.id, now)
+        targets = [states[p] for p in post.target_platforms if p in states]
+        if all(s.state == PUBLISHED for s in targets):
+            return Stage.PUBLISHED
+        if all(s.state in (SCHEDULED, SENDING, PUBLISHED) for s in targets):
+            return Stage.SCHEDULED
+        if dispatches:
+            return None                       # Reelay's own posts keep their stage rules (refresh_post)
+        return Stage.STAGING
+
+    def advance(self, row_id: int, allow_back: bool = False, now: datetime | None = None) -> str | None:
+        """Move the card to the column its platforms say. Forward only, unless
+        allow_back (a checkbox was cleared). Returns the new stage if it moved."""
+        row = self._row(row_id)
+        if self._active_upload(row_id):
+            return None
+        target = self._stage_for(row, now or datetime.now(timezone.utc))
+        order = {s: i for i, s in enumerate(Stage.ALL)}
+        if target is None or target == row.stage:
+            return None
+        if order[target] < order[row.stage] and not allow_back:
+            return None
+        self.store.set_stage([row_id], target)
+        return target
+
+    def _active_upload(self, row_id: int) -> bool:
+        post = self.store.get_post(row_id)
+        return bool(post and post.status == PostStatus.UPLOADING)
+
+    def settle_due(self, now: datetime | None = None) -> int:
+        """Called by the dispatcher every minute, app open or headless:
+        - Facebook schedules natively, so once a scheduled Facebook post's time
+          has passed it's live; mark it published (YouTube is checked with
+          YouTube instead, because unaudited projects stay private).
+        - Cards whose hand-scheduled posts have gone live move on.
+        Returns how many cards moved."""
+        now = now or datetime.now(timezone.utc)
+        now_iso = utc_iso(now)
+        for profile in self.store.list_profiles():
+            for d in self.store.dispatches_with_status(profile.id, Platform.FACEBOOK, [DispatchStatus.SCHEDULED]):
+                if d.publish_at and d.publish_at <= now_iso:
+                    self.store.finish_dispatch(d.id, DispatchStatus.PUBLISHED)
+                    self.refresh_post(d.video_row)
+        return sum(len(self.advance_stages(p.id, now)) for p in self.store.list_profiles())
+
+    def advance_stages(self, profile_id: int, now: datetime | None = None) -> list[int]:
+        """Time passes: hand-scheduled posts whose time has come count as live.
+        Moves every card that's due; returns the ids moved."""
+        moved = []
+        for row in self.store.load_videos(profile_id, stages=[Stage.BACKLOG, Stage.STAGING, Stage.SCHEDULED]):
+            if self.advance(row.id, now=now):
+                moved.append(row.id)
+        return moved
 
     def publishing_history(self, row_id: int) -> dict[str, list[HistoryEntry]]:
         """Every platform's publishing history for one ticket, automatic and
@@ -542,9 +701,11 @@ class Pipeline:
             history.setdefault(d.platform, []).append(HistoryEntry(
                 platform=d.platform, method="automatic", status=d.status, at=at, url=d.remote_url, error=d.error,
                 id=d.id))
+        now = utc_iso(datetime.now(timezone.utc))
         for m in self.store.manual_posts(row_id):
+            status = "scheduled" if m.kind == "scheduled" and m.posted_at > now else "posted"
             history.setdefault(m.platform, []).append(HistoryEntry(
-                platform=m.platform, method="manual", status="posted", at=m.posted_at, url=m.url, note=m.note,
+                platform=m.platform, method="manual", status=status, at=m.posted_at, url=m.url, note=m.note,
                 origin=m.origin, id=m.id))
         for entries in history.values():
             entries.sort(key=lambda e: e.at or "")
@@ -673,7 +834,7 @@ class Pipeline:
         manual: list[str] = []
         if platforms:
             targets = list(dict.fromkeys(platforms))
-            unknown = [p for p in targets if p not in Platform.ALL]
+            unknown = [p for p in targets if p not in MANUAL_PLATFORMS]
             if unknown:
                 raise PipelineError(f"Unknown platform(s): {', '.join(unknown)}.", "invalid_platform")
             off = [p for p in targets if p not in enabled]
@@ -846,6 +1007,11 @@ class Pipeline:
             status, stage = PostStatus.FAILED, Stage.STAGING
         elif all(s in (DispatchStatus.PUBLISHED, DispatchStatus.FAILED) for s in statuses):
             status, stage = PostStatus.PUBLISHED, Stage.PUBLISHED
+            enabled = self.enabled_platforms()
+            hand = [p for p in post.target_platforms if p not in {d.platform for d in dispatches} and p not in enabled]
+            states = self.platform_states(row_id) if hand else {}
+            if any(states[p].state != PUBLISHED for p in hand if p in states):
+                stage = Stage.SCHEDULED       # still waiting on platforms posted by hand
         else:
             status, stage = PostStatus.SCHEDULED, Stage.SCHEDULED
         error = "; ".join(f"{Platform.LABELS.get(d.platform, d.platform)}: {d.error}"
@@ -1027,7 +1193,7 @@ def metadata_problems(changes: dict) -> list[str]:
         if not isinstance(targets, list) or not targets:
             problems.append("target_platforms must list at least one platform.")
         else:
-            unknown = [p for p in targets if p not in Platform.ALL]
+            unknown = [p for p in targets if p not in MANUAL_PLATFORMS]
             if unknown:
                 problems.append(f"Unknown platform(s): {', '.join(map(str, unknown))}.")
     for key, (_label, rule) in COPY_FIELDS.items():

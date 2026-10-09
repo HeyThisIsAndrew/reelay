@@ -7,7 +7,7 @@ info:
   description: 'Read a creator''s video board (each video is a content ticket with a readiness checklist), apply
     approved edits, record manual posts, and schedule posts to YouTube, Bluesky, Threads and Facebook. All /v1 routes
     need `Authorization: Bearer <token>`. Changes show up immediately on the Reelay desktop board.'
-  version: 0.7.1
+  version: 0.8.0
 paths:
   /v1/board:
     get:
@@ -428,6 +428,79 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
       security:
       - HTTPBearer: []
+  /v1/videos/{video_id}/platforms/{platform}:
+    post:
+      tags:
+      - videos
+      summary: Tick a platform as scheduled or posted (by hand)
+      description: 'The ticket''s per-platform checkboxes, for posts made in the platform''s own app. Marking makes
+        the
+
+        platform a target if it wasn''t. Then the card moves on its own: to Scheduled when every target is
+
+        scheduled or live, to Published when every target is live (a scheduled time passing counts). 409 for a
+
+        platform Reelay is posting itself.'
+      operationId: markPlatform
+      security:
+      - HTTPBearer: []
+      parameters:
+      - name: video_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Video Id
+      - name: platform
+        in: path
+        required: true
+        schema:
+          enum:
+          - youtube
+          - tiktok
+          - instagram
+          - bluesky
+          - threads
+          - facebook
+          type: string
+          title: Platform
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlatformMark'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Video'
+        '401':
+          description: Missing or invalid bearer token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: No video with that id.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: Conflicts with the video's current state (already scheduled).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Invalid input; nothing was changed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
   /v1/videos/{video_id}/archive:
     post:
       tags:
@@ -1343,6 +1416,28 @@ components:
       - auto_post
       - accounts
       title: PlatformInfo
+    PlatformMark:
+      properties:
+        state:
+          type: string
+          enum:
+          - scheduled
+          - posted
+          - none
+          title: State
+          description: scheduled = you scheduled it in the platform's own app (give `at`, when it goes live); posted
+            = it's live (`at` defaults to now, can't be in the future); none = clear what was marked.
+        at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: At
+      additionalProperties: false
+      type: object
+      required:
+      - state
+      title: PlatformMark
     PlatformReadinessOut:
       properties:
         state:
@@ -1374,6 +1469,40 @@ components:
       - auto_post
       - checks
       title: PlatformReadinessOut
+    PlatformStateOut:
+      properties:
+        target:
+          type: boolean
+          title: Target
+          description: The video is going to this platform.
+        state:
+          type: string
+          enum:
+          - none
+          - failed
+          - scheduled
+          - sending
+          - published
+          title: State
+          description: none = not scheduled yet; scheduled = waiting to go live (by Reelay, or scheduled by hand
+            in the platform's app); sending = Reelay is posting it now; published = live; failed = Reelay gave up.
+        at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: At
+          description: When it goes or went live (UTC).
+        automatic:
+          type: boolean
+          title: Automatic
+          description: Reelay is posting it itself; its state updates on its own.
+      type: object
+      required:
+      - target
+      - state
+      - automatic
+      title: PlatformStateOut
     PlatformsResponse:
       properties:
         profile:
@@ -1676,6 +1805,8 @@ components:
             type: string
             enum:
             - youtube
+            - tiktok
+            - instagram
             - bluesky
             - threads
             - facebook
@@ -1994,12 +2125,15 @@ components:
             type: string
             enum:
             - youtube
+            - tiktok
+            - instagram
             - bluesky
             - threads
             - facebook
           type: array
           title: Target Platforms
-          description: Where this video will be posted when scheduled.
+          description: 'Where this video is going: platforms Reelay posts to itself, and ones posted by hand (TikTok,
+            Instagram).'
         overrides:
           $ref: '#/components/schemas/Overrides'
           description: Per-platform copy (the card's copy blocks).
@@ -2072,12 +2206,29 @@ components:
           propertyNames:
             enum:
             - youtube
+            - tiktok
+            - instagram
             - bluesky
             - threads
             - facebook
           type: object
           title: Readiness
           description: Checklist per target platform.
+        platform_states:
+          additionalProperties:
+            $ref: '#/components/schemas/PlatformStateOut'
+          propertyNames:
+            enum:
+            - youtube
+            - tiktok
+            - instagram
+            - bluesky
+            - threads
+            - facebook
+          type: object
+          title: Platform States
+          description: 'Every platform''s tag: whether the video is going there and how far it has got. The card
+            moves to Scheduled once every target is scheduled or live, and to Published once every target is live.'
         ticket:
           $ref: '#/components/schemas/TicketFields'
         provenance:
@@ -2129,6 +2280,7 @@ components:
       - source
       - ready
       - readiness
+      - platform_states
       - ticket
       - provenance
       - publishing_history
@@ -2170,13 +2322,15 @@ components:
             type: string
             enum:
             - youtube
+            - tiktok
+            - instagram
             - bluesky
             - threads
             - facebook
           type: array
           minItems: 1
           title: Target Platforms
-          description: Platforms to post to when scheduled.
+          description: Where the video is going (any of the six).
         bluesky_text:
           anyOf:
           - type: string

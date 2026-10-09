@@ -150,7 +150,7 @@ def evaluate(post: Post, enabled: frozenset[str] | set[str], video_path: Path | 
     targets = list(dict.fromkeys(targets or post.target_platforms or [Platform.YOUTUBE]))
     platforms = {}
     for platform in targets:
-        if platform not in Platform.ALL:
+        if platform not in Platform.LABELS:
             continue
         auto = platform in enabled
         platforms[platform] = PlatformReadiness(platform, auto,

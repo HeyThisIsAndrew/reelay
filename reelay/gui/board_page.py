@@ -33,7 +33,7 @@ from .workers import CallWorker
 log = logging.getLogger("reelay")
 
 MIME = "application/x-reelay-cards"
-CARD_HEIGHT = 112
+CARD_HEIGHT = 132
 COVER_W, COVER_H = 52, 92
 SYNC_EVERY_SECONDS = 600
 
@@ -70,7 +70,11 @@ class BoardModel(QAbstractListModel):
         if role == Qt.DisplayRole:
             return card.title
         if role == Qt.ToolTipRole:
-            return card.row.item.hook
+            words = {"none": "not scheduled yet", "failed": "failed", "scheduled": "scheduled",
+                     "sending": "posting now", "published": "live"}
+            lines = [f"{Platform.LABELS.get(n, n)}: {words.get(s.state, s.state)}"
+                     for n, s in card.platform_states.items() if s.target]
+            return card.row.item.hook + ("\n\n" + "\n".join(lines) if lines else "")
         return None
 
     def flags(self, index):
@@ -177,6 +181,8 @@ class CardDelegate(QStyledItemDelegate):
         painter.drawText(QRect(x, y + 4, w, sfm.height()), Qt.AlignLeft | Qt.AlignVCenter,
                          sfm.elidedText(meta, Qt.ElideRight, w))
 
+        self._draw_platforms(painter, card, x, int(r.bottom()) - sfm.height() - 30)
+
         status, color = self._status(card)
         painter.setPen(QColor(color))
         painter.drawText(QRect(x, int(r.bottom()) - sfm.height() - 10, w, sfm.height()),
@@ -186,6 +192,24 @@ class CardDelegate(QStyledItemDelegate):
             painter.fillRect(bar, QColor(p.pressed))
             painter.fillRect(QRectF(bar.x(), bar.y(), bar.width() * card.progress / 100, 3), QColor(p.text))
         painter.restore()
+
+    @staticmethod
+    def _draw_platforms(painter: QPainter, card: Card, x: int, y: int, size: int = 14) -> None:
+        """The platforms the video is going to: faded = not scheduled yet, solid =
+        scheduled, a green dot = live, a red dot = failed."""
+        from .logos import platform_pixmap
+        p = theme.P
+        for name, state in card.platform_states.items():
+            if not state.target:
+                continue
+            faded = state.state in ("none", "failed")
+            painter.drawPixmap(x, y, platform_pixmap(name, size, faded))
+            dot = p.success if state.state == "published" else p.danger if state.state == "failed" else None
+            if dot:
+                painter.setPen(QPen(QColor(p.raised), 1.5))
+                painter.setBrush(QColor(dot))
+                painter.drawEllipse(QRectF(x + size - 5, y + size - 5, 6, 6))
+            x += size + 4
 
     @staticmethod
     def _status(card: Card) -> tuple[str, str]:
@@ -204,6 +228,14 @@ class CardDelegate(QStyledItemDelegate):
             return f"Goes live {local_text(post.publish_at)}", p.text
         if post and post.status == PostStatus.PUBLISHED:
             return f"Live on {card.account.display_name}" if card.account else "Live on YouTube", p.success
+        going = [s for s in card.platform_states.values() if s.target]
+        marked = [s for s in going if s.state != "none"]
+        if marked and not card.dispatches:
+            live = sum(1 for s in going if s.state == "published")
+            sched = sum(1 for s in going if s.state == "scheduled")
+            if live == len(going):
+                return f"✓ Live on {'all ' + str(live) if live > 1 else Platform.LABELS[going[0].platform]}", p.success
+            return f"{sched} scheduled · {live} live · {len(going) - sched - live} to do", p.text2
         if card.row.stage == Stage.PUBLISHED:
             return "Posted outside Reelay", p.text2
         if post and post.status == PostStatus.FAILED:
@@ -309,6 +341,8 @@ class BoardPage(QWidget):
         self._last_sync = 0.0
         self._closed = False
         self._reload_timer = QTimer(self, singleShot=True, interval=30, timeout=self.reload)
+        self._advance_timer = QTimer(self, interval=60_000, timeout=self._advance_due)
+        self._advance_timer.start()
         self._build_ui()
         self._bridge = change_bridge(self.store)
         self._bridge.changed.connect(self._on_store_change)
@@ -381,6 +415,8 @@ class BoardPage(QWidget):
         self.panel.unmarkRequested.connect(self._unmark_posted)
         self.panel.revisionsRequested.connect(self._show_revisions)
         self.panel.fillRequested.connect(lambda row_id: self._fill([row_id]))
+        self.panel.targetsChanged.connect(self._set_targets)
+        self.panel.platformMarkRequested.connect(self._mark_platform)
         self.panel.transcriptRequested.connect(lambda row_id: self._get_transcripts([row_id], ask_replace=True))
         self.bulk = BulkPanel()
         self.bulk.applyRequested.connect(self._bulk_apply)
@@ -408,6 +444,7 @@ class BoardPage(QWidget):
         self.panel.show_empty()
         self.subtitle.setText(f"{profile.name}'s pipeline · drag cards to move them along")
         self._last_sync = 0.0
+        self._advance_due()
         self.reload()
 
     def _on_store_change(self, change: Change) -> None:
@@ -628,6 +665,44 @@ class BoardPage(QWidget):
                              self.pipeline.add_shorts_default())
         others = sorted(((c.id, c.title) for c in self.cards.values()), key=lambda t: t[1].lower())
         self.panel.set_ticket(others, self.pipeline.publishing_history(card.id))
+        self.panel.set_platform_states(card.platform_states, card.post.publish_at if card.post else None)
+
+    # ---------------------------------------------------------------- platform tags
+    def _set_targets(self, row_id: int, platforms: list[str]) -> None:
+        try:
+            self.pipeline.set_targets(row_id, platforms)
+        except PipelineError as exc:
+            self.panel.show_errors(exc.problems)
+            self.reload()
+            return
+        self.panel.show_errors([])
+
+    def _mark_platform(self, row_id: int, platform: str, state: str, when) -> None:
+        before = self.store.get_video(row_id).stage
+        try:
+            self.pipeline.set_platform_state(row_id, platform, state, when)
+        except PipelineError as exc:
+            self.panel.show_errors(exc.problems)
+            self.reload()
+            return
+        self.panel.show_errors([])
+        after = self.store.get_video(row_id).stage
+        if after != before:
+            self._status(f"Moved to {Stage.LABELS[after]}: "
+                         + ("every platform it's going to is live." if after == Stage.PUBLISHED else
+                            "every platform it's going to is scheduled." if after == Stage.SCHEDULED else
+                            "not every platform is scheduled any more."))
+
+    def _advance_due(self) -> None:
+        """Every minute: hand-scheduled posts whose time has come count as live."""
+        if self.profile and not self._closed:
+            try:
+                moved = self.pipeline.advance_stages(self.profile.id)
+            except PipelineError:
+                return
+            if moved:
+                self._status(f"{len(moved)} card{'s' if len(moved) != 1 else ''} moved on: their scheduled time "
+                             "passed.")
 
     # ---------------------------------------------------------------- ticket fields & history
     def _commit_ticket_field(self, row_id: int, key: str, value) -> None:
@@ -840,5 +915,6 @@ class BoardPage(QWidget):
             self._bridge = None
         self._closed = True
         self._reload_timer.stop()
+        self._advance_timer.stop()
         if self.sync_worker:
             self.sync_worker.wait(3000)

@@ -15,8 +15,8 @@ import html
 from datetime import datetime, timezone
 
 from PySide6.QtCore import QDateTime, Qt, Signal
-from PySide6.QtWidgets import (QComboBox, QDateEdit, QDateTimeEdit, QDialog, QDialogButtonBox, QFileDialog, QFrame,
-                               QHBoxLayout, QHeaderView, QLabel, QLineEdit, QPlainTextEdit, QPushButton,
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QDateEdit, QDateTimeEdit, QDialog, QDialogButtonBox,
+                               QFileDialog, QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QPlainTextEdit, QPushButton,
                                QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
 from ..models import MANUAL_LABELS, MANUAL_PLATFORMS, ContentType, Ticket
@@ -80,8 +80,7 @@ class ReadinessHeader(QFrame):
         self.rows = QVBoxLayout()
         self.rows.setSpacing(3)
         lay.addLayout(self.rows)
-        self.manual = _faint("TikTok and Instagram: posted by hand from the captions below, so not checked.")
-        lay.addWidget(self.manual)
+
 
     def set_readiness(self, readiness: Readiness | None) -> None:
         while self.rows.count():
@@ -110,7 +109,8 @@ class ReadinessHeader(QFrame):
             if pr.state == READY:
                 text, prop = f"✓  <b>{pr.label}</b>: ready", "success"
             elif pr.state == NOT_CHECKED:
-                text, prop = f"–  <b>{pr.label}</b>: posted by hand (automatic posting is off), not checked", "faint"
+                why = "always posted by hand" if pr.platform in ("tiktok", "instagram") else "automatic posting is off"
+                text, prop = f"–  <b>{pr.label}</b>: you post it ({why}), not checked", "faint"
             else:
                 problems = "<br>".join("&nbsp;&nbsp;&nbsp;⚠ " + html.escape(c.message) for c in pr.checks if not c.ok)
                 text, prop = f"⚠  <b>{pr.label}</b>: blocking<br>{problems}", "danger"
@@ -509,3 +509,133 @@ class RevisionDialog(QDialog):
         if not error and self._reload is not None:
             self.fill(self._reload())
 
+
+
+# ====================================================================== platform tags
+class PlatformRow(QWidget):
+    """One platform on the ticket: its logo, where it stands, and the boxes
+    Going / Scheduled / Posted. Ticking Scheduled asks when it goes live."""
+    goingToggled = Signal(str, bool)
+    markRequested = Signal(str, str, object)   # platform, "scheduled" | "posted" | "none", when (datetime | None)
+
+    def __init__(self, platform: str, parent=None):
+        super().__init__(parent)
+        from ..models import Platform
+        from .logos import platform_pixmap
+        self.platform = platform
+        self.label = Platform.LABELS.get(platform, platform)
+        self._loading = False
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 2, 0, 4)
+        outer.setSpacing(2)
+        top = QHBoxLayout()
+        top.setSpacing(8)
+        logo = QLabel()
+        logo.setPixmap(platform_pixmap(platform, 18))
+        logo.setFixedSize(20, 20)
+        tip(logo, self.label)
+        top.addWidget(logo)
+        self.name = QLabel(f"<b>{self.label}</b>")
+        top.addWidget(self.name)
+        self.state = _faint()
+        self.state.setWordWrap(True)
+        top.addWidget(self.state, 1)
+        outer.addLayout(top)
+        lay = QHBoxLayout()
+        lay.setContentsMargins(28, 0, 0, 0)
+        lay.setSpacing(14)
+        outer.addLayout(lay)
+        self.going = tip(QCheckBox("Going"), f"This video is going to {self.label}. Its logo shows on the card.")
+        self.scheduled = tip(QCheckBox("Scheduled"), f"You scheduled it in {self.label}'s own app. Reelay asks "
+                                                     "when it goes live and moves the card to Published then.")
+        self.posted = tip(QCheckBox("Posted"), f"It's live on {self.label}. When every platform it's going to is "
+                                               "posted, the card moves to Published.")
+        for box in (self.going, self.scheduled, self.posted):
+            lay.addWidget(box)
+        lay.addStretch()
+        self.going.toggled.connect(lambda on: not self._loading and self.goingToggled.emit(self.platform, on))
+        self.scheduled.toggled.connect(self._on_scheduled)
+        self.posted.toggled.connect(self._on_posted)
+
+    def _on_scheduled(self, on: bool) -> None:
+        if self._loading:
+            return
+        if not on:
+            self.markRequested.emit(self.platform, "none", None)
+            return
+        dialog = WhenDialog(self.label, self.window(), self._default_when)
+        if dialog.exec() != QDialog.Accepted:
+            self._set(self.scheduled, False)
+            return
+        self.markRequested.emit(self.platform, "scheduled", dialog.when())
+
+    def _on_posted(self, on: bool) -> None:
+        if not self._loading:
+            self.markRequested.emit(self.platform, "posted" if on else "none", None)
+
+    @staticmethod
+    def _set(box: QCheckBox, on: bool) -> None:
+        box.blockSignals(True)
+        box.setChecked(on)
+        box.blockSignals(False)
+
+    def set_state(self, state, auto_enabled: bool, default_when: str | None = None) -> None:
+        """state: pipeline.PlatformState."""
+        self._loading = True
+        self._default_when = default_when
+        try:
+            self.going.setChecked(state.target)
+            live = state.state == "published"
+            self.scheduled.setChecked(state.state in ("scheduled", "sending") or (live and state.manual_kind == "scheduled"))
+            self.posted.setChecked(live)
+            by_reelay = state.automatic or (state.state in ("scheduled", "sending", "failed") and not state.manual_kind
+                                            and state.state != "none")
+            for box in (self.scheduled, self.posted):
+                box.setEnabled(not by_reelay)
+            self.going.setEnabled(not by_reelay)
+            when = local_text(state.at) if state.at else ""
+            text = {"none": "Not scheduled yet" if state.target else "Not going here",
+                    "failed": "Reelay couldn't post it", "sending": "Reelay is posting it now",
+                    "scheduled": f"Scheduled{' · ' + when if when else ''}",
+                    "published": f"Live{' · ' + when if when else ''}"}[state.state]
+            if by_reelay and state.state != "published":
+                text += " (by Reelay)"
+            elif state.state == "none" and state.target and auto_enabled:
+                text = "Reelay can post it: use Schedule below"
+            self.state.setText(text)
+            set_prop(self.state, "danger", state.state == "failed")
+            set_prop(self.state, "success", live)
+            self.setToolTip("" if not by_reelay else f"Reelay is handling {self.label}; this updates on its own.")
+        finally:
+            self._loading = False
+
+
+class WhenDialog(QDialog):
+    """When does the post go live? (For posts scheduled by hand.)"""
+
+    def __init__(self, platform_label: str, parent=None, default: str | None = None):
+        super().__init__(parent)
+        from datetime import timedelta
+        self.setWindowTitle(f"Scheduled on {platform_label}")
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(20, 18, 20, 14)
+        lay.addWidget(_faint(f"When does it go live on {platform_label}? Reelay moves the card to Published once "
+                             "every platform is live.", "muted"))
+        when = parse_utc(default) if default else None
+        if when is None:
+            local = datetime.now().replace(hour=9, minute=0, second=0, microsecond=0) + timedelta(days=1)
+            start = QDateTime(local)
+        else:
+            start = QDateTime.fromSecsSinceEpoch(int(when.timestamp()))
+        self.edit = tip(QDateTimeEdit(start), "Your local time")
+        self.edit.setCalendarPopup(True)
+        self.edit.setDisplayFormat("ddd MMM d, yyyy   h:mm AP")
+        lay.addWidget(self.edit)
+        buttons = QDialogButtonBox(QDialogButtonBox.Cancel | QDialogButtonBox.Ok)
+        buttons.button(QDialogButtonBox.Ok).setText("Mark as Scheduled")
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        lay.addWidget(buttons)
+
+    def when(self) -> datetime:
+        return self.edit.dateTime().toPython().astimezone(timezone.utc)

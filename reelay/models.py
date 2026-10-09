@@ -32,8 +32,12 @@ class Platform:
     BLUESKY = "bluesky"
     THREADS = "threads"
     FACEBOOK = "facebook"
-    ALL = (YOUTUBE, BLUESKY, THREADS, FACEBOOK)
-    LABELS = {YOUTUBE: "YouTube", BLUESKY: "Bluesky", THREADS: "Threads", FACEBOOK: "Facebook"}
+    TIKTOK = "tiktok"
+    INSTAGRAM = "instagram"
+    ALL = (YOUTUBE, BLUESKY, THREADS, FACEBOOK)       # can be posted automatically (when turned on)
+    HAND_ONLY = (TIKTOK, INSTAGRAM)                   # always posted by hand (copy and paste)
+    LABELS = {YOUTUBE: "YouTube", TIKTOK: "TikTok", INSTAGRAM: "Instagram", BLUESKY: "Bluesky", THREADS: "Threads",
+              FACEBOOK: "Facebook"}
     # Platforms that hold a scheduled post on their own servers (Reelay hands the
     # video over right away). The rest are posted by Reelay at the due time.
     NATIVE_SCHEDULING = (YOUTUBE, FACEBOOK)
@@ -381,8 +385,9 @@ class ManualPost:
     """A post made by hand (copy-paste), recorded with "Mark as posted"."""
     video_row: int
     platform: str        # MANUAL_PLATFORMS
-    posted_at: str       # UTC
+    posted_at: str       # UTC: when it went live (posted) or goes live (scheduled)
     url: str = ""
+    kind: str = "posted"  # "posted" | "scheduled" (scheduled by hand in the platform's own app)
     note: str = ""
     origin: str = "local"
     id: int | None = None

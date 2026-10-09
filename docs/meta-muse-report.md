@@ -1,8 +1,8 @@
-# Reelay v0.7.0: implementation report and local test handoff
+# Reelay v0.8.0: implementation report and local test handoff
 
 **For:** Meta Muse  **From:** Claude Code  **Date:** 2026-10-07
-**Repo:** `/Users/thisisandrew/Documents/UpSkill_Projects/Content_Downloader`, single branch `main` (direct commits, no open PRs), tags `v0.6.0` and `v0.7.0`
-**Installed app:** `/Applications/Reelay.app`, v0.7.0, running now
+**Repo:** `/Users/thisisandrew/Documents/UpSkill_Projects/Content_Downloader`, single branch `main` (direct commits, no open PRs), tags `v0.6.0`, `v0.7.0` and `v0.8.0`
+**Installed app:** `/Applications/Reelay.app`, v0.8.0, running now
 
 ---
 
@@ -11,17 +11,39 @@
 | Item | State |
 |---|---|
 | Branches | **One branch: `main`.** It has two new commits: `13b0bb6` (UX clarity pass) and `85ae4e9` (Ticket v2). The `v0.6.0` tag is pushed. |
-| Automated tests on `main` | **215 passed**, 2 skipped (the opt-in live TikTok tests) |
-| API smoke test (`scripts/smoke_test_api.py`) | **47/47 checks passed** against an isolated server |
+| Automated tests on `main` | **231 passed**, 2 skipped (the opt-in live TikTok tests) |
+| API smoke test (`scripts/smoke_test_api.py`) | **49/49 checks passed** against an isolated server |
 | Packaged-app self-test | Passed: 8 checks, including the new offline Help page check |
 | Local install | v0.6.0 built from `main`, installed and launched. The log shows no errors. |
 | Agent API on the real app | v0.6.0 served it on 127.0.0.1:8471 once the prompt was allowed. v0.7.0 is a new build, so it's **waiting on the same macOS Keychain prompt again.** The rebuilt app has a new ad-hoc signature, so macOS asks once more before Reelay may read `agent_api_token`. After the user clicks **Always Allow**, the API comes up on `127.0.0.1:8471`. |
-| Real database | Migrated **v4 → v5 → v6**. Backups are `reelay-backup-v4-2026-10-07.db` and `reelay-backup-v5-2026-10-07.db` in `~/Library/Application Support/Reelay/`.<br>• **Default profile:** **My Channel** (id 1, empty) is now the active one.<br>• **"Lydia Livingood"** (id 2) is unchanged: 174 videos in Backlog, provenance backfilled, and the saved source "Lydia's TikTok".<br>• No posts, dispatches or connected accounts. |
+| Real database | Migrated **v4 → v5 → v6 → v7**. Backups are `reelay-backup-v4-2026-10-07.db`, `reelay-backup-v5-2026-10-07.db` and `reelay-backup-v6-2026-10-09.db` in `~/Library/Application Support/Reelay/`.<br>• **Default profile:** **My Channel** (id 1, empty) is now the active one.<br>• **"Lydia Livingood"** (id 2) is unchanged: 174 videos in Backlog, provenance backfilled, and the saved source "Lydia's TikTok".<br>• No posts, dispatches or connected accounts. |
 | Publishing flags | Bluesky, Threads and Facebook are off. YouTube is always on; no channel is connected. |
 
 ---
 
 ## 2. What's in the build
+
+**v0.8.0: platform tags, collapsible ticket, audit fixes**
+- **Platform tags.** Each ticket has a row per platform (YouTube, TikTok, Instagram, Bluesky, Threads, Facebook), with a drawn logo and **Going** / **Scheduled** (asks when) / **Posted** boxes.
+  - `target_platforms` now accepts all six. TikTok and Instagram are always hand-posted.
+  - Hand marks are stored in `manual_posts.kind` (schema v7).
+  - Cards move on their own: to Scheduled once every target is scheduled or live, to Published once every target is live. A hand-scheduled time passing counts. Unticking moves a card back; the timer only moves cards forward.
+  - Platforms Reelay posts itself are read-only rows.
+  - A card waiting on hand platforms stays in Scheduled even after Reelay's own posts go live.
+- **Board cards show the logos:** faded = to do, solid = scheduled, green dot = live, red dot = failed. The card tooltip lists every platform's state.
+- **Collapsible ticket.** PLATFORMS, then one section per platform's copy (logo, count / "empty" / "⚠ too long" in the header; only YouTube open at first; open state remembered), POST AUTOMATICALLY, Details and provenance, and WHERE IT'S BEEN POSTED.
+- **API:** `POST /v1/videos/{id}/platforms/{platform}` (`scheduled` with `at`, `posted`, or `none`). Videos now include `platform_states`.
+- **Download page (v0.7.1):**
+  - explicit **Select All** (follows the search) and **Unselect All**;
+  - newly listed videos start unselected;
+  - selections survive reloads;
+  - clearer tooltips (a test checks that a real hover shows the tip);
+  - right-click → Select / Unselect / Open Original Post / Archive.
+- **Audit fixes:**
+  1. Facebook posts Reelay scheduled stayed "scheduled" forever, so their cards never reached Published. The dispatcher now marks them live once the time passes (Facebook schedules natively). YouTube is still confirmed by syncing with YouTube.
+  2. Time-based moves ran only while the Board was open. They now run every minute in the dispatcher, app open or headless.
+  3. Adding a platform to a published card didn't move it back. Re-evaluation now allows a backward move after any tag change.
+  4. Collapsible headers and long platform rows made the ticket wider than its panel; they now wrap or clip.
 
 **v0.7.0: the workflow items Meta Muse approved, plus small improvements**
 - **Spreadsheet import (the priority item).**
@@ -188,6 +210,10 @@ Expected: 8 PASS lines (including `Help page`) and `Self-test passed`.
 | G13 | ⌘-click both Backlog cards | The side panel turns into "2 tickets selected" with Quick fill and "Set on every selected ticket". |
 | G14 | **Import Sheet…** → choose a CSV with a `Video ID` column | The preview lists each row; the button says "Import N Tickets". Cancel to write nothing. |
 | G15 | Right-click a card | Fill, Get Transcript, Mark as Posted…, Change History…, Archive. |
+| G16 | Open a ticket → PLATFORMS → tick TikTok **Going**, then **Posted** | The TikTok logo shows on the card. Once every Going platform is posted, the card moves to Published by itself. |
+| G17 | Tick **Scheduled** on a platform | It asks when the post goes live; the card moves to Published within a minute of that time. |
+| G18 | Click a copy section's name (e.g. TIKTOK) | It opens or closes; the header shows its count or "empty". |
+| G19 | Download page after **List Videos** | Nothing is selected; **Select All** and **Unselect All** work, and hovering explains each control. |
 
 ⚠️ G6–G9 and G13–G15 (if confirmed) write to the real database (Lydia's tickets). They're normal user flows; undo or skip them as the user prefers.
 
