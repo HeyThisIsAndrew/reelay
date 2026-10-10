@@ -1102,6 +1102,30 @@ components:
       - stage
       - stages
       title: ColumnOut
+    CoverageOut:
+      properties:
+        state:
+          type: string
+          enum:
+          - published
+          - scheduled
+          - ready
+          - needs_work
+          - not_applicable
+          title: State
+          description: 'The coverage map (the logos on the card): published = live there; scheduled = scheduled
+            there or being posted; ready = going there and nothing is missing; needs_work = going there but something
+            is missing or failed (see `reason`); not_applicable = not going there.'
+        reason:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Reason
+          description: What's missing, for needs_work.
+      type: object
+      required:
+      - state
+      title: CoverageOut
     ErrorBody:
       properties:
         detail:
@@ -1452,6 +1476,14 @@ components:
             format: date-time
           - type: 'null'
           title: At
+        url:
+          anyOf:
+          - type: string
+            maxLength: 2000
+          - type: 'null'
+          title: Url
+          description: Link to the live post (Prepare to Publish). Must be on that platform's site, e.g. tiktok.com
+            for TikTok.
       additionalProperties: false
       type: object
       required:
@@ -2277,6 +2309,20 @@ components:
           title: Platform States
           description: 'Every platform''s tag: whether the video is going there and how far it has got. The card
             moves to Scheduled once every target is scheduled or live, and to Published once every target is live.'
+        coverage:
+          additionalProperties:
+            $ref: '#/components/schemas/CoverageOut'
+          propertyNames:
+            enum:
+            - youtube
+            - tiktok
+            - instagram
+            - bluesky
+            - threads
+            - facebook
+          type: object
+          title: Coverage
+          description: 'Every platform at a glance: published, scheduled, ready, needs work or not applicable.'
         ticket:
           $ref: '#/components/schemas/TicketFields'
         provenance:
@@ -2329,6 +2375,7 @@ components:
       - ready
       - readiness
       - platform_states
+      - coverage
       - ticket
       - provenance
       - publishing_history

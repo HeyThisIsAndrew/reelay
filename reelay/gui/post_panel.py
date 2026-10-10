@@ -169,6 +169,7 @@ class PostPanel(QFrame):
     transcriptRequested = Signal(int)                 # video row id
     targetsChanged = Signal(int, list)                # video row id, target platforms
     platformMarkRequested = Signal(int, str, str, object)   # row id, platform, state, when
+    handoffRequested = Signal(int, str)                     # row id, platform: Prepare to Publish
 
     def __init__(self, thumbs: ThumbnailCache, parent=None):
         super().__init__(parent)
@@ -276,6 +277,7 @@ class PostPanel(QFrame):
             row.goingToggled.connect(self._on_going)
             row.markRequested.connect(
                 lambda p, state, when: self.card and self.platformMarkRequested.emit(self.card.id, p, state, when))
+            row.handoffRequested.connect(lambda p: self.card and self.handoffRequested.emit(self.card.id, p))
             self.platform_rows[platform] = row
             self.platforms_section.add(row)
         self.platform_boxes: dict[str, QCheckBox] = {p: r.going for p, r in self.platform_rows.items()}

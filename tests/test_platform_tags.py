@@ -200,7 +200,7 @@ def test_ticket_platform_rows_drive_the_card(ticket):
     assert store.get_post(row).target_platforms == ["tiktok"] and not store.manual_posts(row)[1:]
     card = b.columns[Stage.PUBLISHED].model.cards[0]
     tip = b.columns[Stage.PUBLISHED].model.data(b.columns[Stage.PUBLISHED].model.index(0), 3)   # ToolTipRole
-    assert card.id == row and "TikTok: live" in tip and "Instagram: live" in tip
+    assert card.id == row and "TikTok: Published" in tip and "Instagram: Published" in tip
 
 
 def test_scheduled_box_asks_when(ticket, monkeypatch):

@@ -386,3 +386,17 @@ def test_sources_list_and_add(api):
 
 
 TIKTOK_URL = "https://www.tiktok.com/@someone"
+
+
+def test_coverage_and_handoff_link_through_the_api(api):
+    row = api.world.rows[0]
+    api.world.pipeline.update_metadata(row, {"target_platforms": ["tiktok"], "tiktok_text": "hi"})
+    v = api.patch(f"/v1/videos/{row}", json={"tiktok_text": "hi there"}).json()
+    assert v["coverage"]["tiktok"] == {"state": "ready", "reason": None}
+    assert v["coverage"]["threads"]["state"] == "not_applicable"
+    bad = api.post(f"/v1/videos/{row}/platforms/tiktok", json={"state": "posted", "url": "https://bsky.app/x"})
+    assert bad.status_code == 422 and "TikTok link" in bad.text
+    ok = api.post(f"/v1/videos/{row}/platforms/tiktok",
+                  json={"state": "posted", "url": "https://www.tiktok.com/@x/video/9"})
+    assert ok.status_code == 200 and ok.json()["coverage"]["tiktok"]["state"] == "published"
+    assert api.world.store.manual_posts(row)[0].url == "https://www.tiktok.com/@x/video/9"

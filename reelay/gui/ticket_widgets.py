@@ -522,6 +522,7 @@ class PlatformRow(QWidget):
     hidden so the rest of the ticket can read it.)"""
     goingToggled = Signal(str, bool)
     markRequested = Signal(str, str, object)   # platform, "scheduled" | "posted" | "none", when (datetime | None)
+    handoffRequested = Signal(str)             # platform: open Prepare to Publish
 
     CHOICES = (("skip", "Not posting"), ("preparing", "Preparing"), ("scheduled", "Scheduled"), ("posted", "Posted"))
 
@@ -551,6 +552,14 @@ class PlatformRow(QWidget):
         self.state = _faint()
         self.state.setWordWrap(True)
         top.addWidget(self.state, 1)
+        self.handoff_btn = tip(QPushButton("Publish…"),
+                               f"Prepare to Publish on {self.label}: Reelay checks the video and caption, copies "
+                               f"the caption, opens {self.label}'s uploader and shows the video file. You post it "
+                               "there, then paste the link back.")
+        set_prop(self.handoff_btn, "flat")
+        self.handoff_btn.clicked.connect(lambda: self.handoffRequested.emit(self.platform))
+        self.handoff_btn.setVisible(False)
+        top.addWidget(self.handoff_btn, 0, Qt.AlignTop)
         outer.addLayout(top)
         seg = QHBoxLayout()
         seg.setContentsMargins(0, 0, 0, 0)
@@ -646,6 +655,8 @@ class PlatformRow(QWidget):
             set_prop(self.state, "danger", state.state == "failed")
             set_prop(self.state, "success", live)
             self.setToolTip(f"Reelay is handling {self.label}; this updates on its own." if by_reelay else "")
+            # posted by hand (Reelay can't post here) and not live yet: offer the guided hand-off
+            self.handoff_btn.setVisible(not auto_enabled and not by_reelay and not live)
         finally:
             self._loading = False
 

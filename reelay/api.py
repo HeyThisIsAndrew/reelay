@@ -183,6 +183,14 @@ class PlatformStateOut(BaseModel):
     automatic: bool = Field(description="Reelay is posting it itself; its state updates on its own.")
 
 
+class CoverageOut(BaseModel):
+    state: Literal["published", "scheduled", "ready", "needs_work", "not_applicable"] = Field(
+        description="The coverage map (the logos on the card): published = live there; scheduled = scheduled there "
+                    "or being posted; ready = going there and nothing is missing; needs_work = going there but "
+                    "something is missing or failed (see `reason`); not_applicable = not going there.")
+    reason: str | None = Field(None, description="What's missing, for needs_work.")
+
+
 class PlatformMark(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -190,6 +198,9 @@ class PlatformMark(BaseModel):
         description="scheduled = you scheduled it in the platform's own app (give `at`, when it goes live); posted = "
                     "it's live (`at` defaults to now, can't be in the future); none = clear what was marked.")
     at: AwareDatetime | None = None
+    url: str | None = Field(None, max_length=2000,
+                            description="Link to the live post (Prepare to Publish). Must be on that platform's "
+                                        "site, e.g. tiktok.com for TikTok.")
 
 
 class TicketFields(BaseModel):
@@ -254,6 +265,8 @@ class Video(BaseModel):
     platform_states: dict[ManualPlatformName, PlatformStateOut] = Field(
         description="Every platform's tag: whether the video is going there and how far it has got. The card moves to "
                     "Scheduled once every target is scheduled or live, and to Published once every target is live.")
+    coverage: dict[ManualPlatformName, CoverageOut] = Field(
+        description="Every platform at a glance: published, scheduled, ready, needs work or not applicable.")
     ticket: TicketFields
     provenance: Provenance
     archived: bool = Field(False, description="Archived videos are hidden from the board (files and history kept).")
@@ -618,6 +631,7 @@ def create_app(store: Store, pipeline: Pipeline, accounts: AccountService, token
             platform_states={p: PlatformStateOut(target=s.target, state=s.state, at=parse_utc(s.at) if s.at else None,
                                                  automatic=s.automatic)
                              for p, s in (card.platform_states or pipeline.platform_states(row.id)).items()},
+            coverage={p: CoverageOut(state=c.state, reason=c.reason or None) for p, c in card.coverage.items()},
             publishing_history={p: [to_history(e) for e in entries]
                                 for p, entries in pipeline.publishing_history(row.id).items()},
             source=SourceInfo(platform=item.platform, url=item.url, caption=item.description, hook=item.hook,
@@ -806,7 +820,10 @@ def create_app(store: Store, pipeline: Pipeline, accounts: AccountService, token
         platform Reelay is posting itself."""
         with store.origin("api"):
             try:
-                pipeline.set_platform_state(video_id, platform, body.state, body.at)
+                if body.url and body.state != "none":
+                    pipeline.confirm_handoff(video_id, platform, body.url, body.at, scheduled=body.state == "scheduled")
+                else:
+                    pipeline.set_platform_state(video_id, platform, body.state, body.at)
             except PipelineError as exc:
                 raise pipeline_error(exc) from None
         return video_by_id(video_id)

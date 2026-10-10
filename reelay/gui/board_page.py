@@ -9,8 +9,8 @@ import time
 from dataclasses import replace
 from datetime import datetime
 
-from PySide6.QtCore import (QAbstractListModel, QItemSelectionModel, QMimeData, QModelIndex, QRect, QRectF, QSettings,
-                            QSize,
+from PySide6.QtCore import (QAbstractListModel, QItemSelectionModel, QMimeData, QModelIndex, QPointF, QRect, QRectF,
+                            QSettings, QSize,
                             Qt, QTimer, Signal)
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QListView, QMenu,
@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFrame, QHBoxLayout
                                QVBoxLayout, QWidget)
 
 from ..models import Platform, Post, PostStatus, Profile, Stage
+from ..coverage import needs_work as coverage_needs_work, short_summary
 from ..pipeline import Card, Pipeline, PipelineError
 from ..store import Change
 from ..text import clock, local_text
@@ -41,6 +42,8 @@ log = logging.getLogger("reelay")
 
 MIME = "application/x-reelay-cards"
 CARD_HEIGHT = 132
+COVERAGE_BLUE = "#3B82F6"     # scheduled
+COVERAGE_AMBER = "#F2A93B"    # ready to publish
 COVER_W, COVER_H = 52, 92
 SYNC_EVERY_SECONDS = 600
 COLUMN_MIN_WIDTH = 280      # columns never squeeze below this; drag the gaps between them to resize
@@ -79,11 +82,11 @@ class BoardModel(QAbstractListModel):
         if role == Qt.DisplayRole:
             return card.title
         if role == Qt.ToolTipRole:
-            words = {"none": "to do (dashed ring)", "failed": "failed (red dot)", "scheduled": "scheduled (amber dot)",
-                     "sending": "posting now", "published": "live (green dot)"}
-            lines = [f"{Platform.LABELS.get(n, n)}: {words.get(s.state, s.state)}"
-                     for n, s in card.platform_states.items() if s.target]
-            return card.row.item.hook + ("\n\n" + "\n".join(lines) if lines else "")
+            from ..coverage import NOT_APPLICABLE
+            marks = {"published": "✓", "scheduled": "🕒", "ready": "●", "needs_work": "!"}
+            lines = [f"{marks[c.state]}  {c.text}" for c in card.coverage.values() if c.state != NOT_APPLICABLE]
+            return card.row.item.hook + ("\n\n" + "\n".join(lines) if lines else
+                                         "\n\nNot planned for any platform yet")
         return None
 
     def flags(self, index):
@@ -190,7 +193,7 @@ class CardDelegate(QStyledItemDelegate):
         painter.drawText(QRect(x, y + 4, w, sfm.height()), Qt.AlignLeft | Qt.AlignVCenter,
                          sfm.elidedText(meta, Qt.ElideRight, w))
 
-        self._draw_platforms(painter, card, x + 2, int(r.bottom()) - sfm.height() - 34)
+        self._draw_platforms(painter, card, x + 2, int(r.bottom()) - sfm.height() - 34, width=w - 6)
 
         status, color = self._status(card)
         painter.setPen(QColor(color))
@@ -203,30 +206,46 @@ class CardDelegate(QStyledItemDelegate):
         painter.restore()
 
     @staticmethod
-    def _draw_platforms(painter: QPainter, card: Card, x: int, y: int, size: int = CARD_LOGO_SIZE) -> None:
-        """The platforms the video is going to, each clearly visible:
-        to do = the logo in a dashed ring; scheduled = amber dot; live = green
-        dot; failed = red dot."""
+    def _draw_platforms(painter: QPainter, card: Card, x: int, y: int, size: int = CARD_LOGO_SIZE,
+                        width: int | None = None) -> None:
+        """The coverage map: every platform in a fixed order, so the eye learns the
+        positions. Published = green ✓, scheduled = blue clock, ready = amber dot,
+        needs work = red !, not going there = a faint logo with no badge."""
+        from ..coverage import NEEDS_WORK, NOT_APPLICABLE, PUBLISHED, READY, SCHEDULED
         from .logos import platform_pixmap
         p = theme.P
-        for name, state in card.platform_states.items():
-            if not state.target:
-                continue
-            todo = state.state in ("none", "failed")
-            painter.drawPixmap(x, y, platform_pixmap(name, size, faded=todo))
-            if todo:
-                pen = QPen(QColor(p.text2), 1.2)
-                pen.setStyle(Qt.DashLine)
-                painter.setPen(pen)
-                painter.setBrush(Qt.NoBrush)
-                painter.drawRoundedRect(QRectF(x - 2.5, y - 2.5, size + 5, size + 5), 6, 6)
-            dot = {"published": p.success, "failed": p.danger, "scheduled": "#F2A93B",
-                   "sending": "#F2A93B"}.get(state.state)
-            if dot:
+        cov = card.coverage
+        gap = 8
+        if width:
+            size = max(12, min(size, (width - gap * (len(cov) - 1)) // max(len(cov), 1)))
+        for name, c in cov.items():
+            painter.save()
+            if c.state == NOT_APPLICABLE:
+                painter.setOpacity(0.22)
+            painter.drawPixmap(x, y, platform_pixmap(name, size))
+            painter.restore()
+            color = {PUBLISHED: p.success, SCHEDULED: COVERAGE_BLUE, READY: COVERAGE_AMBER,
+                     NEEDS_WORK: p.danger}.get(c.state)
+            if color:
+                d = 11.0
+                badge = QRectF(x + size - d + 3, y + size - d + 3, d, d)
                 painter.setPen(QPen(QColor(p.raised), 1.5))
-                painter.setBrush(QColor(dot))
-                painter.drawEllipse(QRectF(x + size - 6, y + size - 6, 8, 8))
-            x += size + 8
+                painter.setBrush(QColor(color))
+                painter.drawEllipse(badge)
+                white = QPen(QColor("#FFFFFF"), 1.4)
+                white.setCapStyle(Qt.RoundCap)
+                painter.setPen(white)
+                cx, cy = badge.center().x(), badge.center().y()
+                if c.state == PUBLISHED:
+                    painter.drawPolyline([QPointF(cx - 2.6, cy + 0.1), QPointF(cx - 0.7, cy + 2.0),
+                                          QPointF(cx + 2.7, cy - 2.0)])
+                elif c.state == SCHEDULED:
+                    painter.drawLine(QPointF(cx, cy), QPointF(cx, cy - 2.8))
+                    painter.drawLine(QPointF(cx, cy), QPointF(cx + 2.2, cy))
+                elif c.state == NEEDS_WORK:
+                    painter.drawLine(QPointF(cx, cy - 2.8), QPointF(cx, cy + 0.6))
+                    painter.drawPoint(QPointF(cx, cy + 2.6))
+            x += size + gap
 
     @staticmethod
     def _status(card: Card) -> tuple[str, str]:
@@ -249,10 +268,9 @@ class CardDelegate(QStyledItemDelegate):
         marked = [s for s in going if s.state != "none"]
         if marked and not card.dispatches:
             live = sum(1 for s in going if s.state == "published")
-            sched = sum(1 for s in going if s.state == "scheduled")
             if live == len(going):
                 return f"✓ Live on {'all ' + str(live) if live > 1 else Platform.LABELS[going[0].platform]}", p.success
-            return f"{sched} scheduled · {live} live · {len(going) - sched - live} to do", p.text2
+            return short_summary(card.coverage), (p.danger if coverage_needs_work(card.coverage) else p.text2)
         if card.row.stage == Stage.PUBLISHED:
             return "Posted outside Reelay", p.text2
         if post and post.status == PostStatus.FAILED:
@@ -263,6 +281,9 @@ class CardDelegate(QStyledItemDelegate):
         if readiness is not None and readiness.blocking:
             names = ", ".join(Platform.LABELS.get(n, n) for n in readiness.blocking)
             return (f"⚠ Not ready for {names}" if readiness.ready else f"⚠ NOT READY · {names}"), p.danger
+        to_fix = coverage_needs_work(card.coverage)
+        if to_fix:
+            return f"⚠ Needs work: {', '.join(Platform.LABELS.get(n, n) for n in to_fix)}", p.danger
         if card.row.stage == Stage.STAGING:
             if post and post.account_id and card.account:
                 when = f" · {local_text(post.publish_at)}" if post.publish_at else ""
@@ -496,6 +517,7 @@ class BoardPage(QWidget):
         self.panel.fillRequested.connect(lambda row_id: self._fill([row_id]))
         self.panel.targetsChanged.connect(self._set_targets)
         self.panel.platformMarkRequested.connect(self._mark_platform)
+        self.panel.handoffRequested.connect(self.prepare_to_publish)
         self.panel.transcriptRequested.connect(lambda row_id: self._get_transcripts([row_id], ask_replace=True))
         self.bulk = BulkPanel()
         self.bulk.applyRequested.connect(self._bulk_apply)
@@ -963,6 +985,39 @@ class BoardPage(QWidget):
                          + ("every platform it's going to is live." if after == Stage.PUBLISHED else
                             "every platform it's going to is scheduled." if after == Stage.SCHEDULED else
                             "not every platform is scheduled any more."))
+
+    def prepare_to_publish(self, row_id: int, platform: str) -> None:
+        """The guided hand-off for a platform Reelay doesn't post to itself."""
+        from .. import handoff
+        from .handoff_dialog import HandoffDialog
+        row = self.store.get_video(row_id)
+        if row is None:
+            return
+        if self.panel.card is not None and self.panel.card.id == row_id and not self.panel._locked():
+            post = self.panel.collect()           # what's on screen, saved first so nothing typed is lost
+            try:
+                self.pipeline.save_draft(post)
+            except PipelineError as exc:
+                self.panel.show_errors(exc.problems)
+                self._status(str(exc))
+                return
+        else:
+            post, _saved = self.pipeline.post_or_default(row)
+        plan = handoff.prepare(post, platform, self.pipeline.video_path(row), row.item.duration)
+        dialog = HandoffDialog(plan, self)
+        if dialog.exec() != HandoffDialog.Accepted:
+            if dialog.started:
+                self._status(f"Not recorded yet. Open Publish… again when it's up on {dialog.label}.")
+            return
+        values = dialog.values()
+        try:
+            self.pipeline.confirm_handoff(row_id, platform, **values)
+        except PipelineError as exc:
+            QMessageBox.warning(self, "Prepare to Publish", str(exc))
+            return
+        self._status(f"Recorded: {'scheduled' if values['scheduled'] else 'live'} on {dialog.label}"
+                     + (" with its link." if values["url"] else "."))
+        self.reload()
 
     def _advance_due(self) -> None:
         """Every minute: hand-scheduled posts whose time has come count as live."""

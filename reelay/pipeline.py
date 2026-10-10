@@ -25,6 +25,7 @@ from collections import defaultdict
 import uuid
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
+from functools import cached_property
 from pathlib import Path
 from typing import Callable, Protocol
 
@@ -108,6 +109,12 @@ class Card:
     @property
     def uploading(self) -> bool:
         return bool(self.post and self.post.status == PostStatus.UPLOADING)
+
+    @cached_property
+    def coverage(self) -> dict:
+        """platform → coverage.Coverage: published / scheduled / ready / needs work / not applicable."""
+        from .coverage import compute
+        return compute(self.post, self.platform_states, self.readiness, self.row.item.is_downloaded)
 
 
 @dataclass
@@ -601,8 +608,20 @@ class Pipeline:
         self.advance(row_id, allow_back=True)
         return post
 
+    def confirm_handoff(self, row_id: int, platform: str, url: str = "", when: str | datetime | None = None,
+                        scheduled: bool = False, now: datetime | None = None) -> None:
+        """Finish a Prepare to Publish hand-off: the person posted (or scheduled) it in the
+        platform's own app and pasted the live link. Recorded like the ticket's Posted /
+        Scheduled choice, with the link, and the card moves on its own."""
+        from .handoff import check_post_url
+        problem = check_post_url(platform, url)
+        if problem:
+            raise PipelineError(problem, "invalid_post")
+        self.set_platform_state(row_id, platform, "scheduled" if scheduled else "posted", when, now=now,
+                                url=(url or "").strip(), note="Prepare to Publish")
+
     def set_platform_state(self, row_id: int, platform: str, state: str, when: str | datetime | None = None,
-                           now: datetime | None = None) -> None:
+                           now: datetime | None = None, url: str = "", note: str = "") -> None:
         """The ticket's checkboxes. state: "scheduled" (scheduled by hand in the
         platform's app, going live at `when`), "posted" (live, at `when` or now)
         or "none" (clear what was marked by hand). Platforms Reelay is posting
@@ -632,7 +651,8 @@ class Pipeline:
             self.update_metadata(row_id, {"target_platforms": targets})
         self.store.replace_manual_posts(
             row_id, platform, ("scheduled", "posted"),
-            ManualPost(video_row=row_id, platform=platform, posted_at=utc_iso(when_dt), kind=state))
+            ManualPost(video_row=row_id, platform=platform, posted_at=utc_iso(when_dt), kind=state, url=url,
+                       note=note))
         self.advance(row_id, allow_back=True, now=now)   # a new target can mean "not everywhere yet"
 
     def _stage_for(self, row: VideoRow, now: datetime) -> str | None:
