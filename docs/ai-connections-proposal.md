@@ -1,7 +1,19 @@
 # Proposal: connecting any AI assistant to Reelay (HTTP + pairing)
 
-Status: draft for review, 2026-10-10. Builds on `docs/security.md` (ScopedPipeline + the approval queue).
-Nothing here is implemented yet.
+Status: reviewed 2026-10-10 (decisions below). Builds on `docs/security.md` (ScopedPipeline + the approval
+queue). Nothing here is implemented yet; it comes after the human sign-in work (central OAuth).
+
+## Decisions (2026-10-10)
+
+- **Tunnel:** ship the **quick tunnel** (address changes each session) for our own testing, and the
+  **user's own Cloudflare tunnel** as the Advanced option. Reelay-operated tunnels and persistent domains are
+  decided before a public launch, not now.
+- **Default scopes for a new assistant:** `read + draft + request` ("read, edit and request changes").
+  Mutating actions still always wait in the approval queue, so this is safe; read-only would make the
+  companion feel broken out of the box.
+- **Muse:** confirmed pairing-code auth. The app shows the code once, Muse's relay trades it for a long-lived
+  token kept in Muse's secure credential store, which matches path A's token exchange.
+- **Order:** human sign-in flows first; the pairing server after they're solid.
 
 ## Goal
 
@@ -106,7 +118,7 @@ Today Reelay doesn't run a tunnel. It stores a public URL (`REELAY_PUBLIC_URL`) 
 | **The user's own named tunnel** (their Cloudflare account and domain) | sign-in to Cloudflare, pick a hostname | stable | free tier | Power users (like "use my own developer keys") |
 | **Reelay-operated tunnels** (Reelay's Cloudflare account; per-user hostname such as `lydia-7k2.connect.reelay.app`, tunnel credentials issued at sign-up) | none | stable | Reelay runs a small provisioning service and pays per usage; needs abuse handling | **The consumer default** |
 
-**Recommendation:** Reelay-operated as the default, own named tunnel as "Advanced", and quick tunnel only as a fallback that warns that the address will change. The provisioning service can live next to the OAuth broker (`server/`).
+**Decided:** quick tunnel for our own testing and own named tunnel as "Advanced" now; Reelay-operated tunnels are revisited before a public launch. The provisioning service can live next to the OAuth broker (`server/`).
 
 ## Phasing
 
@@ -125,7 +137,5 @@ Today Reelay doesn't run a tunnel. It stores a public URL (`REELAY_PUBLIC_URL`) 
 
 ## Open questions
 
-- **Muse:** confirm Meta Muse's connector protocol (MCP over HTTP with OAuth is assumed, as with ChatGPT and Claude) and whether it needs dynamic client registration.
+- **Muse:** whether its relay uses dynamic client registration or a pre-registered client (the pairing-code exchange itself is confirmed).
 - **Gemini:** which surface? The Gemini CLI and Antigravity speak MCP locally; Gemini in the consumer app may need OpenAPI or extensions.
-- **Default scopes for a new assistant:** `read + draft + request`, or read-only until the person widens it?
-- **Tunnel option:** which one ships first (see the decision above)?

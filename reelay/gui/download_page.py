@@ -9,10 +9,10 @@ from dataclasses import replace
 from pathlib import Path
 
 from PySide6.QtCore import QSettings, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtGui import QDesktopServices, QKeySequence, QShortcut
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
                                QFrame, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QMenu,
-                               QMessageBox, QProgressBar, QPushButton, QScrollArea, QSplitter, QStackedWidget,
+                               QMessageBox, QProgressBar, QPushButton, QScrollArea, QStackedWidget,
                                QTableView, QToolButton, QVBoxLayout, QWidget)
 
 from .. import APP_NAME
@@ -30,6 +30,7 @@ from ..youtube import YouTubeError
 from ..ytdl import COOKIE_BROWSERS, base_options, find_ffmpeg
 from .bridge import change_bridge
 from .detail_panel import DetailPanel
+from .inspector import ContextualSplitter, Inspector
 from .dialogs import RenamePreviewDialog, tokens_help_html
 from .table_model import ROW_HEIGHT, Col, CoverDelegate, VideoFilterProxy, VideoTableModel
 from .theme import set_prop
@@ -380,14 +381,14 @@ class DownloadPage(QWidget):
         ll.addWidget(self.list_stack, 1)
 
         self.detail = DetailPanel(self.thumbs)
-        split = QSplitter(Qt.Horizontal)
-        split.addWidget(list_area)
-        split.addWidget(self.detail)
-        split.setStretchFactor(0, 1)
-        split.setStretchFactor(1, 0)
-        split.setSizes([1000, 300])
-        split.setChildrenCollapsible(False)
-        outer.addWidget(split, 1)
+        # Details only take room while a video is selected; otherwise the list gets the whole width.
+        self.inspector = Inspector(self.detail, "Video")
+        self.inspector.closeRequested.connect(self.close_inspector)
+        self.split = ContextualSplitter(list_area, self.inspector, self.store, "download", default_width=340,
+                                        min_width=300)
+        outer.addWidget(self.split, 1)
+        esc = QShortcut(QKeySequence(Qt.Key_Escape), self, context=Qt.WidgetWithChildrenShortcut)
+        esc.activated.connect(self.close_inspector)
 
         bl = QVBoxLayout()
         bl.setSpacing(8)
@@ -664,10 +665,21 @@ class DownloadPage(QWidget):
         self.naming.set_example_item(items[0] if items else None)
         if len(items) == 1:
             self.detail.show_item(items[0], self.model.planned_filename(items[0]))
+            self.inspector.set_title("Video")
+            self.split.reveal()
         elif len(items) > 1:
             self.detail.show_multi(items)
+            self.inspector.set_title(f"{len(items)} selected")
+            self.split.reveal()
         else:
             self.detail.show_empty()
+            self.split.dismiss()
+
+    def close_inspector(self) -> None:
+        """✕ or Esc: deselect, which closes the details. Ticked videos stay ticked."""
+        if self.split.is_open:
+            self.table.clearSelection()
+            self._refresh_detail()
 
     def show_tokens_help(self) -> None:
         QMessageBox.information(self, "Custom Naming Patterns", tokens_help_html())

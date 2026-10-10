@@ -74,14 +74,18 @@ def test_pages_and_themes(app_window, qtbot):
     for key in ("download", "board", "accounts", "settings"):
         window.go(key)
         assert window.nav_buttons[key].isChecked()
-    for name in ("light", "black", "dark"):
+    for name in ("light", "black", "custom", "dark"):
         window.set_theme(name)
         assert theme.P.name == name and store.get_setting("theme") == name
 
 
 def test_profile_create_switch_delete(app_window, monkeypatch):
     window, store, _ = app_window
-    monkeypatch.setattr(QInputDialog, "getText", lambda *a, **k: ("Andrew's Channel", True))
+    from reelay.gui import main_window
+    from reelay.gui.branding import Brand
+    monkeypatch.setattr(main_window.ProfileDialog, "exec", lambda self: main_window.ProfileDialog.Accepted)
+    monkeypatch.setattr(main_window.ProfileDialog, "values",
+                        lambda self: ("Andrew's Channel", Brand(tagline="hey"), False))
     window.new_profile()
     assert window.profile.name == "Andrew's Channel"
     assert Path(window.profile.output_folder).name == "Andrew's Channel"
@@ -378,3 +382,136 @@ def test_editor_keeps_copy_paste_targets_set_by_agents(app_window, monkeypatch):
     panel.platform_boxes["youtube"].setChecked(False)
     assert panel.collect().target_platforms == ["threads"]
     assert not panel.upload_btn.isEnabled()                  # nothing left to auto-post
+
+
+# ------------------------------------------------------------------ contextual inspector
+def test_board_inspector_only_shows_with_a_selection(app_window, monkeypatch):
+    window, store, _ = app_window
+    board = window.board
+    window.go("board")
+    assert not board.split.is_open and board.split.slide.isHidden()      # nothing selected: full width
+
+    panel, row = open_ticket(window, store, monkeypatch)
+    assert board.split.is_open and not board.split.slide.isHidden()
+    assert board.split.sizes()[1] >= board.split.min_width
+
+    board.inspector.close_btn.click()                                    # ✕ deselects and closes
+    assert not board.split.is_open and board.split.slide.isHidden()
+    assert board.selected_id is None and panel.card is None
+    assert not any(c.selected_cards() for c in board.columns.values())
+
+    # several cards: the bulk editor, titled with the count
+    col = board.columns[Stage.BACKLOG]
+    sel = col.view.selectionModel()
+    from PySide6.QtCore import QItemSelectionModel
+    sel.select(col.model.index(0), QItemSelectionModel.Select)
+    sel.select(col.model.index(1), QItemSelectionModel.Select)
+    assert board.split.is_open and board.side.currentWidget() is board.bulk
+    assert board.inspector.title.text() == "2 SELECTED"
+    board.close_inspector()                                              # what Esc does
+    assert not board.split.is_open and board.bulk_ids == []
+
+
+def test_closing_the_ticket_offers_to_save_typed_copy(app_window, monkeypatch):
+    window, store, _ = app_window
+    board = window.board
+    panel, row = open_ticket(window, store, monkeypatch)
+    assert not panel.has_unsaved_changes()
+    panel.blocks["title"].set_text("A better title")
+    assert panel.has_unsaved_changes()
+
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.Cancel)
+    board.close_inspector()
+    assert board.split.is_open and panel.blocks["title"].text() == "A better title"   # cancel keeps it open
+
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.Save)
+    board.close_inspector()
+    assert not board.split.is_open
+    assert store.get_post(row).title == "A better title"
+
+
+def test_inspector_width_is_remembered(app_window, monkeypatch):
+    window, store, _ = app_window
+    board = window.board
+    open_ticket(window, store, monkeypatch)
+    board.split.width_wanted = 512
+    board.split._save_width()
+    assert store.get_setting("ui.inspector_width.board") == "512"
+    from reelay.gui.inspector import ContextualSplitter, Inspector
+    from PySide6.QtWidgets import QLabel, QWidget
+    again = ContextualSplitter(QWidget(), Inspector(QLabel("x")), store, "board")
+    assert again.width_wanted == 512
+
+
+def test_download_inspector_follows_the_row_selection(app_window, qtbot, monkeypatch):
+    window, store, _ = app_window
+    page = fetch_fake(window, qtbot, monkeypatch, make_items(3))
+    assert not page.split.is_open
+    page.table.selectRow(0)
+    assert page.split.is_open and page.inspector.title.text() == "VIDEO"
+    page.close_inspector()
+    assert not page.split.is_open and page.split.slide.isHidden()
+    assert not page.table.selectionModel().hasSelection()
+
+
+# ------------------------------------------------------------------ branding and the Custom theme
+def _logo(path, color="#d62828", bg=None):
+    from PySide6.QtGui import QColor, QImage, QPainter
+    image = QImage(600, 600, QImage.Format_ARGB32)
+    image.fill(QColor(bg) if bg else QColor(0, 0, 0, 0))
+    p = QPainter(image)
+    p.fillRect(150, 150, 300, 300, QColor(color))
+    p.end()
+    image.save(str(path))
+    return path
+
+
+def test_each_profile_has_its_own_logo_and_colours(app_window, tmp_path):
+    window, store, _ = app_window
+    from reelay.gui import branding, theme
+    lydia = window.profile
+    andrew = store.create_profile("Hey, This Is Andrew", tmp_path / "andrew")
+    logo = branding.logo_from_file(_logo(tmp_path / "logo.png", bg="#000000"))
+    branding.save(store, andrew.id, branding.Brand(tagline="capture, create, caffeinate",
+                                                   background="#101820", accent="#f2aa4c", logo=logo))
+    loaded = branding.load(store, andrew.id)
+    assert loaded.tagline == "capture, create, caffeinate" and loaded.accent == "#f2aa4c"
+    from PySide6.QtGui import QImage
+    assert max(QImage.fromData(loaded.logo).width(), QImage.fromData(loaded.logo).height()) <= branding.LOGO_MAX_PX
+
+    window.set_theme("custom")
+    lydia_bg = theme.P.bg_primary                                    # Lydia has no colours: the defaults
+    assert lydia_bg == theme.DEFAULT_CUSTOM[0]
+    window.switch_profile(andrew)
+    assert theme.P.bg_primary == "#101820" and theme.P.accent_color == "#f2aa4c"
+    assert window.tagline.text() == "capture, create, caffeinate" and window.tagline.isVisibleTo(window)
+    assert window.brand_strip.color == "#f2aa4c"
+    window.switch_profile(store.get_profile(lydia.id))
+    assert theme.P.bg_primary == lydia_bg and not window.tagline.isVisibleTo(window)
+
+    window.set_theme("dark")                                         # built-in themes ignore brand colours
+    window.switch_profile(andrew)
+    assert theme.P.name == "dark" and window.brand_strip.color == "#f2aa4c"   # …but the strip still marks it
+
+    window.delete_profile()
+    assert branding.load(store, andrew.id).logo == b""
+
+
+def test_profile_dialog_matches_logo_colours_and_previews(app_window, tmp_path, monkeypatch):
+    window, store, _ = app_window
+    from reelay.gui.profile_dialog import ProfileDialog
+    path = _logo(tmp_path / "beu.png", color="#d62828", bg="#000000")
+    monkeypatch.setattr("reelay.gui.profile_dialog.QFileDialog.getOpenFileName", lambda *a, **k: (str(path), ""))
+    dialog = ProfileDialog(store, None, False, window)
+    assert not dialog.ok.isEnabled()                                 # a name is required
+    dialog.name.setText("Be Unconventional")
+    dialog.tagline.setText("capture, create, caffeinate")
+    dialog._choose_logo()                                            # first logo: colours come from it
+    name, brand, use_custom = dialog.values()
+    assert name == "Be Unconventional" and brand.logo
+    from reelay.gui import theme
+    r, g, b = theme._rgb(brand.accent)
+    assert r > g and r > b                                           # the logo's red
+    assert theme.luminance(brand.background) < 0.04                  # its black
+    assert use_custom                                                # picking colours turns Custom on
+    assert not dialog.warning.isVisible()

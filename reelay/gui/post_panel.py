@@ -453,6 +453,21 @@ class PostPanel(QFrame):
         self.card = None
         self.stack.setCurrentIndex(0)
 
+    def has_unsaved_changes(self) -> bool:
+        """Copy typed here that differs from what's saved (only checked when the ticket closes)."""
+        if self.card is None or self._locked():
+            return False
+        post = self.card.post or default_post(self.card.id, self.card.row.item, None)
+        for key, block in self.blocks.items():
+            saved = getattr(post, key)
+            if key == "tags":
+                typed = [t.strip().lstrip("#") for t in block.text().split(",") if t.strip()]
+                if typed != list(saved or []):
+                    return True
+            elif block.text().strip() != (saved or "").strip():
+                return True
+        return False
+
     def show_card(self, card: Card, accounts: list[Account], add_shorts_default: bool) -> None:
         same = self.card is not None and self.card.id == card.id
         self.card, self.accounts = card, accounts

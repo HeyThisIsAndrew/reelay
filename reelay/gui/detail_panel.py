@@ -58,7 +58,7 @@ class CoverView(QLabel):
         path = QPainterPath()
         path.addRoundedRect(QRectF(self.rect()), 10, 10)
         p.setClipPath(path)
-        p.fillPath(path, QColor(theme.P.raised))
+        p.fillPath(path, QColor(theme.P.bg_raised))
         if self._pix and not self._pix.isNull():
             ratio = self.devicePixelRatioF()
             scaled = self._pix.scaled(self.size() * ratio, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
@@ -67,7 +67,7 @@ class CoverView(QLabel):
             y = (self.height() - scaled.height() / ratio) / 2
             p.drawPixmap(int(x), int(y), scaled)
         else:
-            p.setPen(QColor(theme.P.text3))
+            p.setPen(QColor(theme.P.text_muted))
             p.drawText(self.rect(), Qt.AlignCenter, "No cover")
 
 
@@ -277,7 +277,7 @@ class DetailPanel(QFrame):
         if item.is_downloaded:
             rows.append(("Watermark", "None" if item.watermark_free is not False else "Possible"))
         self.details.setText("<table cellspacing='0' cellpadding='2'>" + "".join(
-            f"<tr><td style='color:{theme.P.text3}; padding-right:14px'>{k}</td><td>{html.escape(str(v))}</td></tr>"
+            f"<tr><td style='color:{theme.P.text_muted}; padding-right:14px'>{k}</td><td>{html.escape(str(v))}</td></tr>"
             for k, v in rows) + "</table>")
 
         downloaded = item.is_downloaded and self._video_path() is not None

@@ -5,9 +5,9 @@ from __future__ import annotations
 import logging
 import re
 
-from PySide6.QtCore import QRectF, QSettings, QSize, Qt, QUrl
-from PySide6.QtGui import QAction, QActionGroup, QColor, QDesktopServices, QFont, QIcon, QKeySequence, QPainter, QPixmap
-from PySide6.QtWidgets import (QApplication, QButtonGroup, QFrame, QHBoxLayout, QInputDialog, QLabel, QMainWindow,
+from PySide6.QtCore import QSettings, Qt, QUrl
+from PySide6.QtGui import QAction, QActionGroup, QColor, QDesktopServices, QKeySequence, QPainter
+from PySide6.QtWidgets import (QApplication, QButtonGroup, QFrame, QHBoxLayout, QLabel, QMainWindow,
                                QMenu, QMessageBox, QPushButton, QStackedWidget, QToolButton, QVBoxLayout, QWidget)
 
 from .. import APP_NAME, __version__
@@ -19,7 +19,9 @@ from .board_page import BoardPage
 from .download_page import DownloadPage
 from .help_page import HelpPage
 from .settings_page import SettingsPage
-from .theme import THEMES, apply_theme, set_prop
+from . import branding
+from .profile_dialog import ProfileDialog
+from .theme import MODE_LABELS, MODES, apply_theme, set_prop
 from .thumbnails import ThumbnailCache
 from .tips import tip
 
@@ -37,24 +39,24 @@ NAV_TIPS = {
 }
 
 
-def avatar_icon(profile: Profile, size: int = 26) -> QIcon:
-    ratio = 2
-    pix = QPixmap(size * ratio, size * ratio)
-    pix.setDevicePixelRatio(ratio)
-    pix.fill(Qt.transparent)
-    p = QPainter(pix)
-    p.setRenderHint(QPainter.Antialiasing)
-    p.setBrush(QColor(profile.color))
-    p.setPen(Qt.NoPen)
-    p.drawEllipse(QRectF(0, 0, size, size))
-    font = QFont()
-    font.setPixelSize(int(size * 0.42))
-    font.setWeight(QFont.DemiBold)
-    p.setFont(font)
-    p.setPen(QColor("#ffffff"))
-    p.drawText(QRectF(0, 0, size, size), Qt.AlignCenter, profile.initials)
-    p.end()
-    return QIcon(pix)
+class BrandStrip(QWidget):
+    """A thin bar in the profile's brand colour across the top of the sidebar: in every theme,
+    a glance tells you whose profile you're in."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(4)
+        self.color = ""
+
+    def set_color(self, color: str) -> None:
+        self.color = color
+        self.update()
+
+    def paintEvent(self, _event) -> None:  # noqa: N802
+        if self.color:
+            p = QPainter(self)
+            p.fillRect(self.rect(), QColor(self.color))
+            p.end()
 
 
 class MainWindow(QMainWindow):
@@ -89,6 +91,7 @@ class MainWindow(QMainWindow):
         self.board.openAccounts.connect(lambda: self.go("accounts"))
         self.download.openAccounts.connect(lambda: self.go("accounts"))
         self.settings_page.themeChosen.connect(self.set_theme)
+        self.settings_page.editProfileRequested.connect(self.edit_profile)
 
         geo = QSettings().value("geometry")
         if geo is not None:
@@ -104,14 +107,31 @@ class MainWindow(QMainWindow):
         h.setSpacing(0)
 
         side = QWidget(objectName="Sidebar")
-        side.setFixedWidth(188)
-        sl = QVBoxLayout(side)
-        sl.setContentsMargins(10, 14, 10, 12)
+        side.setFixedWidth(204)
+        outer_side = QVBoxLayout(side)
+        outer_side.setContentsMargins(0, 0, 0, 0)
+        outer_side.setSpacing(0)
+        self.brand_strip = BrandStrip()
+        outer_side.addWidget(self.brand_strip)
+        sl = QVBoxLayout()
+        sl.setContentsMargins(10, 12, 10, 12)
         sl.setSpacing(4)
+        outer_side.addLayout(sl, 1)
+        # Who you're working as: the profile's logo and name (wrapping, never cut off). Click to switch.
         self.profile_btn = QToolButton(objectName="ProfileButton")
-        self.profile_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
-        self.profile_btn.setIconSize(QSize(26, 26))
         self.profile_btn.setPopupMode(QToolButton.InstantPopup)
+        head = QHBoxLayout(self.profile_btn)
+        head.setContentsMargins(8, 6, 8, 6)
+        head.setSpacing(10)
+        self.profile_logo = QLabel()
+        self.profile_logo.setFixedSize(32, 32)
+        self.profile_name = QLabel(objectName="ProfileName")
+        self.profile_name.setWordWrap(True)
+        for lab in (self.profile_logo, self.profile_name):
+            lab.setAttribute(Qt.WA_TransparentForMouseEvents)
+        head.addWidget(self.profile_logo)
+        head.addWidget(self.profile_name, 1)
+        self.profile_btn.setMinimumHeight(48)
         self.profile_btn.setSizePolicy(self.profile_btn.sizePolicy().horizontalPolicy().Expanding,
                                        self.profile_btn.sizePolicy().verticalPolicy())
         self.profile_menu = QMenu(self)
@@ -120,6 +140,10 @@ class MainWindow(QMainWindow):
         tip(self.profile_btn, "The current profile. Click to switch: each creator or channel gets their own "
                               "videos, board and accounts.")
         sl.addWidget(self.profile_btn)
+        self.tagline = QLabel(objectName="BrandTagline")
+        self.tagline.setWordWrap(True)
+        self.tagline.setVisible(False)
+        sl.addWidget(self.tagline)
         sl.addSpacing(14)
 
         self.nav = QButtonGroup(self)
@@ -193,8 +217,9 @@ class MainWindow(QMainWindow):
         v.addSeparator()
         tm = v.addMenu("Theme")
         self.theme_actions = QActionGroup(self)
-        for name, pal in THEMES.items():
-            a = QAction(pal.label, self, checkable=True)
+        for name in MODES:
+            a = QAction(MODE_LABELS[name], self, checkable=True)
+            a.setData(name)
             a.triggered.connect(lambda _=False, n=name: self.set_theme(n))
             self.theme_actions.addAction(a)
             tm.addAction(a)
@@ -267,20 +292,36 @@ class MainWindow(QMainWindow):
         if reason:
             QMessageBox.information(self, APP_NAME, reason)
             return
+        changed = self.profile is None or self.profile.id != profile.id
         self.profile = profile
         self.store.set_active_profile(profile.id)
-        self.profile_btn.setText(f"  {profile.name}")
-        self.profile_btn.setIcon(avatar_icon(profile))
         self.setWindowTitle(f"{APP_NAME} · {profile.name}")
+        if changed and self.store.get_setting("theme", "dark") == "custom":
+            self._apply_theme("custom")          # Custom follows each profile's brand colours
+        self._show_brand()
         for page in self.pages.values():
             if hasattr(page, "set_profile"):
                 page.set_profile(profile)
+
+    def _show_brand(self) -> None:
+        """The active profile's logo, name, tagline and colour strip in the sidebar."""
+        profile = self.profile
+        if profile is None:
+            return
+        brand = branding.load(self.store, profile.id)
+        self.profile_name.setText(profile.name)
+        self.profile_logo.setPixmap(branding.avatar_pixmap(profile, brand, 32))
+        self.profile_name.ensurePolished()        # bold from the stylesheet changes how it wraps
+        self.profile_btn.setMinimumHeight(max(48, self.profile_btn.layout().totalHeightForWidth(184)))
+        self.tagline.setText(brand.tagline)
+        self.tagline.setVisible(bool(brand.tagline))
+        self.brand_strip.set_color(branding.strip_color(self.store, profile))
 
     def _fill_profile_menu(self, menu: QMenu | None = None) -> None:
         menu = menu or self.profile_menu
         menu.clear()
         for n, p in enumerate(self.store.list_profiles(), 1):
-            a = QAction(avatar_icon(p, 18), p.name, menu, checkable=True)
+            a = QAction(branding.avatar_icon(p, branding.load(self.store, p.id), 18), p.name, menu, checkable=True)
             a.setChecked(self.profile is not None and p.id == self.profile.id)
             if n <= 9:
                 a.setShortcut(QKeySequence(f"Ctrl+Alt+{n}"))
@@ -288,29 +329,52 @@ class MainWindow(QMainWindow):
             menu.addAction(a)
         menu.addSeparator()
         menu.addAction("New Profile…", self.new_profile)
-        menu.addAction("Rename Profile…", self.rename_profile)
+        menu.addAction("Edit Profile && Branding…", self.edit_profile)
         delete = menu.addAction("Delete Profile…", self.delete_profile)
         delete.setEnabled(len(self.store.list_profiles()) > 1)
 
     def new_profile(self) -> None:
-        name, ok = QInputDialog.getText(self, "New Profile",
-                                        "Name this profile (e.g. the creator or channel it's for):")
-        name = name.strip()
-        if not ok or not name:
+        dialog = ProfileDialog(self.store, None, self.store.get_setting("theme", "dark") == "custom", self)
+        if dialog.exec() != ProfileDialog.Accepted:
             return
+        name, brand, use_custom = dialog.values()
         folder_name = re.sub(r'[<>:"/\\|?*]', "", name).strip() or "Profile"
-        profile = self.store.create_profile(name, default_library_root() / folder_name)
+        profile = self.store.create_profile(name, default_library_root() / folder_name,
+                                            color=brand.accent or None)
+        branding.save(self.store, profile.id, brand)
         self.switch_profile(profile)
+        self._set_custom(use_custom)
         self.go("download")
 
-    def rename_profile(self) -> None:
+    def edit_profile(self) -> None:
+        """Name, tagline, logo and brand colours of the current profile."""
         if not self.profile:
             return
-        name, ok = QInputDialog.getText(self, "Rename Profile", "Profile name:", text=self.profile.name)
-        if ok and name.strip():
-            self.profile.name = name.strip()
-            self.store.update_profile(self.profile)
-            self.switch_profile(self.profile)
+        dialog = ProfileDialog(self.store, self.profile, self.store.get_setting("theme", "dark") == "custom", self)
+        if dialog.exec() != ProfileDialog.Accepted:
+            return
+        name, brand, use_custom = dialog.values()
+        self.profile.name = name
+        if brand.accent:
+            self.profile.color = brand.accent     # the initials avatar matches the brand when there's no logo
+        self.store.update_profile(self.profile)
+        branding.save(self.store, self.profile.id, brand)
+        self.switch_profile(self.profile)
+        if not self._set_custom(use_custom) and self.store.get_setting("theme", "dark") == "custom":
+            self.set_theme("custom")              # new colours, same theme: repaint in them
+
+    rename_profile = edit_profile
+
+    def _set_custom(self, on: bool) -> bool:
+        """Turn the Custom theme on or off as the profile dialog asked. True if the theme changed."""
+        current = self.store.get_setting("theme", "dark")
+        if on and current != "custom":
+            self.set_theme("custom")
+            return True
+        if not on and current == "custom":
+            self.set_theme("dark")
+            return True
+        return False
 
     def delete_profile(self) -> None:
         if not self.profile or len(self.store.list_profiles()) <= 1:
@@ -323,18 +387,22 @@ class MainWindow(QMainWindow):
             return
         for account in self.store.list_accounts(self.profile.id):
             self.accounts.disconnect(account)
+        branding.forget(self.store, self.profile.id)
         self.store.delete_profile(self.profile.id)
         self.switch_profile(self.store.default_profile())
 
     # ---------------------------------------------------------------- theme
+    def _apply_theme(self, name: str) -> None:
+        apply_theme(QApplication.instance(), name, branding.custom_colors(self.store, self.profile))
+
     def set_theme(self, name: str) -> None:
-        apply_theme(QApplication.instance(), name)
+        name = name if name in MODES else "dark"
+        self._apply_theme(name)
         self.store.set_setting("theme", name)
         for a in self.theme_actions.actions():
-            a.setChecked(a.text() == THEMES[name].label)
+            a.setChecked(a.data() == name)
         self.settings_page.refresh()
-        if self.profile:
-            self.profile_btn.setIcon(avatar_icon(self.profile))
+        self._show_brand()
         self.download.model.refresh_all()
         for w in QApplication.allWidgets():
             w.update()

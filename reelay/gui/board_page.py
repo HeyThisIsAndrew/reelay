@@ -12,7 +12,7 @@ from datetime import datetime
 from PySide6.QtCore import (QAbstractListModel, QItemSelectionModel, QMimeData, QModelIndex, QPointF, QRect, QRectF,
                             QSettings, QSize,
                             Qt, QTimer, Signal)
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPen
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QKeySequence, QPainter, QPainterPath, QPen, QShortcut
 from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QListView, QMenu,
                                QMessageBox, QPushButton, QScrollArea, QSplitter, QStackedWidget, QStyle, QStyledItemDelegate,
                                QVBoxLayout, QWidget)
@@ -32,6 +32,7 @@ from ..columns import remove as remove_column
 from ..columns import save as save_columns
 from .board_tools import ArchivedDialog, BulkPanel, ImportDialog
 from .bridge import change_bridge
+from .inspector import ContextualSplitter, Inspector
 from .post_panel import PostPanel
 from .table_model import fmt_duration, short_date
 from .thumbnails import ThumbnailCache
@@ -42,8 +43,6 @@ log = logging.getLogger("reelay")
 
 MIME = "application/x-reelay-cards"
 CARD_HEIGHT = 132
-COVERAGE_BLUE = "#3B82F6"     # scheduled
-COVERAGE_AMBER = "#F2A93B"    # ready to publish
 COVER_W, COVER_H = 52, 92
 SYNC_EVERY_SECONDS = 600
 COLUMN_MIN_WIDTH = 280      # columns never squeeze below this; drag the gaps between them to resize
@@ -150,8 +149,8 @@ class CardDelegate(QStyledItemDelegate):
         painter.setRenderHint(QPainter.Antialiasing)
         path = QPainterPath()
         path.addRoundedRect(r, 9, 9)
-        painter.fillPath(path, QColor(p.hover if (selected or hovered) else p.raised))
-        painter.setPen(QPen(QColor(p.text3 if selected else p.border), 1))
+        painter.fillPath(path, QColor(p.bg_hover if (selected or hovered) else p.bg_raised))
+        painter.setPen(QPen(QColor(p.text_muted if selected else p.border), 1))
         painter.drawPath(path)
 
         # cover
@@ -166,7 +165,7 @@ class CardDelegate(QStyledItemDelegate):
         if pix is not None:
             painter.drawPixmap(cover.topLeft(), pix)
         else:
-            painter.fillPath(cpath, QColor(p.pressed))
+            painter.fillPath(cpath, QColor(p.bg_pressed))
         painter.restore()
 
         # text
@@ -176,7 +175,7 @@ class CardDelegate(QStyledItemDelegate):
         title_font = QFont(option.font)
         title_font.setWeight(QFont.DemiBold)
         painter.setFont(title_font)
-        painter.setPen(QColor(p.text))
+        painter.setPen(QColor(p.text_primary))
         fm = QFontMetrics(title_font)
         for line in _two_lines(fm, card.title, w):
             painter.drawText(QRect(x, y, w, fm.height()), Qt.AlignLeft | Qt.AlignVCenter, line)
@@ -189,7 +188,7 @@ class CardDelegate(QStyledItemDelegate):
         item = card.row.item
         meta = " · ".join(b for b in (short_date(item.upload_date), fmt_duration(item.duration))
                           if b and b != "—")
-        painter.setPen(QColor(p.text2))
+        painter.setPen(QColor(p.text_secondary))
         painter.drawText(QRect(x, y + 4, w, sfm.height()), Qt.AlignLeft | Qt.AlignVCenter,
                          sfm.elidedText(meta, Qt.ElideRight, w))
 
@@ -201,8 +200,8 @@ class CardDelegate(QStyledItemDelegate):
                          Qt.AlignLeft | Qt.AlignVCenter, sfm.elidedText(status, Qt.ElideRight, w))
         if card.uploading and card.progress is not None and not card.queued:
             bar = QRectF(x, r.bottom() - 7, w, 3)
-            painter.fillRect(bar, QColor(p.pressed))
-            painter.fillRect(QRectF(bar.x(), bar.y(), bar.width() * card.progress / 100, 3), QColor(p.text))
+            painter.fillRect(bar, QColor(p.bg_pressed))
+            painter.fillRect(QRectF(bar.x(), bar.y(), bar.width() * card.progress / 100, 3), QColor(p.accent_color))
         painter.restore()
 
     @staticmethod
@@ -224,15 +223,15 @@ class CardDelegate(QStyledItemDelegate):
                 painter.setOpacity(0.22)
             painter.drawPixmap(x, y, platform_pixmap(name, size))
             painter.restore()
-            color = {PUBLISHED: p.success, SCHEDULED: COVERAGE_BLUE, READY: COVERAGE_AMBER,
+            color = {PUBLISHED: p.success, SCHEDULED: p.info, READY: p.warning,
                      NEEDS_WORK: p.danger}.get(c.state)
             if color:
                 d = 11.0
                 badge = QRectF(x + size - d + 3, y + size - d + 3, d, d)
-                painter.setPen(QPen(QColor(p.raised), 1.5))
+                painter.setPen(QPen(QColor(p.bg_raised), 1.5))
                 painter.setBrush(QColor(color))
                 painter.drawEllipse(badge)
-                white = QPen(QColor("#FFFFFF"), 1.4)
+                white = QPen(QColor(Qt.white), 1.4)   # glyphs on the coloured badges
                 white.setCapStyle(Qt.RoundCap)
                 painter.setPen(white)
                 cx, cy = badge.center().x(), badge.center().y()
@@ -256,19 +255,19 @@ class CardDelegate(QStyledItemDelegate):
             return f"⚠ Interrupted on {names}: open to decide", p.danger
         if card.search_hit is not None and card.search_hit.spoken:   # found by what was said in the video
             said = card.search_hit.snippet.replace("«", "").replace("»", "")
-            return f"🗣 “{said}”", p.text
+            return f"🗣 “{said}”", p.text_primary
         if len(card.dispatches) > 1 and not (post and post.status == PostStatus.UPLOADING):
             marks = {"pending": "⏱", "dispatching": "…", "scheduled": "⏱", "published": "✓", "failed": "⚠"}
             short = {"youtube": "YT", "bluesky": "Bsky", "threads": "Thr", "facebook": "FB"}
             text = "  ".join(f"{short.get(d.platform, d.platform)} {marks.get(d.status, '?')}" for d in card.dispatches)
             failed = any(d.status == "failed" for d in card.dispatches)
-            return text, p.danger if failed else (p.success if post and post.status == PostStatus.PUBLISHED else p.text)
+            return text, p.danger if failed else (p.success if post and post.status == PostStatus.PUBLISHED else p.text_primary)
         if post and post.status == PostStatus.UPLOADING:
-            return ("Waiting to upload…" if card.queued else f"Uploading {(card.progress or 0):.0f}%"), p.text
+            return ("Waiting to upload…" if card.queued else f"Uploading {(card.progress or 0):.0f}%"), p.text_primary
         if post and post.status == PostStatus.SCHEDULED:
             if post.error:
                 return "⚠ Still private on YouTube", p.danger
-            return f"Goes live {local_text(post.publish_at)}", p.text
+            return f"Goes live {local_text(post.publish_at)}", p.text_primary
         if post and post.status == PostStatus.PUBLISHED:
             return f"Live on {card.account.display_name}" if card.account else "Live on YouTube", p.success
         going = [s for s in card.platform_states.values() if s.target]
@@ -277,9 +276,9 @@ class CardDelegate(QStyledItemDelegate):
             live = sum(1 for s in going if s.state == "published")
             if live == len(going):
                 return f"✓ Live on {'all ' + str(live) if live > 1 else Platform.LABELS[going[0].platform]}", p.success
-            return short_summary(card.coverage), (p.danger if coverage_needs_work(card.coverage) else p.text2)
+            return short_summary(card.coverage), (p.danger if coverage_needs_work(card.coverage) else p.text_secondary)
         if card.row.stage == Stage.PUBLISHED:
-            return "Posted outside Reelay", p.text2
+            return "Posted outside Reelay", p.text_secondary
         if post and post.status == PostStatus.FAILED:
             return f"⚠ {post.error}", p.danger
         if not item.is_downloaded:
@@ -294,9 +293,9 @@ class CardDelegate(QStyledItemDelegate):
         if card.row.stage == Stage.STAGING:
             if post and post.account_id and card.account:
                 when = f" · {local_text(post.publish_at)}" if post.publish_at else ""
-                return f"✓ Ready · {card.account.display_name}{when}", p.text2
-            return "✓ Ready · pick a channel", p.text2
-        return "✓ Ready · not started", p.text3
+                return f"✓ Ready · {card.account.display_name}{when}", p.text_secondary
+            return "✓ Ready · pick a channel", p.text_secondary
+        return "✓ Ready · not started", p.text_muted
 
 
 STEP_TIPS = {
@@ -536,13 +535,13 @@ class BoardPage(QWidget):
         self.side = QStackedWidget()
         self.side.addWidget(self.panel)
         self.side.addWidget(self.bulk)
-        split = QSplitter(Qt.Horizontal)
-        split.addWidget(cols)
-        split.addWidget(self.side)
-        split.setStretchFactor(0, 1)
-        split.setSizes([960, 400])
-        split.setChildrenCollapsible(False)
-        outer.addWidget(split, 1)
+        # The ticket only takes room while a card is selected; otherwise the columns get the whole width.
+        self.inspector = Inspector(self.side, "Ticket")
+        self.inspector.closeRequested.connect(self.close_inspector)
+        self.split = ContextualSplitter(cols, self.inspector, self.pipeline.store, "board", default_width=420)
+        outer.addWidget(self.split, 1)
+        esc = QShortcut(QKeySequence(Qt.Key_Escape), self, context=Qt.WidgetWithChildrenShortcut)
+        esc.activated.connect(self.close_inspector)
         self.thumbs.loaded.connect(lambda _k: [c.view.viewport().update() for c in self.columns.values()])
 
     # ---------------------------------------------------------------- columns
@@ -618,8 +617,7 @@ class BoardPage(QWidget):
             if rows:
                 self.store.set_stage(rows, to_stage)
         self.bulk_ids, self.selected_id = [], None
-        self.side.setCurrentWidget(self.panel)
-        self.panel.show_empty()
+        self._hide_inspector()
         self._build_columns()
         self.reload()
         return True
@@ -685,8 +683,7 @@ class BoardPage(QWidget):
         self._build_columns()
         self.selected_id = None
         self.bulk_ids = []
-        self.side.setCurrentWidget(self.panel)
-        self.panel.show_empty()
+        self._hide_inspector()
         self.subtitle.setText(f"{profile.name}'s pipeline · drag cards to move them along")
         self._last_sync = 0.0
         self._advance_due()
@@ -827,20 +824,26 @@ class BoardPage(QWidget):
             self.selected_id = None
             self.bulk.show_cards(chosen)
             self.side.setCurrentWidget(self.bulk)
+            self.inspector.set_title(f"{len(chosen)} selected")
+            self.split.reveal()
         elif self.bulk_ids:
             self.bulk_ids = []
             self.side.setCurrentWidget(self.panel)
             if chosen:
                 self.selected_id = None
                 self._on_select(column, column.model.index(column.model.cards.index(chosen[0])))
+            else:
+                self._hide_inspector()
+        elif not chosen and not any(c.selected_cards() for c in self.columns.values()):
+            self.selected_id = None          # clicked an empty spot: nothing selected, so no ticket
+            self._hide_inspector()
 
     def _reselect_bulk(self) -> None:
         cards = [self.cards[i] for i in self.bulk_ids if i in self.cards]
         stages = {c.row.stage for c in cards}
         if len(cards) < 2 or len(stages) != 1:
             self.bulk_ids = []
-            self.side.setCurrentWidget(self.panel)
-            self.panel.show_empty()
+            self._hide_inspector()
             return
         col = self._column_for(stages.pop())
         sel = col.view.selectionModel()
@@ -955,7 +958,7 @@ class BoardPage(QWidget):
             return
         self.bulk_ids = []
         self.selected_id = None
-        self.side.setCurrentWidget(self.panel)
+        self._hide_inspector()
         self._status(f"Archived {n} video{'s' if n > 1 else ''}.")
         self.reload()
 
@@ -979,7 +982,7 @@ class BoardPage(QWidget):
     def _reselect(self) -> None:
         card = self.cards.get(self.selected_id) if self.selected_id else None
         if card is None:
-            self.panel.show_empty()
+            self._hide_inspector()
             return
         col = self._column_for(card.row.stage)
         for row, c in enumerate(col.model.cards):
@@ -987,7 +990,43 @@ class BoardPage(QWidget):
                 col.view.setCurrentIndex(col.model.index(row))
         self._show_card(card)
 
+    # ---------------------------------------------------------------- the inspector
+    def close_inspector(self) -> None:
+        """The person closed the ticket (✕ or Esc): offer to save typed copy, then clear the selection."""
+        if not self.split.is_open:
+            return
+        if self.side.currentWidget() is self.panel and self.panel.has_unsaved_changes():
+            answer = QMessageBox.question(self, "Unsaved changes", "Save the changes to this ticket before closing?",
+                                          QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
+                                          QMessageBox.Save)
+            if answer == QMessageBox.Cancel:
+                return
+            if answer == QMessageBox.Save:
+                try:
+                    self.pipeline.save_draft(self.panel.collect())
+                except PipelineError as exc:
+                    self.panel.show_errors(exc.problems)   # stay open so nothing typed is lost
+                    self._status(str(exc))
+                    return
+                self._status("Draft saved.")
+                QTimer.singleShot(0, self.reload)
+        for col in self.columns.values():
+            sel = col.view.selectionModel()
+            sel.blockSignals(True)
+            sel.clear()
+            sel.blockSignals(False)
+            col.view.viewport().update()
+        self.selected_id, self.bulk_ids = None, []
+        self._hide_inspector()
+
+    def _hide_inspector(self) -> None:
+        self.side.setCurrentWidget(self.panel)
+        self.panel.show_empty()
+        self.split.dismiss()
+
     def _show_card(self, card: Card) -> None:
+        self.inspector.set_title("Ticket")
+        self.split.reveal()
         self.panel.show_card(card, self.pipeline.youtube_accounts(self.profile.id),
                              self.pipeline.add_shorts_default())
         others = sorted(((c.id, c.title) for c in self.cards.values()), key=lambda t: t[1].lower())

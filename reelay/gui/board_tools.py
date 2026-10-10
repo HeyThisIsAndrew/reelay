@@ -479,7 +479,7 @@ class ColumnsDialog(QDialog):
             hint = QListWidgetItem("      " + self._holds(col))
             hint.setFlags(Qt.NoItemFlags)
             hint.setData(Qt.UserRole, None)
-            hint.setForeground(QColor(theme.P.text3))
+            hint.setForeground(QColor(theme.P.text_muted))
             self.list.addItem(hint)
             if col.id == select:
                 self.list.setCurrentItem(item)

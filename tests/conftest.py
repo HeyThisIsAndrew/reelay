@@ -6,6 +6,7 @@ import pytest
 
 # Headless Qt for GUI tests; must be set before any Qt import.
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+os.environ.setdefault("REELAY_REDUCE_MOTION", "1")     # panels open and close instantly in tests
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 

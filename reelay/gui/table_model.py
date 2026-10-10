@@ -322,12 +322,12 @@ class VideoTableModel(QAbstractTableModel):
         if col == Col.STATUS and item.status == Status.FAILED:
             return QColor(theme.P.danger)
         if not item.checked and not item.is_downloaded and col not in (Col.CHECK, Col.STATUS):
-            return QColor(theme.P.text3)
+            return QColor(theme.P.text_muted)
         if col in (Col.DATE, Col.LENGTH, Col.VIEWS, Col.FILENAME, Col.STATUS):
             if col == Col.STATUS and item.status == Status.DOWNLOADING:
-                return QColor(theme.P.text)
-            return QColor(theme.P.text2)
-        return QColor(theme.P.text)
+                return QColor(theme.P.text_primary)
+            return QColor(theme.P.text_secondary)
+        return QColor(theme.P.text_primary)
 
     def _on_cover_loaded(self, key: str) -> None:
         self.refresh(key, (Col.COVER,))
@@ -407,7 +407,7 @@ class CoverDelegate(QStyledItemDelegate):
         if pix is not None:
             painter.drawPixmap(box.topLeft(), pix)
         else:
-            painter.fillPath(path, QColor(theme.P.raised))
+            painter.fillPath(path, QColor(theme.P.bg_raised))
         if not item.checked and not item.is_downloaded:
             painter.fillPath(path, QColor(0, 0, 0, 120))  # dim skipped videos
         painter.restore()

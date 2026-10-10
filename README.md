@@ -12,7 +12,7 @@ Reelay imports every video from a TikTok, Instagram or YouTube profile you own o
 
 You paste the copy into each platform yourself. YouTube can also be uploaded and scheduled automatically, and Bluesky, Threads and Facebook can be turned on later (see [Automatic posting](#automatic-posting)).
 
-It's a native desktop app for macOS (Windows builds included) in a monotone Light, Dark or Black theme. Hover over anything for a plain-language tip (turn them off in **Settings → Show helpful tips**), and **Help** at the bottom of the sidebar has the full guide, offline.
+It's a native desktop app for macOS (Windows builds included) in a Light, Dark, Black or Custom theme (each profile's own brand colours, with its logo in the sidebar). Hover over anything for a plain-language tip (turn them off in **Settings → Show helpful tips**), and **Help** at the bottom of the sidebar has the full guide, offline.
 
 ## What it does
 
@@ -410,7 +410,7 @@ reelay/            engine: fetcher, downloader, naming, library/manifest, store 
 server/            auth_broker: the small service that holds platform app secrets for central sign-in
 api/openapi.yaml   agent API contract (generated)
 reelay/gui/        PySide6 app: main_window (sidebar + profiles), download_page, board_page,
-                   post_panel, accounts_page, settings_page, theme (Light/Dark/Black)
+                   post_panel, accounts_page, settings_page, theme (Light/Dark/Black/Custom; template styles/app.qss), branding, inspector
 tests/             pytest + pytest-qt
 packaging/         PyInstaller spec, icon generator, build scripts
 ```

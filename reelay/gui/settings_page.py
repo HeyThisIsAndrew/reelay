@@ -5,8 +5,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QUrl, Signal
-from PySide6.QtGui import QDesktopServices, QGuiApplication
+from PySide6.QtCore import QRectF, Qt, QUrl, Signal
+from PySide6.QtGui import QColor, QDesktopServices, QGuiApplication, QPainter, QPainterPath, QPixmap
 from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
                                QPushButton, QScrollArea, QVBoxLayout, QWidget)
 
@@ -16,7 +16,8 @@ from ..models import Platform
 from ..paths import data_dir, log_dir
 from ..store import Store
 from . import tips
-from .theme import THEMES, set_prop
+from . import branding
+from .theme import MODE_LABELS, MODES, set_prop
 from .tips import tip
 
 
@@ -38,6 +39,7 @@ def _muted(text: str) -> QLabel:
 
 class SettingsPage(QWidget):
     themeChosen = Signal(str)
+    editProfileRequested = Signal()
 
     def __init__(self, store: Store, services=None, parent=None):
         super().__init__(parent)
@@ -55,24 +57,63 @@ class SettingsPage(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.addWidget(scroll)
         lay.addWidget(QLabel("Settings", objectName="PageTitle"))
+        self.profile = None
+
+        # This profile: who you're working as, with its logo and tagline
+        card, cl = _card("Profile")
+        row = QHBoxLayout()
+        row.setSpacing(14)
+        self.profile_logo = QLabel()
+        self.profile_logo.setFixedSize(56, 56)
+        row.addWidget(self.profile_logo)
+        who = QVBoxLayout()
+        who.setSpacing(2)
+        self.profile_name = QLabel(objectName="DetailTitle")
+        self.profile_tagline = _muted("")
+        who.addStretch()
+        who.addWidget(self.profile_name)
+        who.addWidget(self.profile_tagline)
+        who.addStretch()
+        row.addLayout(who, 1)
+        edit = tip(QPushButton("Edit Profile && Branding…"), "Name, tagline, logo and brand colours for this profile")
+        edit.clicked.connect(self.editProfileRequested.emit)
+        row.addWidget(edit, 0, Qt.AlignVCenter)
+        cl.addLayout(row)
+        lay.addWidget(card)
 
         card, cl = _card("Appearance")
-        cl.addWidget(_muted("Black is pure black for OLED screens."))
+        cl.addWidget(_muted("Black is pure black for OLED screens. Custom shows each profile in its own brand "
+                            "colours, so you always know whose account you're working in."))
         row = QHBoxLayout()
+        row.setSpacing(0)
         self.theme_group = QButtonGroup(self)
         self.theme_buttons: dict[str, QPushButton] = {}
-        for name in ("light", "dark", "black"):
-            b = QPushButton(THEMES[name].label)
+        for n, name in enumerate(MODES):
+            b = QPushButton(MODE_LABELS[name])
             b.setCheckable(True)
-            b.setMinimumWidth(110)
+            b.setMinimumWidth(96)
+            set_prop(b, "segment", "first" if n == 0 else "last" if n == len(MODES) - 1 else "middle")
             tip(b, {"light": "Light background", "dark": "Dark gray background (the default)",
-                    "black": "Pure black, for OLED screens"}[name])
+                    "black": "Pure black, for OLED screens",
+                    "custom": "This profile's brand colours (set them in Edit Profile & Branding)"}[name])
             self.theme_group.addButton(b)
             self.theme_buttons[name] = b
             b.clicked.connect(lambda _=False, n=name: self.themeChosen.emit(n))
             row.addWidget(b)
         row.addStretch()
         cl.addLayout(row)
+        self.custom_row = QWidget()
+        cr = QHBoxLayout(self.custom_row)
+        cr.setContentsMargins(0, 2, 0, 0)
+        cr.setSpacing(8)
+        self.custom_swatches = QLabel()
+        self.custom_note = _muted("")
+        colors = tip(QPushButton("Change Colours…"), "Pick this profile's background and accent colours")
+        colors.clicked.connect(self.editProfileRequested.emit)
+        cr.addWidget(self.custom_swatches)
+        cr.addWidget(self.custom_note, 1)
+        cr.addWidget(colors)
+        cl.addWidget(self.custom_row)
         self.tips_box = QCheckBox("Show helpful tips")
         tip(self.tips_box, "Show a short explanation when you hover over a button, field or heading")
         self.tips_box.toggled.connect(lambda on: tips.set_enabled(self.store, on))
@@ -360,11 +401,41 @@ class SettingsPage(QWidget):
         self._after_db_change(f"Reelay will use this computer's database ({dblocation.default_path()}) from the "
                               "next start. The shared one is untouched.")
 
+    def set_profile(self, profile) -> None:
+        self.profile = profile
+        self._refresh_profile()
+
+    def _refresh_profile(self) -> None:
+        profile = self.profile
+        if profile is None:
+            return
+        brand = branding.load(self.store, profile.id)
+        self.profile_logo.setPixmap(branding.avatar_pixmap(profile, brand, 56))
+        self.profile_name.setText(profile.name)
+        self.profile_tagline.setText(brand.tagline or "No tagline yet")
+        self.profile_tagline.setProperty("faint", not brand.tagline)
+        set_prop(self.profile_tagline, "muted", bool(brand.tagline))
+        background, accent = branding.custom_colors(self.store, profile)
+        pix = QPixmap(52, 22)
+        pix.fill(Qt.transparent)
+        painter = QPainter(pix)
+        painter.setRenderHint(QPainter.Antialiasing)
+        for i, color in enumerate((background, accent)):
+            path = QPainterPath()
+            path.addRoundedRect(QRectF(i * 28 + 0.5, 0.5, 23, 21), 5, 5)
+            painter.fillPath(path, QColor(color))
+        painter.end()
+        self.custom_swatches.setPixmap(pix)
+        self.custom_note.setText(f"{profile.name}'s colours." if brand.has_colors else
+                                 f"{profile.name} has no brand colours yet, so Custom uses the defaults.")
+        self.custom_row.setVisible(self.store.get_setting("theme", "dark") == "custom")
+
     def refresh(self) -> None:
         self._refresh_db()
         current = self.store.get_setting("theme", "dark")
         for name, b in self.theme_buttons.items():
             b.setChecked(name == current)
+        self._refresh_profile()
         self.shorts.blockSignals(True)
         self.shorts.setChecked(self.store.get_setting("add_shorts", "1") == "1")
         self.shorts.blockSignals(False)

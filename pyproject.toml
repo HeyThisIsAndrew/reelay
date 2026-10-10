@@ -36,7 +36,7 @@ version = { attr = "reelay.__version__" }
 include = ["reelay*"]
 
 [tool.setuptools.package-data]
-"reelay.gui" = ["help.md"]
+"reelay.gui" = ["help.md", "styles/*.qss"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

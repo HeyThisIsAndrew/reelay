@@ -207,6 +207,9 @@ Passwords and tokens are kept in your Mac's Keychain (or Windows Credential Mana
 - Every profile has its own download folder, board, sources and accounts.
 - Switching profiles only changes what you see. Nothing is moved or deleted.
 - **My Channel** is the starting profile. It stays empty until you add sources or connect accounts.
+- **Branding:** **Profile → Edit Profile & Branding…** (or **Settings → Profile**) gives a profile its name, a tagline, a logo and brand colours. The logo becomes its icon in the sidebar and the Profile menu, and a thin bar in the brand colour runs across the top of the sidebar in every theme, so you always know whose account you're working in. **Match Logo** picks colours from the logo.
+- **Custom theme:** **Settings → Appearance → Custom** shows Reelay in the current profile's brand colours, and switching profiles switches the colours. Reelay keeps text readable whatever colours you pick, and warns if buttons would be hard to see. Light, Dark and Black look the same for every profile.
+- **The panel on the right** (a video's details on Download, its ticket on the Board) only opens when something is selected, so the list and board get the whole window otherwise. Close it with **✕** or **Esc**; if you typed copy you haven't saved, Reelay asks first. Drag its edge to resize it; Reelay remembers the width.
 
 ---
 
