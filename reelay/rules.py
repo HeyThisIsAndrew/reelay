@@ -290,7 +290,12 @@ def _fill(template: str, row, post) -> str:
 
 # ---------------------------------------------------------------------- running
 def apply(pipeline, rule: Rule, row_id: int, now: datetime | None = None) -> list[str]:
-    """Do the rule's actions on one video. Returns what happened, in plain words."""
+    """Do the rule's actions on one video (logged as "automation"). Returns what happened, in plain words."""
+    with pipeline.store.origin("automation"):
+        return _apply(pipeline, rule, row_id, now)
+
+
+def _apply(pipeline, rule: Rule, row_id: int, now: datetime | None = None) -> list[str]:
     from .pipeline import PipelineError
     now = now or datetime.now(timezone.utc)
     done: list[str] = []
@@ -329,12 +334,34 @@ def apply(pipeline, rule: Rule, row_id: int, now: datetime | None = None) -> lis
                 if not targets:
                     done.append("not scheduled: none of its platforms post automatically")
                     continue
+                if last_copy_edit_by_agent(pipeline.store, row_id):
+                    # An agent wrote this copy: a rule mustn't become a way around approval.
+                    from .scoped_pipeline import ScopedPipeline
+                    pending = ScopedPipeline(pipeline, requested_by=f"automation: {rule.name}").schedule(
+                        row_id, scheduled_at=when, platforms=targets)
+                    done.append(f"waiting for approval (request #{pending.approval_id}): its copy was last "
+                                "edited by an AI agent")
+                    continue
                 pipeline.schedule(row_id, scheduled_at=when, platforms=targets, now=now)
                 done.append(f"scheduled for {when.astimezone().strftime('%a %b %-d, %-I:%M %p')}")
         except PipelineError as exc:
             reason = "; ".join(exc.problems[:2]) if exc.problems else str(exc)
             done.append(f"couldn't {describe_action(a).split(' (')[0]}: {reason}")
     return done
+
+
+AGENT_ORIGINS = ("api", "mcp")
+COPY_REVISION_FIELDS = ("title", "description", "tags", "target_platforms", "tiktok_text", "instagram_text",
+                        "bluesky_text", "threads_text", "facebook_text", "hashtags")
+
+
+def last_copy_edit_by_agent(store, row_id: int) -> bool:
+    """Was the newest change to this ticket's copy (ignoring rules' own edits) made by an AI agent?"""
+    for rev in store.revisions(row_id, limit=1000):
+        if rev.field not in COPY_REVISION_FIELDS or rev.origin == "automation":
+            continue
+        return rev.origin.split(":")[0] in AGENT_ORIGINS
+    return False
 
 
 def run(pipeline, profile_id: int, trigger: str | None = None, now: datetime | None = None) -> list[dict]:

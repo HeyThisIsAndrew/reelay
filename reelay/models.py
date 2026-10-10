@@ -426,3 +426,34 @@ class BrandProfile:
     id: int | None = None
     created_at: str = ""
     updated_at: str = ""
+
+
+class ApprovalStatus:
+    """The life of an approval request (a strict state machine; see store.APPROVAL_TRANSITIONS)."""
+    PENDING = "pending"      # waiting for a person
+    APPROVED = "approved"    # a person approved it; it's being carried out
+    REJECTED = "rejected"    # a person said no
+    EXPIRED = "expired"      # nobody decided in time
+    EXECUTED = "executed"    # approved and done
+    FAILED = "failed"        # approved, but doing it failed (see result)
+    STALE = "stale"          # the video changed after the request, so it wasn't done
+    ALL = (PENDING, APPROVED, REJECTED, EXPIRED, EXECUTED, FAILED, STALE)
+    FINAL = (REJECTED, EXPIRED, EXECUTED, FAILED, STALE)
+
+
+@dataclass
+class ApprovalRequest:
+    """Something an agent asked to do that only a person may allow (scoped_pipeline.py)."""
+    profile_id: int
+    operation: str            # e.g. "schedule", "archive", "bulk_update"
+    payload: dict             # the operation's arguments, validated
+    target_ids: list[int]
+    target_hash: str | None
+    status: str = ApprovalStatus.PENDING
+    requested_by: str = "api"
+    created_at: str = ""
+    expires_at: str = ""
+    decided_at: str | None = None
+    decided_by: str | None = None
+    result: dict | None = None
+    id: int | None = None

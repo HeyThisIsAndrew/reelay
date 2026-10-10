@@ -27,12 +27,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterable, Iterator
 
-from .models import (TICKET_FIELDS, Account, BrandProfile, Dispatch, DispatchStatus, ManualPost, Post, PostStatus, Profile,
+from .models import (TICKET_FIELDS, Account, ApprovalRequest, BrandProfile, Dispatch, DispatchStatus, ManualPost, Post, PostStatus, Profile,
                      Revision, Source, Ticket, VideoItem, VideoRow)
 
 log = logging.getLogger("reelay")
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 # Post fields whose edits are logical metadata commits (logged as revisions).
 # Status, remote ids and errors are publishing state, tracked by dispatches.
@@ -271,6 +271,32 @@ _MIGRATIONS: dict[int, str] = {
     );
     CREATE INDEX brand_profiles_by_profile ON brand_profiles (profile_id);
     """,
+    9: """
+    -- Things an agent asked to do that only a person may allow (scoped_pipeline.py).
+    CREATE TABLE approval_requests (
+        id INTEGER PRIMARY KEY,
+        profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+        operation TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        target_ids TEXT NOT NULL DEFAULT '[]',
+        target_hash TEXT,
+        status TEXT NOT NULL CHECK (status IN
+            ('pending', 'approved', 'rejected', 'expired', 'executed', 'failed', 'stale')),
+        requested_by TEXT NOT NULL DEFAULT 'api',
+        created_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        decided_at TEXT,
+        decided_by TEXT,
+        result TEXT
+    );
+    CREATE INDEX approval_requests_by_status ON approval_requests (profile_id, status);
+    """,
+}
+
+# The approval state machine: status → statuses it may move to. Anything else is refused.
+APPROVAL_TRANSITIONS = {
+    "pending": ("approved", "rejected", "expired", "stale"),
+    "approved": ("executed", "failed", "stale"),     # stale: the video changed between approval and execution
 }
 
 PROFILE_COLORS = ["#8a8984", "#b5835a", "#7a9a7e", "#7f8fb0", "#a77fa0", "#b07a7a", "#9a9a6a"]
@@ -295,6 +321,11 @@ def fts_query(text: str) -> str | None:
         else:
             parts += [f'"{t}"*' for t in tokens]
     return " AND ".join(parts) or None
+
+
+def _canonical(value) -> str:
+    """Stable JSON (sorted keys, no spaces) so equal payloads compare equal."""
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
 def utcnow() -> str:
@@ -450,6 +481,94 @@ class Store:
             c.execute("INSERT INTO video_search (rowid, title, caption, transcript, copy, notes) "
                       "SELECT id, title, caption, transcript, copy, notes FROM video_search_source")
             return c.execute("SELECT COUNT(*) FROM video_search").fetchone()[0]
+
+    # ================================================================ approval requests
+    def create_approval(self, req: ApprovalRequest) -> ApprovalRequest:
+        req.created_at = req.created_at or utcnow()
+        req.status = "pending"
+        with self.tx() as c:
+            cur = c.execute("INSERT INTO approval_requests (profile_id, operation, payload, target_ids, target_hash, "
+                            "status, requested_by, created_at, expires_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                            (req.profile_id, req.operation, _canonical(req.payload), json.dumps(req.target_ids),
+                             req.target_hash, req.status, req.requested_by, req.created_at, req.expires_at))
+            req.id = cur.lastrowid
+        self._emit("approval", (req.id,), req.profile_id)
+        return req
+
+    def get_approval(self, approval_id: int) -> ApprovalRequest | None:
+        row = self.conn.execute("SELECT * FROM approval_requests WHERE id=?", (approval_id,)).fetchone()
+        return self._approval(row) if row else None
+
+    def list_approvals(self, profile_id: int | None = None, status: str | None = None,
+                       limit: int = 100) -> list[ApprovalRequest]:
+        sql, args = "SELECT * FROM approval_requests WHERE 1=1", []
+        if profile_id is not None:
+            sql += " AND profile_id=?"
+            args.append(profile_id)
+        if status is not None:
+            sql += " AND status=?"
+            args.append(status)
+        rows = self.conn.execute(sql + " ORDER BY id DESC LIMIT ?", (*args, limit)).fetchall()
+        return [self._approval(r) for r in rows]
+
+    def find_pending_approval(self, profile_id: int, operation: str, payload: dict,
+                              target_ids: list[int], now: str) -> ApprovalRequest | None:
+        """An identical request still waiting (asking twice doesn't make two requests)."""
+        row = self.conn.execute("SELECT * FROM approval_requests WHERE profile_id=? AND operation=? AND payload=? "
+                                "AND target_ids=? AND status='pending' AND expires_at > ? ORDER BY id LIMIT 1",
+                                (profile_id, operation, _canonical(payload), json.dumps(target_ids), now)).fetchone()
+        return self._approval(row) if row else None
+
+    def count_pending_approvals(self, profile_id: int, now: str) -> int:
+        return self.conn.execute("SELECT COUNT(*) FROM approval_requests WHERE profile_id=? AND status='pending' "
+                                 "AND expires_at > ?", (profile_id, now)).fetchone()[0]
+
+    def transition_approval(self, approval_id: int, to: str, decided_by: str | None = None,
+                            result: dict | None = None) -> ApprovalRequest | None:
+        """Move a request along the state machine, atomically. Returns the updated request, or None
+        if it isn't in a state that allows `to` (e.g. someone else already decided)."""
+        allowed_from = [frm for frm, tos in APPROVAL_TRANSITIONS.items() if to in tos]
+        if not allowed_from:
+            raise ValueError(f"no transition leads to {to!r}")
+        now = utcnow()
+        with self.tx() as c:
+            row = c.execute(
+                f"UPDATE approval_requests SET status=?, decided_at=COALESCE(decided_at, ?), "
+                f"decided_by=COALESCE(?, decided_by), result=COALESCE(?, result) WHERE id=? "
+                f"AND status IN ({','.join('?' * len(allowed_from))}) RETURNING *",
+                (to, now, decided_by, json.dumps(result) if result is not None else None, approval_id,
+                 *allowed_from)).fetchone()
+        req = self._approval(row) if row else None
+        if req:
+            self._emit("approval", (req.id,), req.profile_id)
+        return req
+
+    def mark_approval_started(self, approval_id: int) -> bool:
+        """Note, before carrying out an approved request, that it has started. If Reelay stops before
+        it's finished, the next run sees the mark and never does it a second time."""
+        with self.tx() as c:
+            cur = c.execute("UPDATE approval_requests SET result=? WHERE id=? AND status='approved' AND result IS NULL",
+                            (json.dumps({"started_at": utcnow()}), approval_id))
+        return cur.rowcount == 1
+
+    def expire_approvals(self, now: str) -> int:
+        """Pending requests past their expiry become expired."""
+        with self.tx() as c:
+            rows = c.execute("UPDATE approval_requests SET status='expired', decided_at=?, decided_by='expiry' "
+                             "WHERE status='pending' AND expires_at <= ? RETURNING id, profile_id",
+                             (now, now)).fetchall()
+        for r in rows:
+            self._emit("approval", (r["id"],), r["profile_id"])
+        return len(rows)
+
+    @staticmethod
+    def _approval(row) -> ApprovalRequest:
+        return ApprovalRequest(profile_id=row["profile_id"], operation=row["operation"],
+                               payload=json.loads(row["payload"]), target_ids=json.loads(row["target_ids"]),
+                               target_hash=row["target_hash"], status=row["status"], requested_by=row["requested_by"],
+                               created_at=row["created_at"], expires_at=row["expires_at"], decided_at=row["decided_at"],
+                               decided_by=row["decided_by"],
+                               result=json.loads(row["result"]) if row["result"] else None, id=row["id"])
 
     # ================================================================ brand voice
     def list_brand_profiles(self, profile_id: int) -> list[BrandProfile]:

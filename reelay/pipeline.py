@@ -863,6 +863,15 @@ class Pipeline:
         lists the problems, unless force=True. Cards that were already Scheduled
         or Published before the gate existed are exempt. Raises PipelineError."""
         now = now or datetime.now(timezone.utc)
+        row, base, targets, manual = self.schedule_plan(row_id, scheduled_at, platforms, post, now, force)
+        return self._schedule_write(row, base, targets, manual, add_shorts, now)
+
+    def schedule_plan(self, row_id: int, scheduled_at: str | datetime | None = None,
+                      platforms: list[str] | None = None, post: Post | None = None,
+                      now: datetime | None = None, force: bool = False) -> tuple[VideoRow, Post, list[str], list[str]]:
+        """Every check schedule() makes (times, platforms, the Ready gate), without scheduling anything.
+        Raises the same PipelineErrors. Writes nothing unless `post` (typed but unsaved text) is given."""
+        now = now or datetime.now(timezone.utc)
         row = self._row(row_id)
         base, _saved = (post, True) if post is not None else self.post_or_default(row)
         if scheduled_at is not None:
@@ -918,7 +927,11 @@ class Pipeline:
             names = ", ".join(Platform.LABELS[p] for p in readiness.blocking)
             raise PipelineError(f"This ticket isn't ready for {names}. Fix the problems listed, or schedule "
                                 "anyway with force.", "ticket_not_ready", not_ready)
+        return row, base, targets, manual
 
+    def _schedule_write(self, row: VideoRow, base: Post, targets: list[str], manual: list[str],
+                        add_shorts: bool | None, now: datetime) -> ScheduleResult:
+        row_id = row.id
         now_iso = utc_iso(now)
         add_shorts = self.add_shorts_default() if add_shorts is None else add_shorts
         dispatches = []

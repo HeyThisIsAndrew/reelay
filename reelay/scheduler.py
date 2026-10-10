@@ -183,6 +183,11 @@ class Dispatcher:
             self.pipeline.settle_due(now)   # scheduled times that have passed: cards move on
         except Exception:  # noqa: BLE001 — never let bookkeeping stop posting
             log.exception("Couldn't update cards whose scheduled time passed")
+        try:
+            from .approvals import execute_approved
+            execute_approved(self.pipeline)  # what a person approved for an agent (approvals.py)
+        except Exception:  # noqa: BLE001
+            log.exception("Couldn't carry out approved requests")
         handled = 0
         while not self._stop.is_set():
             claimed = self.store.claim_due(utc_iso(self.clock()), self.instance_id, limit=5,
