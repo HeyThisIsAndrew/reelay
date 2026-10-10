@@ -19,8 +19,25 @@ VERSION=$("$PY" -c "import reelay; print(reelay.__version__)")
 ARCH=$(uname -m)
 DMG="dist/Reelay-${VERSION}-mac-${ARCH}.dmg"
 
-# Ad-hoc sign the whole bundle so Apple Silicon will launch it.
-codesign --force --deep --sign - "$APP"
+# Sign with a stable identity when there is one, so macOS remembers "Allow"
+# (folder access, Keychain) across rebuilds. An ad-hoc signature changes with
+# every build, which makes macOS ask again each time.
+#   REELAY_SIGN_IDENTITY=<name or SHA-1>  pick one explicitly ("-" = ad-hoc)
+#   otherwise: the first "Apple Development" or "Developer ID Application"
+#   identity in the keychain (free with an Apple ID in Xcode), else ad-hoc.
+IDENTITY=${REELAY_SIGN_IDENTITY:-}
+if [ -z "$IDENTITY" ]; then
+  IDENTITY=$(security find-identity -v -p codesigning 2>/dev/null \
+    | awk '/"(Developer ID Application|Apple Development):/ {print $2; exit}')
+fi
+IDENTITY=${IDENTITY:--}
+if [ "$IDENTITY" = "-" ]; then
+  echo "Signing: ad-hoc (macOS will ask for permissions again after each rebuild)"
+else
+  echo "Signing: $(security find-identity -v -p codesigning | awk -v id="$IDENTITY" '$2==id {$1="";$2=""; print}' | sed 's/^ *//')"
+fi
+codesign --force --deep --timestamp=none --sign "$IDENTITY" "$APP"
+codesign --verify --deep --strict "$APP"
 
 # Stage the .app next to an Applications shortcut, then compress into a .dmg.
 STAGE=$(mktemp -d)
