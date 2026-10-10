@@ -1032,6 +1032,90 @@ class Store:
         self._emit_dispatch_rows(recovered)
         return recovered
 
+    def interrupt_abandoned(self, instance_id: str, stale_before: str, resumable: Iterable[str],
+                            message: str) -> list[Dispatch]:
+        """Claims left mid-send by another (crashed) run, or held too long by this one, on
+        platforms that can't safely resume: mark them interrupted for a person to decide.
+        (Resumable ones are left for recover_stale to requeue.)"""
+        resumable = list(resumable)
+        skip = f" AND platform NOT IN ({','.join('?' * len(resumable))})" if resumable else ""
+        with self.tx() as c:
+            before = c.execute(f"SELECT * FROM dispatches WHERE status=? AND (claimed_by IS NULL OR claimed_by != ? "
+                               f"OR claimed_at < ?){skip}", (DispatchStatus.DISPATCHING, instance_id, stale_before,
+                                                             *resumable)).fetchall()
+            for r in before:
+                c.execute("UPDATE dispatches SET status=?, claimed_at=NULL, claimed_by=NULL, error=?, updated_at=? "
+                          "WHERE id=? AND status=?", (DispatchStatus.INTERRUPTED, message, utcnow(), r["id"],
+                                                      DispatchStatus.DISPATCHING))
+        held = [self._dispatch(r) for r in before]      # as they were: who held the claim, and since when
+        for d in held:
+            d.status, d.error = DispatchStatus.INTERRUPTED, message
+        self._emit_dispatch_rows(held)
+        return held
+
+    def interrupt_missed(self, now: str, due_before: str, platforms: Iterable[str], message: str) -> list[Dispatch]:
+        """Pending sends whose time passed while Reelay wasn't running (due before `due_before`)
+        and that would now go live late: hold them for a person to decide. Sends that will still
+        go live on time (a future publish_at, e.g. YouTube scheduling) and paused uploads of
+        "publish now" posts are left to go."""
+        platforms = list(platforms)
+        if not platforms:
+            return []
+        with self.tx() as c:
+            rows = c.execute(
+                "UPDATE dispatches SET status=?, error=?, updated_at=? WHERE status=? AND due_at < ? "
+                f"AND platform IN ({','.join('?' * len(platforms))}) "
+                "AND ((publish_at IS NULL AND checkpoint != 'paused') OR publish_at < ?) RETURNING *",
+                (DispatchStatus.INTERRUPTED, message, utcnow(), DispatchStatus.PENDING, due_before, *platforms,
+                 now)).fetchall()
+            c.execute("UPDATE dispatches SET checkpoint='' WHERE checkpoint='paused' AND status=?",
+                      (DispatchStatus.PENDING,))
+        done = [self._dispatch(r) for r in rows]
+        self._emit_dispatch_rows(done)
+        return done
+
+    def interrupt_dispatch(self, dispatch_id: int, message: str) -> Dispatch | None:
+        """One send whose outcome is unknown (e.g. the connection dropped as an upload finished)."""
+        with self.tx() as c:
+            row = c.execute("UPDATE dispatches SET status=?, claimed_at=NULL, claimed_by=NULL, error=?, "
+                            "updated_at=? WHERE id=? RETURNING *",
+                            (DispatchStatus.INTERRUPTED, message, utcnow(), dispatch_id)).fetchone()
+        done = self._dispatch(row) if row else None
+        self._emit_dispatch_rows([done] if done else [])
+        return done
+
+    def pause_dispatch(self, dispatch_id: int, message: str) -> Dispatch | None:
+        """A send stopped cleanly before anything was posted (Reelay closing mid-upload):
+        back to pending, to continue next time. Written before the upload is stopped."""
+        with self.tx() as c:
+            row = c.execute("UPDATE dispatches SET status=?, claimed_at=NULL, claimed_by=NULL, error=?, "
+                            "checkpoint='paused', next_attempt_at=NULL, updated_at=? WHERE id=? AND status=? "
+                            "RETURNING *", (DispatchStatus.PENDING, message, utcnow(), dispatch_id,
+                                            DispatchStatus.DISPATCHING)).fetchone()
+        done = self._dispatch(row) if row else None
+        self._emit_dispatch_rows([done] if done else [])
+        return done
+
+    def requeue_dispatch(self, dispatch_id: int, due_at: str, publish_at: str | None) -> Dispatch | None:
+        """Try an interrupted send again, now (a person decided it wasn't posted)."""
+        with self.tx() as c:
+            row = c.execute("UPDATE dispatches SET status=?, due_at=?, publish_at=?, next_attempt_at=NULL, "
+                            "claimed_at=NULL, claimed_by=NULL, checkpoint='', error='', updated_at=? "
+                            "WHERE id=? AND status=? RETURNING *",
+                            (DispatchStatus.PENDING, due_at, publish_at, utcnow(), dispatch_id,
+                             DispatchStatus.INTERRUPTED)).fetchone()
+        done = self._dispatch(row) if row else None
+        self._emit_dispatch_rows([done] if done else [])
+        return done
+
+    def interrupted_dispatches(self, profile_id: int | None = None) -> list[Dispatch]:
+        sql, args = "SELECT d.* FROM dispatches d JOIN videos v ON v.id = d.video_row WHERE d.status = ?", \
+            [DispatchStatus.INTERRUPTED]
+        if profile_id is not None:
+            sql += " AND v.profile_id = ?"
+            args.append(profile_id)
+        return [self._dispatch(r) for r in self.conn.execute(sql + " ORDER BY d.due_at, d.id", args).fetchall()]
+
     def set_checkpoint(self, dispatch_id: int, checkpoint: str) -> None:
         """Remember progress (e.g. a created container id) so a retry can resume, not repeat."""
         with self.tx() as c:

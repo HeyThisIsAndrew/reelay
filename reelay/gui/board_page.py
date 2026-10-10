@@ -250,6 +250,10 @@ class CardDelegate(QStyledItemDelegate):
     @staticmethod
     def _status(card: Card) -> tuple[str, str]:
         p, post, item = theme.P, card.post, card.row.item
+        held = [d for d in card.dispatches if d.status == "interrupted"]
+        if held:
+            names = ", ".join(Platform.LABELS.get(d.platform, d.platform) for d in held)
+            return f"⚠ Interrupted on {names}: open to decide", p.danger
         if card.search_hit is not None and card.search_hit.spoken:   # found by what was said in the video
             said = card.search_hit.snippet.replace("«", "").replace("»", "")
             return f"🗣 “{said}”", p.text
@@ -522,6 +526,7 @@ class BoardPage(QWidget):
         self.panel.targetsChanged.connect(self._set_targets)
         self.panel.platformMarkRequested.connect(self._mark_platform)
         self.panel.handoffRequested.connect(self.prepare_to_publish)
+        self.panel.recoverRequested.connect(self.open_recovery)
         self.panel.transcriptRequested.connect(lambda row_id: self._get_transcripts([row_id], ask_replace=True))
         self.bulk = BulkPanel()
         self.bulk.applyRequested.connect(self._bulk_apply)
@@ -993,6 +998,18 @@ class BoardPage(QWidget):
                          + ("every platform it's going to is live." if after == Stage.PUBLISHED else
                             "every platform it's going to is scheduled." if after == Stage.SCHEDULED else
                             "not every platform is scheduled any more."))
+
+    def open_recovery(self, row_id: int) -> None:
+        from .recovery_dialog import RecoveryDialog
+        held = [d for d in self.store.dispatches_for(row_id) if d.status == "interrupted"]
+        if not held:
+            return
+        dialog = RecoveryDialog(self.pipeline, held, self)
+        dialog.exec()
+        if dialog.resolved:
+            self._status("Done. " + ", ".join({"retry": "sending again", "posted": "recorded as posted",
+                                                "cancel": "cancelled"}[a] for _i, a in dialog.resolved) + ".")
+        self.reload()
 
     def prepare_to_publish(self, row_id: int, platform: str) -> None:
         """The guided hand-off for a platform Reelay doesn't post to itself."""

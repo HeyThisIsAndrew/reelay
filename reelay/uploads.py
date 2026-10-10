@@ -30,6 +30,17 @@ log = logging.getLogger("reelay")
 CANCELLED = "Upload cancelled."
 
 
+class UploadFailure(str):
+    """Why an upload stopped (a plain message), plus what's known about YouTube's side:
+    transient = a connection problem, nothing complete reached YouTube, safe to try again;
+    uncertain = it failed after the last piece was sent, so YouTube may have the video."""
+
+    def __new__(cls, message: str, transient: bool = False, uncertain: bool = False):
+        obj = super().__new__(cls, message)
+        obj.transient, obj.uncertain = transient, uncertain
+        return obj
+
+
 class UploadWorker(QThread):
     progress = Signal(int, float)    # video row id, percent
     done = Signal(int, dict)         # video row id, created video resource
@@ -40,11 +51,20 @@ class UploadWorker(QThread):
         self.row_id, self.client, self.path, self.resource = row_id, client, Path(path), resource
         self._cancel = threading.Event()
         self._last = 0.0
+        self.sent, self.total = 0, 0
+        self.result: dict | None = None     # set before `done` is emitted, so a shutdown can still record it
 
     def cancel(self) -> None:
         self._cancel.set()
 
+    @property
+    def last_piece_sent(self) -> bool:
+        """The final chunk is on its way (or done): YouTube may finish the video any moment."""
+        from .youtube import CHUNK_SIZE
+        return bool(self.total) and self.total - self.sent <= CHUNK_SIZE
+
     def _on_progress(self, sent: int, total: int) -> None:
+        self.sent, self.total = sent, total
         now = time.monotonic()
         if sent >= total or now - self._last > 0.2:
             self._last = now
@@ -60,16 +80,20 @@ class UploadWorker(QThread):
         except UploadCancelled:
             self.failed.emit(self.row_id, CANCELLED)
         except YouTubeError as exc:
-            self.failed.emit(self.row_id, str(exc))
+            kept_failing = str(exc).startswith("Upload kept failing")      # connection, after many retries
+            self.failed.emit(self.row_id, UploadFailure(str(exc), transient=kept_failing,
+                                                        uncertain=kept_failing and self.last_piece_sent))
         except requests.RequestException as exc:
-            self.failed.emit(self.row_id, f"Network problem during upload: {exc}")
+            self.failed.emit(self.row_id, UploadFailure(f"Network problem during upload: {exc}", transient=True,
+                                                        uncertain=self.last_piece_sent))
         except OSError as exc:
             self.failed.emit(self.row_id, f"Couldn't read the video file: {exc}")
         except Exception as exc:  # noqa: BLE001
             log.exception("Unexpected upload error")
             self.failed.emit(self.row_id, f"Unexpected error: {exc}")
         else:
-            self.done.emit(self.row_id, result or {})
+            self.result = result or {}
+            self.done.emit(self.row_id, self.result)
 
 
 @dataclass
@@ -90,6 +114,8 @@ class UploadManager(QObject):
         super().__init__(parent)
         self.completion_handler: Callable[[int, bool, object], str] | None = None
         self.progress_handler: Callable[[int, float], None] | None = None
+        # pause_handler(row_id, uncertain) records an upload stopped by shutdown, before it stops
+        self.pause_handler: Callable[[int, bool], None] | None = None
         self._worker_factory = worker_factory
         self._lock = threading.RLock()
         self._queue: deque[UploadJob] = deque()
@@ -152,10 +178,44 @@ class UploadManager(QObject):
         return False
 
     def shutdown(self, timeout_ms: int = 5000) -> None:
-        self._queue.clear()
-        if self._worker is not None:
-            self._worker.cancel()
-            self._worker.wait(timeout_ms)
+        """Reelay is closing. Each waiting or running upload is recorded as paused (to continue
+        next time) BEFORE it's stopped; an upload that finishes while stopping is still recorded
+        as done, and one whose last piece was already sent is flagged for a person to check."""
+        with self._lock:
+            queued = [job.row_id for job in self._queue]
+            self._queue.clear()
+            worker = self._worker
+        for row_id in queued:
+            self._pause(row_id, uncertain=False)
+        if worker is None:
+            return
+        for signal in (worker.done, worker.failed):
+            try:
+                signal.disconnect()
+            except (RuntimeError, TypeError):
+                pass
+        if worker.result is None and not worker.last_piece_sent:
+            self._pause(worker.row_id, uncertain=False)
+            worker.cancel()
+            worker.wait(timeout_ms)
+            return
+        worker.wait(timeout_ms)          # the last piece is on its way: give it a chance to land
+        if worker.result is not None and self.completion_handler is not None:
+            try:
+                self.completion_handler(worker.row_id, True, worker.result)
+            except Exception:  # noqa: BLE001
+                log.exception("Recording the finished upload failed for row %s", worker.row_id)
+        else:
+            self._pause(worker.row_id, uncertain=True)
+            worker.cancel()
+
+    def _pause(self, row_id: int, uncertain: bool) -> None:
+        if self.pause_handler is None:
+            return
+        try:
+            self.pause_handler(row_id, uncertain)
+        except Exception:  # noqa: BLE001
+            log.exception("Couldn't record the paused upload for row %s", row_id)
 
     # ---------------------------------------------------------------- internals
     def _start_next(self) -> None:

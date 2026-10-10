@@ -51,14 +51,17 @@ def _hand_problem(post: Post | None, platform: str) -> str | None:
     return None
 
 
-def compute(post: Post | None, platform_states: dict, readiness=None, downloaded: bool = True) -> dict[str, Coverage]:
-    """platform → Coverage, for every platform, in ORDER."""
+def compute(post: Post | None, platform_states: dict, readiness=None, downloaded: bool = True,
+            interrupted: frozenset[str] | set[str] = frozenset()) -> dict[str, Coverage]:
+    """platform → Coverage, for every platform, in ORDER. `interrupted`: platforms whose
+    send was cut off or missed and waits for a decision."""
     out: dict[str, Coverage] = {}
     for platform in ORDER:
         if platform not in MANUAL_PLATFORMS:
             continue
         state = platform_states.get(platform)
-        if state is None or not state.target:
+        planned = state is not None and (state.target or state.state in ("scheduled", "sending", "failed"))
+        if not planned:
             if state is not None and state.state == "published":       # posted there without being planned
                 out[platform] = Coverage(platform, PUBLISHED)
             else:
@@ -69,6 +72,8 @@ def compute(post: Post | None, platform_states: dict, readiness=None, downloaded
         elif state.state in ("scheduled", "sending"):
             out[platform] = Coverage(platform, SCHEDULED, "Reelay is posting it now" if state.state == "sending"
                                      else "")
+        elif state.state == "failed" and platform in interrupted:
+            out[platform] = Coverage(platform, NEEDS_WORK, "Interrupted: say whether it was posted")
         elif state.state == "failed":
             out[platform] = Coverage(platform, NEEDS_WORK, "Reelay couldn't post it")
         elif not downloaded:

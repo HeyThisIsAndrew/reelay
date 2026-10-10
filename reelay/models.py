@@ -50,8 +50,9 @@ class DispatchStatus:
     SCHEDULED = "scheduled"      # accepted by the platform; it goes live at the set time
     PUBLISHED = "published"      # live
     FAILED = "failed"            # gave up; see error
-    ACTIVE = (PENDING, DISPATCHING, SCHEDULED)
-    ALL = (PENDING, DISPATCHING, SCHEDULED, PUBLISHED, FAILED)
+    INTERRUPTED = "interrupted"  # Reelay stopped mid-send, or missed its time; waits for a person to decide
+    ACTIVE = (PENDING, DISPATCHING, SCHEDULED, INTERRUPTED)
+    ALL = (PENDING, DISPATCHING, SCHEDULED, PUBLISHED, FAILED, INTERRUPTED)
 
 
 class Privacy:

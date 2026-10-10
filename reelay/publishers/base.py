@@ -50,6 +50,13 @@ class PublishResult:
     remote_url: str = ""
 
 
+# Platforms whose publisher can safely pick up where an interrupted send left off
+# (it records a checkpoint before the step that creates the post, and checks it on
+# retry), so a send cut short by a crash is resumed automatically. Every other
+# platform's interrupted send waits for the person to say what happened.
+RESUMABLE = frozenset({"bluesky", "threads"})
+
+
 class Publisher(Protocol):
     platform: str
 

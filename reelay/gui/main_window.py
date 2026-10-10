@@ -196,6 +196,16 @@ class MainWindow(QMainWindow):
         return a
 
     # ---------------------------------------------------------------- navigation
+    def check_interrupted(self) -> None:
+        """Ask about sends that were cut off or missed (every profile)."""
+        from .recovery_dialog import RecoveryDialog
+        held = self.services.pipeline.interrupted()
+        if not held:
+            return
+        dialog = RecoveryDialog(self.services.pipeline, held, self)
+        dialog.exec()
+        self.board.reload()
+
     def go(self, key: str) -> None:
         page = self.pages.get(key, self.download)
         key = next(k for k, p in self.pages.items() if p is page)

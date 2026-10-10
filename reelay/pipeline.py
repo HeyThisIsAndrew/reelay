@@ -60,6 +60,14 @@ DATE_FIELDS = ("original_publish_date",)
 FACEBOOK_MAX_LEAD = timedelta(days=182)
 THREADS_MAX_SECONDS = 300
 HEARTBEAT_SECONDS = 30
+MAX_UPLOAD_ATTEMPTS = 6
+INTERRUPTED_MESSAGE = ("Reelay stopped while sending this (it was closed, crashed or lost power), so it may or may "
+                       "not have been posted. Check the platform, then choose Try Again, It Was Posted, or Cancel.")
+MISSED_MESSAGE = ("Its time passed while Reelay wasn't running, so it would now go out late. Choose Post Now, "
+                  "It Was Posted, or Cancel.")
+UNSURE_MESSAGE = ("The connection dropped just as the upload finished, so YouTube may already have the video. "
+                  "Check YouTube Studio, then choose Try Again, It Was Posted, or Cancel.")
+PAUSED_MESSAGE = "Paused when Reelay closed; it continues when Reelay is open again."
 
 
 class PipelineError(Exception):
@@ -115,7 +123,8 @@ class Card:
     def coverage(self) -> dict:
         """platform → coverage.Coverage: published / scheduled / ready / needs work / not applicable."""
         from .coverage import compute
-        return compute(self.post, self.platform_states, self.readiness, self.row.item.is_downloaded)
+        return compute(self.post, self.platform_states, self.readiness, self.row.item.is_downloaded,
+                       {d.platform for d in self.dispatches if d.status == DispatchStatus.INTERRUPTED})
 
 
 @dataclass
@@ -189,6 +198,7 @@ class Pipeline:
         self._last_heartbeat: dict[int, float] = {}
         uploads.completion_handler = self._on_upload_finished
         uploads.progress_handler = self._on_upload_progress
+        uploads.pause_handler = self.pause_upload
 
     # ================================================================ reads
     def _row(self, row_id: int) -> VideoRow:
@@ -591,7 +601,8 @@ class Pipeline:
         targets = set(post.target_platforms) if post else set()
         states = {p: PlatformState(p, p in targets) for p in MANUAL_PLATFORMS}
         word = {DispatchStatus.PENDING: SCHEDULED, DispatchStatus.SCHEDULED: SCHEDULED,
-                DispatchStatus.DISPATCHING: SENDING, DispatchStatus.PUBLISHED: PUBLISHED, DispatchStatus.FAILED: FAILED}
+                DispatchStatus.DISPATCHING: SENDING, DispatchStatus.PUBLISHED: PUBLISHED, DispatchStatus.FAILED: FAILED,
+                DispatchStatus.INTERRUPTED: FAILED}   # needs a person, like a failure (coverage says why)
         for d in self.store.dispatches_for(row_id):
             if d.platform in states:
                 states[d.platform].offer(word.get(d.status, NONE), d.publish_at or d.due_at, automatic=True)
@@ -1010,8 +1021,75 @@ class Pipeline:
                 return "Upload finished."
             when = f" It goes live {local_text(post.publish_at)}." if post.publish_at else ""
             return f"Uploaded “{post.title}” to YouTube.{when}"
+        dispatch = self._youtube_dispatch(row_id)
+        if dispatch is not None and getattr(payload, "uncertain", False):
+            self.store.interrupt_dispatch(dispatch.id, UNSURE_MESSAGE)    # never re-upload blindly
+            self.refresh_post(row_id)
+            return "YouTube upload interrupted at the very end. Open the ticket to say whether it's on YouTube."
+        if dispatch is not None and getattr(payload, "transient", False) and dispatch.attempts + 1 < MAX_UPLOAD_ATTEMPTS:
+            wait = min(60 * 2 ** dispatch.attempts, 3600)   # nothing reached YouTube in full: safe to retry
+            self.store.retry_dispatch(dispatch.id, f"{payload} Retrying.",
+                                      utc_iso(datetime.now(timezone.utc) + timedelta(seconds=wait)))
+            self.refresh_post(row_id)
+            return f"YouTube upload stopped ({payload}). Reelay tries again in {wait // 60} min."
         self.fail_upload(row_id, str(payload))
         return f"YouTube upload failed: {payload}"
+
+    def pause_upload(self, row_id: int, uncertain: bool = False) -> None:
+        """Reelay is closing mid-upload: record it BEFORE the upload is stopped. A clean stop
+        can't have posted anything, so it continues next time; if the last piece was already
+        on its way, YouTube may have the video, so a person decides."""
+        dispatch = self._youtube_dispatch(row_id)
+        if dispatch is None or dispatch.status != DispatchStatus.DISPATCHING:
+            return
+        if uncertain:
+            self.store.interrupt_dispatch(dispatch.id, UNSURE_MESSAGE)
+        else:
+            self.store.pause_dispatch(dispatch.id, PAUSED_MESSAGE)
+        self.refresh_post(row_id)
+
+    # ================================================================ interrupted sends
+    def interrupted(self, profile_id: int | None = None) -> list[Dispatch]:
+        """Sends waiting for a person: cut off mid-send, or missed while Reelay was closed."""
+        return self.store.interrupted_dispatches(profile_id)
+
+    def resolve_interrupted(self, dispatch_id: int, action: str, url: str = "",
+                            now: datetime | None = None) -> Dispatch:
+        """What the person decided. action: "retry" (send it now; any time already passed is
+        dropped so it goes live right away), "posted" (it's there: record it, with its link
+        if given), or "cancel" (don't send it)."""
+        now = now or datetime.now(timezone.utc)
+        dispatch = self.store.get_dispatch(dispatch_id)
+        if dispatch is None:
+            raise PipelineError("That send no longer exists.", "not_found")
+        if dispatch.status != DispatchStatus.INTERRUPTED:
+            raise PipelineError("That send isn't waiting for a decision any more.", "conflict")
+        label = Platform.LABELS.get(dispatch.platform, dispatch.platform)
+        if action == "retry":
+            publish = parse_utc(dispatch.publish_at)
+            keep = dispatch.publish_at if publish and publish > now + timedelta(minutes=15) else None
+            done = self.store.requeue_dispatch(dispatch_id, utc_iso(now), keep)
+        elif action == "posted":
+            from .handoff import check_post_url
+            url = (url or "").strip()
+            problem = check_post_url(dispatch.platform, url)
+            if problem:
+                raise PipelineError(problem, "invalid_post")
+            publish = parse_utc(dispatch.publish_at)
+            held_by_platform = dispatch.platform in Platform.NATIVE_SCHEDULING and publish and publish > now
+            status = DispatchStatus.SCHEDULED if held_by_platform else DispatchStatus.PUBLISHED
+            done = self.store.finish_dispatch(dispatch_id, status, remote_url=url,
+                                              remote_id=url.rstrip("/").rsplit("/", 1)[-1] if url else "")
+        elif action == "cancel":
+            done = self.store.finish_dispatch(dispatch_id, DispatchStatus.FAILED,
+                                              error=f"Cancelled after an interruption; nothing more was sent to "
+                                                    f"{label}.")
+        else:
+            raise PipelineError("action must be retry, posted or cancel.", "invalid_request")
+        self.refresh_post(dispatch.video_row)
+        if action == "retry" and self.on_scheduled:
+            self.on_scheduled()
+        return done
 
     def _on_upload_progress(self, row_id: int, _pct: float) -> None:
         """Keep the YouTube claim fresh during long uploads (stale-claim recovery)."""
@@ -1032,7 +1110,9 @@ class Pipeline:
             return post
         statuses = [d.status for d in dispatches]
         youtube = next((d for d in dispatches if d.platform == Platform.YOUTUBE), None)
-        if youtube and youtube.status in (DispatchStatus.PENDING, DispatchStatus.DISPATCHING):
+        if DispatchStatus.INTERRUPTED in statuses:
+            status, stage = PostStatus.SCHEDULED, Stage.SCHEDULED   # held: waiting for a person's decision
+        elif youtube and youtube.status in (DispatchStatus.PENDING, DispatchStatus.DISPATCHING):
             status, stage = PostStatus.UPLOADING, Stage.SCHEDULED
         elif all(s == DispatchStatus.FAILED for s in statuses):
             status, stage = PostStatus.FAILED, Stage.STAGING

@@ -37,6 +37,7 @@ class Services:
             log.info("Automatic posting is off for: %s (copy-paste only).", ", ".join(off))
         self.pipeline.on_scheduled = self.dispatcher.kick
         self.api = None
+        self.recovery: list = []        # interrupted sends found at start-up (the window asks about them)
         self._agent_token: str | None = None
 
     # ---------------------------------------------------------------- agent token
@@ -54,6 +55,11 @@ class Services:
     # ---------------------------------------------------------------- lifecycle
     def start_background(self, api: bool = True) -> None:
         """Start the dispatcher and (unless REELAY_API_DISABLED=1) the agent API."""
+        try:
+            self.recovery = self.dispatcher.reconcile()   # before anything is sent: hold what needs a person
+        except Exception:  # noqa: BLE001 — never block start-up on bookkeeping
+            log.exception("Start-up reconciliation failed")
+            self.recovery = []
         self.dispatcher.start()
         if api and os.environ.get("REELAY_API_DISABLED") != "1":
             from .api import ApiServer, create_app

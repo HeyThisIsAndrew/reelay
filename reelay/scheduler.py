@@ -5,7 +5,13 @@ A background thread (no Qt) that, every REELAY_DISPATCH_INTERVAL seconds
 
 1. Recovers stale claims: dispatches left "dispatching" by a previous run of
    the app, or held by this run longer than REELAY_DISPATCH_STALE_SECONDS
-   (default 1800), go back to pending. Each recovery is logged.
+   (default 1800). Platforms whose publisher resumes safely (publishers.base.
+   RESUMABLE: Bluesky, Threads) go back to pending; every other one becomes
+   "interrupted" and waits for the person to say what happened (Try Again /
+   It Was Posted / Cancel), so a crash can never cause a duplicate post.
+   Each recovery is logged. At start-up and after the computer wakes from
+   sleep, sends whose time passed while Reelay wasn't running, and that would
+   now go out late, are held the same way (``reconcile``).
 2. Claims due dispatches atomically through the Store (pending →
    dispatching in one UPDATE), so a restart or a second worker can never
    send the same item twice.
@@ -31,13 +37,15 @@ from typing import Callable
 
 from .models import Dispatch, DispatchStatus, Platform
 from .pipeline import Pipeline, utc_iso
-from .publishers.base import PermanentError, PublishError, Publisher, TransientError, redact
+from .publishers.base import RESUMABLE, PermanentError, PublishError, Publisher, TransientError, redact
 from .store import Store
 
 log = logging.getLogger("reelay")
 
 DEFAULT_INTERVAL_SECONDS = 60.0
 DEFAULT_STALE_SECONDS = 1800.0
+MISSED_GRACE_SECONDS = 900        # a send more than 15 minutes late (and going live late) waits for a person
+WAKE_GAP_SECONDS = 300            # a pass this much later than planned: the computer was asleep
 MAX_ATTEMPTS = 6
 BACKOFF_BASE_SECONDS = 60
 BACKOFF_MAX_SECONDS = 3600
@@ -114,20 +122,60 @@ class Dispatcher:
         return bool(self._thread and self._thread.is_alive())
 
     def _loop(self) -> None:
+        last = self.clock()
         while not self._stop.is_set():
             try:
+                now = self.clock()
+                if (now - last).total_seconds() > self.interval + WAKE_GAP_SECONDS:
+                    log.info("Reelay was paused for %s (the computer slept); checking for missed posts.",
+                             now - last)
+                    self.hold_missed(now)
+                last = now
                 self.run_once()
             except Exception:  # noqa: BLE001 — keep the dispatcher alive
                 log.exception("Dispatcher pass failed")
             self._wake.wait(self.interval)
             self._wake.clear()
 
+    # ---------------------------------------------------------------- start-up reconciliation
+    def reconcile(self) -> list[Dispatch]:
+        """Run once before the dispatcher starts. Sends a previous run left half-done, and sends
+        whose time passed while Reelay was closed, are held for a person to decide; safe ones
+        resume. Returns everything now waiting for a decision (including older ones)."""
+        now = self.clock()
+        self._interrupt_abandoned(now)
+        self.hold_missed(now)
+        return self.store.interrupted_dispatches()
+
+    def hold_missed(self, now: datetime) -> list[Dispatch]:
+        from .pipeline import MISSED_MESSAGE
+        held = self.store.interrupt_missed(utc_iso(now), utc_iso(now - timedelta(seconds=MISSED_GRACE_SECONDS)),
+                                           list(self.publishers), MISSED_MESSAGE)
+        for d in held:
+            log.warning("Held %s send for video %s: it was due %s and would go out late.",
+                        d.platform, d.video_row, d.due_at)
+            self.pipeline.refresh_post(d.video_row)
+        return held
+
+    def _interrupt_abandoned(self, now: datetime) -> list[Dispatch]:
+        from .pipeline import INTERRUPTED_MESSAGE
+        stale_before = utc_iso(now - timedelta(seconds=self.stale_seconds))
+        held = self.store.interrupt_abandoned(self.instance_id, stale_before, RESUMABLE, INTERRUPTED_MESSAGE)
+        for d in held:
+            log.warning("Interrupted %s send for video %s (claimed by %s at %s): waiting for a decision, not "
+                        "retrying, so nothing is posted twice.", d.platform, d.video_row,
+                        "an earlier run" if d.claimed_by != self.instance_id else "this run",
+                        d.claimed_at or "unknown time")
+            self.pipeline.refresh_post(d.video_row)
+        return held
+
     # ---------------------------------------------------------------- one pass
     def run_once(self) -> int:
         """Recover, claim and dispatch everything due. Returns how many were handled."""
         now = self.clock()
         stale_before = utc_iso(now - timedelta(seconds=self.stale_seconds))
-        for d in self.store.recover_stale(self.instance_id, stale_before):
+        self._interrupt_abandoned(now)      # unsafe platforms: a person decides
+        for d in self.store.recover_stale(self.instance_id, stale_before):   # the rest resume
             log.warning("Requeued stale %s dispatch for video %s (claimed by %s at %s).",
                         d.platform, d.video_row, "an earlier run" if d.claimed_by != self.instance_id
                         else "this run", d.claimed_at or "unknown time")

@@ -160,15 +160,22 @@ def test_own_claim_older_than_timeout_is_requeued(world):
     assert len(pubs["bluesky"].calls) == 1
 
 
-def test_interrupted_youtube_upload_resumes_through_the_queue(world):
+def test_interrupted_youtube_upload_waits_for_a_decision(world, caplog):
+    caplog.set_level(logging.WARNING)
     row = world.rows[0]
     schedule(world, row, ["youtube"])
-    world.uploads.jobs.clear()  # the app quit mid-upload: the queue is gone, the claim remains
+    world.uploads.jobs.clear()  # the app crashed mid-upload: the queue is gone, the claim remains
     restarted = make_world.__globals__["Pipeline"](world.store, world.accounts, world.uploads, instance_id="next-run")
     dispatcher = Dispatcher(world.store, restarted, {}, interval=1, stale_seconds=600, clock=Clock(T0))
+    [held] = dispatcher.reconcile()
     dispatcher.run_once()
-    assert [j[0] for j in world.uploads.jobs] == [row]  # re-queued, not uploaded in parallel
-    assert statuses(world, row)["youtube"] == "dispatching"
+    assert world.uploads.jobs == []                    # never re-uploaded blindly: it may already be on YouTube
+    assert statuses(world, row)["youtube"] == "interrupted" and "may or may not" in held.error
+    assert "claimed by an earlier run at 20" in caplog.text   # the log says who was sending it, and when
+    restarted.resolve_interrupted(held.id, "retry")    # the person checked: it isn't there
+    dispatcher.clock = lambda: datetime.now(timezone.utc) + timedelta(seconds=1)
+    dispatcher.run_once()
+    assert [j[0] for j in world.uploads.jobs] == [row]
 
 
 # ------------------------------------------------------------------ failures

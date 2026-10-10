@@ -54,7 +54,7 @@ CONTRACT_PATH = Path(__file__).resolve().parent.parent / "api" / "openapi.yaml"
 
 PlatformName = Literal["youtube", "bluesky", "threads", "facebook"]
 StageName = str   # backlog | staging | scheduled | published, or one of your own columns' steps ("custom:…")
-PublicationStatus = Literal["pending", "dispatching", "scheduled", "published", "failed"]
+PublicationStatus = Literal["pending", "dispatching", "scheduled", "published", "failed", "interrupted"]
 Visibility = Literal["public", "unlisted", "private"]
 SourcePlatform = Literal["tiktok", "instagram", "youtube"]
 ManualPlatformName = Literal["youtube", "tiktok", "instagram", "bluesky", "threads", "facebook"]
@@ -64,7 +64,7 @@ assert set(MANUAL_PLATFORMS) == set(ManualPlatformName.__args__) and set(Content
 # PipelineError code → HTTP status
 STATUS_FOR_CODE = {
     "not_found": 404,
-    "locked": 409, "already_scheduled": 409, "already_uploading": 409, "needs_upload": 409,
+    "locked": 409, "already_scheduled": 409, "already_uploading": 409, "needs_upload": 409, "conflict": 409,
     "invalid_post": 422, "invalid_field": 422, "invalid_stage": 422, "invalid_time": 422,
     "invalid_platform": 422, "platform_disabled": 422, "invalid": 422, "ticket_not_ready": 422,
     "invalid_request": 422, "no_transcript": 422,
@@ -149,7 +149,11 @@ class Publication(BaseModel):
     platform: PlatformName
     status: PublicationStatus = Field(description="pending = waiting for its time or a retry; dispatching = being "
                                                   "sent now; scheduled = accepted by the platform, goes live at "
-                                                  "the set time; published = live; failed = gave up (see error).")
+                                                  "the set time; published = live; failed = gave up (see error); "
+                                                  "interrupted = Reelay stopped mid-send (crash, power loss) or "
+                                                  "missed its time while closed, so it may or may not be posted: "
+                                                  "nothing more is sent until someone resolves it (POST "
+                                                  ".../publications/{platform}/resolve).")
     publish_at: datetime | None = Field(None, description="When it goes live (UTC); null = as soon as possible.")
     url: str | None = Field(None, description="Link to the post once the platform has it.")
     error: str | None = Field(None, description="Last error for this platform, if any.")
@@ -189,6 +193,16 @@ class CoverageOut(BaseModel):
                     "or being posted; ready = going there and nothing is missing; needs_work = going there but "
                     "something is missing or failed (see `reason`); not_applicable = not going there.")
     reason: str | None = Field(None, description="What's missing, for needs_work.")
+
+
+class InterruptedResolve(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["retry", "posted", "cancel"] = Field(
+        description="retry = it isn't on the platform, send it now (a time already passed is dropped so it goes "
+                    "live right away); posted = it's already there, record it (nothing is sent); cancel = don't "
+                    "send it.")
+    url: str | None = Field(None, max_length=2000, description="For posted: link to the post on that platform.")
 
 
 class PlatformMark(BaseModel):
@@ -864,6 +878,22 @@ def create_app(store: Store, pipeline: Pipeline, accounts: AccountService, token
                     pipeline.confirm_handoff(video_id, platform, body.url, body.at, scheduled=body.state == "scheduled")
                 else:
                     pipeline.set_platform_state(video_id, platform, body.state, body.at)
+            except PipelineError as exc:
+                raise pipeline_error(exc) from None
+        return video_by_id(video_id)
+
+    @app.post("/v1/videos/{video_id}/publications/{platform}/resolve", response_model=Video,
+              operation_id="resolveInterrupted", summary="Decide what happened to an interrupted send",
+              responses={k: ERRORS[k] for k in (401, 404, 409, 422)}, **v1)
+    def resolve_interrupted(video_id: int, platform: PlatformName, body: InterruptedResolve) -> Video:
+        """For a publication whose status is interrupted: Reelay won't guess whether it was posted (that could
+        post twice), so someone checks the platform and says. 409 if it isn't interrupted."""
+        dispatch = next((d for d in store.dispatches_for(video_id) if d.platform == platform), None)
+        if dispatch is None:
+            raise ApiError(404, "That video has no send to that platform.", "not_found")
+        with store.origin("api"):
+            try:
+                pipeline.resolve_interrupted(dispatch.id, body.action, body.url or "")
             except PipelineError as exc:
                 raise pipeline_error(exc) from None
         return video_by_id(video_id)

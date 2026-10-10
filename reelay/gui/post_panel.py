@@ -170,6 +170,7 @@ class PostPanel(QFrame):
     targetsChanged = Signal(int, list)                # video row id, target platforms
     platformMarkRequested = Signal(int, str, str, object)   # row id, platform, state, when
     handoffRequested = Signal(int, str)                     # row id, platform: Prepare to Publish
+    recoverRequested = Signal(int)                          # row id: decide about interrupted sends
 
     def __init__(self, thumbs: ThumbnailCache, parent=None):
         super().__init__(parent)
@@ -257,7 +258,12 @@ class PostPanel(QFrame):
         self.cancel_btn = tip(QPushButton("Cancel Upload"), "Stop uploading this video. Nothing is posted.")
         set_prop(self.cancel_btn, "danger")
         self.cancel_btn.clicked.connect(lambda: self.card and self.cancelUploadRequested.emit(self.card.id))
-        for b in (self.open_btn, self.studio_btn, self.cancel_btn):
+        self.recover_btn = tip(QPushButton("Decide What Happened…"),
+                               "A send was cut off (Reelay closed, crashed or lost power) or missed its time. "
+                               "Say whether it was posted, try again, or cancel it.")
+        set_prop(self.recover_btn, "primary")
+        self.recover_btn.clicked.connect(lambda: self.card and self.recoverRequested.emit(self.card.id))
+        for b in (self.recover_btn, self.open_btn, self.studio_btn, self.cancel_btn):
             brow.addWidget(b)
         sb.addWidget(self.status_text)
         sb.addWidget(self.upload_bar)
@@ -685,9 +691,14 @@ class PostPanel(QFrame):
         has_remote = bool(post and post.remote_id and post.remote_url and "youtube" in post.remote_url)
         self.open_btn.setVisible(has_remote)
         self.studio_btn.setVisible(has_remote)
+        held = [d for d in card.dispatches if d.status == "interrupted"] if card else []
+        self.recover_btn.setVisible(bool(held))
         if not card:
             return
-        if post and post.status == PostStatus.UPLOADING:
+        if held:
+            self.status_text.setText("Waiting for you: a send was interrupted or missed its time.\n"
+                                     + self._platform_lines(card))
+        elif post and post.status == PostStatus.UPLOADING:
             if card.queued:
                 self.status_text.setText("Waiting for the current upload to finish…")
             else:
@@ -707,7 +718,7 @@ class PostPanel(QFrame):
     @staticmethod
     def _platform_lines(card: Card) -> str:
         words = {"pending": "waiting", "dispatching": "sending now", "scheduled": "scheduled on the platform",
-                 "published": "live", "failed": "FAILED"}
+                 "published": "live", "failed": "FAILED", "interrupted": "INTERRUPTED"}
         lines = []
         for d in card.dispatches:
             line = f"• {Platform.LABELS.get(d.platform, d.platform)}: {words.get(d.status, d.status)}"

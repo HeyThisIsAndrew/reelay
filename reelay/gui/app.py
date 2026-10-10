@@ -8,7 +8,7 @@ import traceback
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-from PySide6.QtCore import QCoreApplication
+from PySide6.QtCore import QCoreApplication, QTimer
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox
 
@@ -88,6 +88,8 @@ def main() -> int:
     window = create_window(app, store, KeyringTokenStore(), start_services=True)
     app.aboutToQuit.connect(window.services.stop)  # also covers Cmd-Q without a close event
     window.show()
+    if window.services.recovery:      # sends a crash or a closed laptop left undecided: ask, don't guess
+        QTimer.singleShot(900, window.check_interrupted)
     code = app.exec()
     store.close()
     return code
