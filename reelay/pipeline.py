@@ -95,6 +95,7 @@ class Card:
     dispatches: list[Dispatch] = field(default_factory=list)
     readiness: Readiness | None = None
     platform_states: dict = field(default_factory=dict)   # platform → PlatformState
+    search_hit: object | None = None   # store.SearchHit when the board is searching
 
     @property
     def id(self) -> int:
@@ -487,6 +488,10 @@ class Pipeline:
             row = self._row(row_id)
             post, _saved = self.post_or_default(row)
             post_changes, ticket_changes = suggest(post, row.item, row.ticket)
+            brand = self.store.active_brand_profile(row.profile_id)
+            if brand and brand.hashtags.strip() and not (post.hashtags or "").strip() \
+                    and not post_changes.get("hashtags"):
+                post_changes["hashtags"] = brand.hashtags.strip()        # the brand voice's default hashtags
             if self._copy_locked(row):
                 post_changes = {}
             if post_changes or ticket_changes or not _saved:

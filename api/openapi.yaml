@@ -96,6 +96,86 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+  /v1/search:
+    get:
+      tags:
+      - videos
+      summary: Search a profile's video archive, including what was said
+      description: 'Full-text search over every video''s title, original caption, transcript (spoken words), the
+        ticket''s
+
+        copy for each platform, hashtags, topic, keywords and notes. Fetch or write transcripts
+
+        (PATCH transcript) to make spoken words searchable.'
+      operationId: searchVideos
+      security:
+      - HTTPBearer: []
+      parameters:
+      - name: profile
+        in: query
+        required: true
+        schema:
+          type: string
+          description: Profile name exactly as shown in Reelay's sidebar.
+          title: Profile
+        description: Profile name exactly as shown in Reelay's sidebar.
+      - name: q
+        in: query
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 500
+          description: Words to find (every word must match; prefixes count, so "sungl" finds "sunglasses"). Put
+            an exact phrase in "double quotes".
+          title: Q
+        description: Words to find (every word must match; prefixes count, so "sungl" finds "sunglasses"). Put an
+          exact phrase in "double quotes".
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 200
+          minimum: 1
+          default: 25
+          title: Limit
+      - name: archived
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          description: true = archived only; omit or false = active only.
+          default: false
+          title: Archived
+        description: true = archived only; omit or false = active only.
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SearchResponse'
+        '400':
+          description: Bad request (e.g. missing or unknown profile).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '401':
+          description: Missing or invalid bearer token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Invalid input; nothing was changed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
   /v1/videos/{video_id}:
     patch:
       tags:
@@ -1902,6 +1982,47 @@ components:
       - target_platforms
       - jobs
       title: ScheduleResponse
+    SearchResponse:
+      properties:
+        profile:
+          $ref: '#/components/schemas/ProfileRef'
+        query:
+          type: string
+          title: Query
+        total:
+          type: integer
+          title: Total
+        results:
+          items:
+            $ref: '#/components/schemas/SearchResult'
+          type: array
+          title: Results
+          description: Best matches first.
+      type: object
+      required:
+      - profile
+      - query
+      - total
+      - results
+      title: SearchResponse
+    SearchResult:
+      properties:
+        spoken:
+          type: boolean
+          title: Spoken
+          description: The words were found in what was said in the video (its transcript).
+        snippet:
+          type: string
+          title: Snippet
+          description: The matching words in context, with matches «marked». Transcript first.
+        video:
+          $ref: '#/components/schemas/Video'
+      type: object
+      required:
+      - spoken
+      - snippet
+      - video
+      title: SearchResult
     SourceAccount:
       properties:
         id:

@@ -295,6 +295,19 @@ class BoardPage(BaseModel):
     videos: list[Video]
 
 
+class SearchResult(BaseModel):
+    spoken: bool = Field(description="The words were found in what was said in the video (its transcript).")
+    snippet: str = Field(description="The matching words in context, with matches «marked». Transcript first.")
+    video: Video
+
+
+class SearchResponse(BaseModel):
+    profile: ProfileRef
+    query: str
+    total: int
+    results: list[SearchResult] = Field(description="Best matches first.")
+
+
 class VideoPatch(BaseModel):
     """Only these fields can be changed. Omitted fields are left as they are."""
     model_config = ConfigDict(extra="forbid")
@@ -702,6 +715,33 @@ def create_app(store: Store, pipeline: Pipeline, accounts: AccountService, token
                          limit=limit, offset=offset,
                          next_offset=offset + limit if offset + limit < len(cards) else None,
                          videos=[to_video(c, prof, channels) for c in page])
+
+    @app.get("/v1/search", response_model=SearchResponse, operation_id="searchVideos",
+             summary="Search a profile's video archive, including what was said",
+             responses={k: ERRORS[k] for k in (400, 401, 422)}, **v1)
+    def search_videos(
+        profile: str = Query(..., description="Profile name exactly as shown in Reelay's sidebar."),
+        q: str = Query(..., min_length=1, max_length=500,
+                       description='Words to find (every word must match; prefixes count, so "sungl" finds '
+                                   '"sunglasses"). Put an exact phrase in "double quotes".'),
+        limit: int = Query(25, ge=1, le=200),
+        archived: bool | None = Query(False, description="true = archived only; omit or false = active only."),
+    ) -> SearchResponse:
+        """Full-text search over every video's title, original caption, transcript (spoken words), the ticket's
+        copy for each platform, hashtags, topic, keywords and notes. Fetch or write transcripts
+        (PATCH transcript) to make spoken words searchable."""
+        prof = find_profile(profile)
+        hits = store.search(prof.id, q, limit=limit, archived=archived)
+        channels = {a.id: a for a in store.list_accounts(prof.id, YOUTUBE)}
+        results = []
+        for hit in hits:
+            try:
+                card = pipeline.card(hit.row_id)
+            except PipelineError:
+                continue
+            results.append(SearchResult(spoken=hit.spoken, snippet=hit.snippet, video=to_video(card, prof, channels)))
+        return SearchResponse(profile=ProfileRef(id=prof.id, name=prof.name), query=q, total=len(results),
+                              results=results)
 
     @app.patch("/v1/videos/{video_id}", response_model=Video, operation_id="updateVideo",
                summary="Update a video's post metadata", responses={k: ERRORS[k] for k in (401, 404, 409, 422)},

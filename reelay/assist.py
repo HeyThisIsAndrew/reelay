@@ -39,9 +39,10 @@ STYLES = {
     "friendly": "Make it warmer and more conversational.",
     "professional": "Make it polished and professional.",
     "cta": "Keep it, and end with a short, natural call to action.",
+    "voice": "Rewrite it in the brand's own voice (described above). Keep the meaning, emoji and hashtags.",
 }
 STYLE_LABELS = {"fix": "Fix grammar only", "shorter": "Shorter", "hook": "Stronger hook", "friendly": "Friendlier",
-                "professional": "More professional", "cta": "Add a call to action"}
+                "professional": "More professional", "cta": "Add a call to action", "voice": "In our brand voice"}
 
 
 class AssistError(Exception):
@@ -156,6 +157,36 @@ def build_prompt(text: str, style: str, platform: str = "", limit: int | None = 
             "Reply with only the new caption.\n\nCaption:\n" + text.strip())
 
 
+def system_prompt(brand) -> str:
+    """The brand voice (models.BrandProfile) as the model's system prompt; "" for none."""
+    if brand is None:
+        return ""
+    lines = [f"You write social media captions for {brand.name}. Always sound like them, never like generic AI."]
+    if brand.tone.strip():
+        lines.append(f"Their tone: {brand.tone.strip()}.")
+    words = avoid_list(brand)
+    if words:
+        lines.append("Never use these words or phrases: " + ", ".join(f"“{w}”" for w in words) + ".")
+    if brand.hashtags.strip():
+        lines.append(f"Their usual hashtags are {brand.hashtags.strip()}. When a caption needs hashtags, prefer "
+                     "these over inventing new ones.")
+    if brand.guidance.strip():
+        lines.append("More about how they write:\n" + brand.guidance.strip())
+    return "\n".join(lines)
+
+
+def avoid_list(brand) -> list[str]:
+    if brand is None:
+        return []
+    return [w.strip() for w in re.split(r"[,\n;]", brand.avoid or "") if w.strip()]
+
+
+def avoided_words(text: str, brand) -> list[str]:
+    """Words the brand avoids that appear in `text` (whole words, any case)."""
+    return [w for w in avoid_list(brand)
+            if re.search(r"(?<!\w)" + re.escape(w) + r"(?!\w)", text or "", flags=re.IGNORECASE)]
+
+
 def clean_reply(reply: str) -> str:
     reply = (reply or "").strip()
     reply = re.sub(r"^(here(?:'s| is)[^:\n]*:|new caption:|caption:)\s*", "", reply, flags=re.IGNORECASE).strip()
@@ -188,10 +219,12 @@ class OllamaRewriter:
                            f"`ollama pull {self.model}` (about 2 GB for a 3B model).")
         return True, f"Ollama is ready with {self.model}."
 
-    def complete(self, prompt: str) -> str:
+    def complete(self, prompt: str, system: str = "") -> str:
+        body = {"model": self.model, "prompt": prompt, "stream": False, "options": {"temperature": 0.6}}
+        if system:
+            body["system"] = system
         try:
-            resp = self.http.post(f"{self.base_url}/api/generate", json={
-                "model": self.model, "prompt": prompt, "stream": False, "options": {"temperature": 0.6}}, timeout=180)
+            resp = self.http.post(f"{self.base_url}/api/generate", json=body, timeout=180)
         except requests.RequestException:
             raise AssistError("Couldn't reach Ollama. Is it open?") from None
         try:
@@ -220,7 +253,7 @@ class LlamaCppRewriter:
             return False, "Choose a .gguf model file (for example a 1B or 3B instruct model)."
         return True, "llama.cpp is ready."
 
-    def complete(self, prompt: str) -> str:
+    def complete(self, prompt: str, system: str = "") -> str:
         ok, why = self.status()
         if not ok:
             raise AssistError(why)
@@ -228,8 +261,8 @@ class LlamaCppRewriter:
         llm = self._cache.get(self.model_path)
         if llm is None:
             llm = self._cache[self.model_path] = Llama(model_path=self.model_path, n_ctx=2048, verbose=False)
-        out = llm.create_chat_completion(messages=[{"role": "user", "content": prompt}], temperature=0.6,
-                                         max_tokens=600)
+        messages = ([{"role": "system", "content": system}] if system else []) + [{"role": "user", "content": prompt}]
+        out = llm.create_chat_completion(messages=messages, temperature=0.6, max_tokens=600)
         return out["choices"][0]["message"]["content"]
 
 
@@ -244,12 +277,23 @@ def rewriter_from(store, session=None):
     return None
 
 
-def rewrite(rewriter, text: str, style: str, platform: str = "", limit: int | None = None) -> str:
+def rewrite(rewriter, text: str, style: str, platform: str = "", limit: int | None = None, brand=None) -> str:
+    """A rewrite from the local model. With a brand voice (models.BrandProfile) it's sent as the
+    system prompt; if the reply still uses a word the brand avoids, the model is asked once more."""
     if rewriter is None:
         raise AssistError("Rewriting is turned off. Turn it on in Settings → Local AI helper.")
     if not text.strip():
         raise AssistError("Write something first; the helper rewrites what's there.")
-    reply = clean_reply(rewriter.complete(build_prompt(text, style, platform, limit)))
+    if style == "voice" and brand is None:
+        raise AssistError("Set up a brand voice first: Settings → Brand voice.")
+    system = system_prompt(brand)
+    prompt = build_prompt(text, style, platform, limit)
+    reply = clean_reply(rewriter.complete(prompt, system=system) if system else rewriter.complete(prompt))
+    banned = avoided_words(reply, brand)
+    if reply and banned:
+        retry = (prompt + "\n\nYour last try used words this brand never uses (" + ", ".join(banned) +
+                 "). Write it again without them.")
+        reply = clean_reply(rewriter.complete(retry, system=system)) or reply
     if not reply:
         raise AssistError("The model didn't return anything. Try again or pick a different model.")
     return reply

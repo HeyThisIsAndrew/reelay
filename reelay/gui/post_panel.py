@@ -611,7 +611,8 @@ class PostPanel(QFrame):
                 block.set_text(dialog.text)
         else:
             limit, counter = self.LIMITS.get(block.key, (None, len))
-            dialog = RewriteDialog(block.text(), self.store, label, limit, counter, self)
+            brand = self.store.active_brand_profile(self.card.row.profile_id) if self.card else None
+            dialog = RewriteDialog(block.text(), self.store, label, limit, counter, self, brand=brand)
             if dialog.exec() == RewriteDialog.Accepted and dialog.value():
                 block.set_text(dialog.value())
 

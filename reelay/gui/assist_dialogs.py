@@ -104,11 +104,13 @@ class GrammarDialog(QDialog):
 class RewriteDialog(QDialog):
     """Rewrite with a local model. The result is a suggestion: edit it, then use it."""
 
-    def __init__(self, text: str, store, label: str, limit: int | None, counter, parent=None, rewriter=None):
+    def __init__(self, text: str, store, label: str, limit: int | None, counter, parent=None, rewriter=None,
+                 brand=None):
         super().__init__(parent)
         self.setWindowTitle(f"Rewrite: {label}")
         self.resize(600, 520)
         self.text, self.store, self.label, self.limit, self.counter = text, store, label, limit, counter
+        self.brand = brand
         self.rewriter = rewriter if rewriter is not None else assist.rewriter_from(store)
         self.worker: CallWorker | None = None
         lay = QVBoxLayout(self)
@@ -116,9 +118,15 @@ class RewriteDialog(QDialog):
         lay.setSpacing(10)
         self.status = _label(prop="muted")
         lay.addWidget(self.status)
+        self.voice = _label(prop="faint")
+        self.voice.setText(f"Brand voice: <b>{self.brand.name}</b> (Settings → Brand voice)" if self.brand else
+                           "No brand voice set up. Add one in Settings → Brand voice so rewrites sound like you.")
+        lay.addWidget(self.voice)
         row = QHBoxLayout()
         self.style = tip(QComboBox(), "How to rewrite it")
         for key, name in assist.STYLE_LABELS.items():
+            if key == "voice" and not self.brand:
+                continue
             self.style.addItem(name, key)
         row.addWidget(self.style, 1)
         self.run_btn = tip(QPushButton("Rewrite"), "Ask the model on this computer for a new version. Free, offline.")
@@ -171,7 +179,7 @@ class RewriteDialog(QDialog):
         self.run_btn.setEnabled(False)
         self.status.setText("Rewriting on this computer… (the first run can take a moment)")
         self.worker = CallWorker(assist.rewrite, self.rewriter, self.text, self.style.currentData(), self.label,
-                                 self.limit, parent=self)
+                                 self.limit, brand=self.brand, parent=self)
         self.worker.succeeded.connect(self._done)
         self.worker.failed.connect(lambda msg: (self.status.setText(msg), self.run_btn.setEnabled(True)))
         self.worker.start()
@@ -185,9 +193,11 @@ class RewriteDialog(QDialog):
         text = self.result.toPlainText()
         n = self.counter(text) if self.counter else len(text)
         over = bool(self.limit and n > self.limit)
+        banned = assist.avoided_words(text, self.brand)
         self.length.setText(f"{n:,}" + (f"/{self.limit:,}" if self.limit else "") +
-                            (" · too long for this platform: shorten it before using" if over else ""))
-        set_prop(self.length, "danger", over)
+                            (" · too long for this platform: shorten it before using" if over else "") +
+                            (f" · uses words {self.brand.name} avoids: {', '.join(banned)}" if banned else ""))
+        set_prop(self.length, "danger", over or bool(banned))
         self.use_btn.setEnabled(bool(text.strip()))
 
     def value(self) -> str:

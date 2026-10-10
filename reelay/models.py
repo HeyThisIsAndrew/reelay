@@ -410,3 +410,18 @@ class VideoRow:
     ticket: Ticket = field(default_factory=Ticket)
     ready_gate_exempt: bool = False   # was already Scheduled/Published before the Ready gate existed
     archived_at: str | None = None    # hidden from the board and Download list (files and history kept)
+
+
+@dataclass
+class BrandProfile:
+    """How a creator or brand sounds, for the local AI helper (Settings → Brand voice)."""
+    profile_id: int
+    name: str
+    tone: str = ""        # e.g. "warm, encouraging, a little playful"
+    avoid: str = ""       # words or phrases never to use, comma separated
+    hashtags: str = ""    # default hashtags, e.g. "#livingood #healing"
+    guidance: str = ""    # anything else: audience, example captions, emoji habits
+    active: bool = False
+    id: int | None = None
+    created_at: str = ""
+    updated_at: str = ""

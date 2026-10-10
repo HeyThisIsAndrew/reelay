@@ -400,3 +400,13 @@ def test_coverage_and_handoff_link_through_the_api(api):
                   json={"state": "posted", "url": "https://www.tiktok.com/@x/video/9"})
     assert ok.status_code == 200 and ok.json()["coverage"]["tiktok"]["state"] == "published"
     assert api.world.store.manual_posts(row)[0].url == "https://www.tiktok.com/@x/video/9"
+
+
+def test_search_finds_spoken_words(api):
+    row = api.world.rows[1]
+    api.patch(f"/v1/videos/{row}", json={"transcript": "Today I'm talking about polarized sunglasses"})
+    r = api.get("/v1/search", params={"profile": api.world.profile.name, "q": "polarized sungl"}).json()
+    assert r["total"] == 1 and r["results"][0]["spoken"] and r["results"][0]["video"]["id"] == row
+    assert "«sunglasses»" in r["results"][0]["snippet"]
+    r = api.get("/v1/search", params={"profile": api.world.profile.name, "q": "letting go"}).json()
+    assert r["total"] == 4 and not r["results"][0]["spoken"]           # original captions, downloaded or not

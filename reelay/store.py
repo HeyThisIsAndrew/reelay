@@ -27,12 +27,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterable, Iterator
 
-from .models import (TICKET_FIELDS, Account, Dispatch, DispatchStatus, ManualPost, Post, PostStatus, Profile,
+from .models import (TICKET_FIELDS, Account, BrandProfile, Dispatch, DispatchStatus, ManualPost, Post, PostStatus, Profile,
                      Revision, Source, Ticket, VideoItem, VideoRow)
 
 log = logging.getLogger("reelay")
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 # Post fields whose edits are logical metadata commits (logged as revisions).
 # Status, remote ids and errors are publishing state, tracked by dispatches.
@@ -208,9 +208,93 @@ _MIGRATIONS: dict[int, str] = {
     7: """
     ALTER TABLE manual_posts ADD COLUMN kind TEXT NOT NULL DEFAULT 'posted';
     """,
+    8: """
+    -- Archive search: one full-text row per video (rowid = videos.id), kept current by
+    -- triggers so every write path (app, agent API, imports) updates it.
+    CREATE VIEW video_search_source AS
+    SELECT v.id AS id,
+           trim(coalesce(p.title, '') || ' ' || coalesce(json_extract(v.data, '$.title'), '') || ' ' ||
+                coalesce(json_extract(v.data, '$.custom_name'), '')) AS title,
+           coalesce(json_extract(v.data, '$.description'), '') AS caption,
+           coalesce(v.transcript, '') AS transcript,
+           trim(coalesce(p.description, '') || ' ' ||
+                replace(replace(replace(replace(coalesce(p.tags, ''), '[', ''), ']', ''), '"', ''), ',', ' ') || ' ' || coalesce(p.hashtags, '') || ' ' ||
+                coalesce(p.tiktok_text, '') || ' ' || coalesce(p.instagram_text, '') || ' ' ||
+                coalesce(p.facebook_text, '') || ' ' || coalesce(p.threads_text, '') || ' ' ||
+                coalesce(p.bluesky_text, '') || ' ' || coalesce(v.topic, '') || ' ' || coalesce(v.keywords, '')) AS copy,
+           coalesce(v.notes, '') AS notes
+    FROM videos v LEFT JOIN posts p ON p.video_row = v.id;
+    CREATE VIRTUAL TABLE video_search USING fts5(
+        title, caption, transcript, copy, notes, tokenize = 'unicode61 remove_diacritics 2');
+    INSERT INTO video_search (rowid, title, caption, transcript, copy, notes)
+        SELECT id, title, caption, transcript, copy, notes FROM video_search_source;
+    CREATE TRIGGER video_search_video_insert AFTER INSERT ON videos BEGIN
+        INSERT INTO video_search (rowid, title, caption, transcript, copy, notes)
+            SELECT id, title, caption, transcript, copy, notes FROM video_search_source WHERE id = NEW.id;
+    END;
+    CREATE TRIGGER video_search_video_update AFTER UPDATE OF data, transcript, notes, topic, keywords ON videos BEGIN
+        DELETE FROM video_search WHERE rowid = NEW.id;
+        INSERT INTO video_search (rowid, title, caption, transcript, copy, notes)
+            SELECT id, title, caption, transcript, copy, notes FROM video_search_source WHERE id = NEW.id;
+    END;
+    CREATE TRIGGER video_search_video_delete AFTER DELETE ON videos BEGIN
+        DELETE FROM video_search WHERE rowid = OLD.id;
+    END;
+    CREATE TRIGGER video_search_post_insert AFTER INSERT ON posts BEGIN
+        DELETE FROM video_search WHERE rowid = NEW.video_row;
+        INSERT INTO video_search (rowid, title, caption, transcript, copy, notes)
+            SELECT id, title, caption, transcript, copy, notes FROM video_search_source WHERE id = NEW.video_row;
+    END;
+    CREATE TRIGGER video_search_post_update AFTER UPDATE ON posts BEGIN
+        DELETE FROM video_search WHERE rowid = NEW.video_row;
+        INSERT INTO video_search (rowid, title, caption, transcript, copy, notes)
+            SELECT id, title, caption, transcript, copy, notes FROM video_search_source WHERE id = NEW.video_row;
+    END;
+    CREATE TRIGGER video_search_post_delete AFTER DELETE ON posts BEGIN
+        DELETE FROM video_search WHERE rowid = OLD.video_row;
+        INSERT INTO video_search (rowid, title, caption, transcript, copy, notes)
+            SELECT id, title, caption, transcript, copy, notes FROM video_search_source WHERE id = OLD.video_row;
+    END;
+
+    -- Brand voice: how the local AI helper should sound for this creator.
+    CREATE TABLE brand_profiles (
+        id INTEGER PRIMARY KEY,
+        profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        tone TEXT NOT NULL DEFAULT '',
+        avoid TEXT NOT NULL DEFAULT '',
+        hashtags TEXT NOT NULL DEFAULT '',
+        guidance TEXT NOT NULL DEFAULT '',
+        active INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    CREATE INDEX brand_profiles_by_profile ON brand_profiles (profile_id);
+    """,
 }
 
 PROFILE_COLORS = ["#8a8984", "#b5835a", "#7a9a7e", "#7f8fb0", "#a77fa0", "#b07a7a", "#9a9a6a"]
+
+
+@dataclass
+class SearchHit:
+    row_id: int
+    spoken: bool          # matched words the creator said (the transcript)
+    snippet: str          # the matching words in context, «highlighted»; transcript first
+
+
+def fts_query(text: str) -> str | None:
+    """A safe full-text query: every word must match (as a prefix: "sungl" finds
+    "sunglasses"), and "quoted phrases" match as phrases. Punctuation is ignored."""
+    import re
+    parts = []
+    for phrase, word in re.findall(r'"([^"]+)"|(\S+)', text or ""):
+        tokens = re.findall(r"\w+", phrase or word)
+        if phrase and tokens:
+            parts.append('"' + " ".join(tokens) + '"')
+        else:
+            parts += [f'"{t}"*' for t in tokens]
+    return " AND ".join(parts) or None
 
 
 def utcnow() -> str:
@@ -305,6 +389,90 @@ class Store:
             with self.conn:
                 self.conn.executescript(_MIGRATIONS[target])
                 self.conn.execute(f"PRAGMA user_version = {target}")
+
+    # ================================================================ archive search
+    def search(self, profile_id: int, text: str, limit: int = 200, archived: bool | None = False) -> list[SearchHit]:
+        """Videos matching every word anywhere: title, original caption, what was SAID
+        (transcript), the ticket's copy, topic, keywords and notes. Best matches first."""
+        q = fts_query(text)
+        if not q:
+            return []
+        sql = ("SELECT s.rowid AS id, snippet(video_search, -1, '«', '»', '…', 12) AS snip "
+               "FROM video_search s JOIN videos v ON v.id = s.rowid "
+               "WHERE video_search MATCH ? AND v.profile_id = ?")
+        if archived is not None:
+            sql += " AND v.archived_at IS NOT NULL" if archived else " AND v.archived_at IS NULL"
+        try:
+            rows = self.conn.execute(sql + " ORDER BY bm25(video_search, 5.0, 2.0, 3.0, 1.0, 1.0) LIMIT ?",
+                                     (q, profile_id, limit)).fetchall()
+            spoken = {r["id"]: r["snip"] for r in self.conn.execute(
+                "SELECT rowid AS id, snippet(video_search, 2, '«', '»', '…', 12) AS snip FROM video_search "
+                "WHERE video_search MATCH ?", (f"transcript : ({q})",)).fetchall()}
+        except sqlite3.OperationalError:
+            log.warning("Search query couldn't be run", exc_info=True)
+            return []
+        return [SearchHit(r["id"], r["id"] in spoken, spoken.get(r["id"]) or r["snip"]) for r in rows]
+
+    def rebuild_search_index(self) -> int:
+        """Re-index every video (repair; the triggers normally keep it current)."""
+        with self.tx() as c:
+            c.execute("DELETE FROM video_search")
+            c.execute("INSERT INTO video_search (rowid, title, caption, transcript, copy, notes) "
+                      "SELECT id, title, caption, transcript, copy, notes FROM video_search_source")
+            return c.execute("SELECT COUNT(*) FROM video_search").fetchone()[0]
+
+    # ================================================================ brand voice
+    def list_brand_profiles(self, profile_id: int) -> list[BrandProfile]:
+        rows = self.conn.execute("SELECT * FROM brand_profiles WHERE profile_id=? ORDER BY name COLLATE NOCASE",
+                                 (profile_id,)).fetchall()
+        return [self._brand(r) for r in rows]
+
+    def get_brand_profile(self, brand_id: int) -> BrandProfile | None:
+        row = self.conn.execute("SELECT * FROM brand_profiles WHERE id=?", (brand_id,)).fetchone()
+        return self._brand(row) if row else None
+
+    def active_brand_profile(self, profile_id: int) -> BrandProfile | None:
+        row = self.conn.execute("SELECT * FROM brand_profiles WHERE profile_id=? AND active=1 LIMIT 1",
+                                (profile_id,)).fetchone()
+        return self._brand(row) if row else None
+
+    def save_brand_profile(self, brand: BrandProfile) -> BrandProfile:
+        brand.name = brand.name.strip() or "Brand voice"
+        now = utcnow()
+        brand.updated_at = now
+        with self.tx() as c:
+            if brand.active:
+                c.execute("UPDATE brand_profiles SET active=0 WHERE profile_id=?", (brand.profile_id,))
+            values = (brand.name, brand.tone.strip(), brand.avoid.strip(), brand.hashtags.strip(),
+                      brand.guidance.strip(), int(brand.active), now)
+            if brand.id is None:
+                brand.created_at = now
+                cur = c.execute("INSERT INTO brand_profiles (name, tone, avoid, hashtags, guidance, active, "
+                                "updated_at, profile_id, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                                (*values, brand.profile_id, now))
+                brand.id = cur.lastrowid
+            else:
+                c.execute("UPDATE brand_profiles SET name=?, tone=?, avoid=?, hashtags=?, guidance=?, active=?, "
+                          "updated_at=? WHERE id=?", (*values, brand.id))
+        self._emit("brand", (brand.id,), brand.profile_id)
+        return brand
+
+    def set_active_brand_profile(self, profile_id: int, brand_id: int | None) -> None:
+        with self.tx() as c:
+            c.execute("UPDATE brand_profiles SET active = (id IS ?) WHERE profile_id=?", (brand_id, profile_id))
+        self._emit("brand", (brand_id,) if brand_id else (), profile_id)
+
+    def delete_brand_profile(self, brand_id: int) -> None:
+        row = self.conn.execute("SELECT profile_id FROM brand_profiles WHERE id=?", (brand_id,)).fetchone()
+        with self.tx() as c:
+            c.execute("DELETE FROM brand_profiles WHERE id=?", (brand_id,))
+        self._emit("brand", (brand_id,), row[0] if row else None)
+
+    @staticmethod
+    def _brand(row) -> BrandProfile:
+        return BrandProfile(profile_id=row["profile_id"], name=row["name"], tone=row["tone"], avoid=row["avoid"],
+                            hashtags=row["hashtags"], guidance=row["guidance"], active=bool(row["active"]),
+                            id=row["id"], created_at=row["created_at"], updated_at=row["updated_at"])
 
     # ================================================================ settings
     def get_setting(self, key: str, default: str = "") -> str:

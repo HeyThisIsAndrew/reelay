@@ -105,6 +105,9 @@ class SettingsPage(QWidget):
         lay.addWidget(card)
 
         self._build_assist_card(lay)
+        from .brand_widgets import BrandVoiceCard
+        self.brand_card = BrandVoiceCard(store)
+        lay.addWidget(self.brand_card)
 
         card, cl = _card("AI agents (advanced)")
         cl.addWidget(_muted("Lets AI assistants you run on this Mac read your board, make edits and schedule posts. "
@@ -280,6 +283,7 @@ class SettingsPage(QWidget):
         self._refresh_flags()
         self._refresh_api()
         self._refresh_assist()
+        self.brand_card.refresh()
 
     def _refresh_flags(self) -> None:
         running = self.services.enabled if self.services else frozenset()

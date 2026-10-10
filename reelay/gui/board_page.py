@@ -250,6 +250,9 @@ class CardDelegate(QStyledItemDelegate):
     @staticmethod
     def _status(card: Card) -> tuple[str, str]:
         p, post, item = theme.P, card.post, card.row.item
+        if card.search_hit is not None and card.search_hit.spoken:   # found by what was said in the video
+            said = card.search_hit.snippet.replace("«", "").replace("»", "")
+            return f"🗣 “{said}”", p.text
         if len(card.dispatches) > 1 and not (post and post.status == PostStatus.UPLOADING):
             marks = {"pending": "⏱", "dispatching": "…", "scheduled": "⏱", "published": "✓", "failed": "⚠"}
             short = {"youtube": "YT", "bluesky": "Bsky", "threads": "Thr", "facebook": "FB"}
@@ -462,9 +465,10 @@ class BoardPage(QWidget):
         # ---- find tickets: search, hashtag (category), readiness
         find = QHBoxLayout()
         find.setSpacing(10)
-        self.search = tip(QLineEdit(), "Find tickets by words in the title, caption, any platform's copy, hashtags, "
-                                       "topic or keywords")
-        self.search.setPlaceholderText("Search tickets: titles, captions, hashtags, products, topics…")
+        self.search = tip(QLineEdit(), "Find videos by words in the title, caption, any platform's copy, hashtags, "
+                                       "topic, keywords, notes, or anything said in the video (its transcript). "
+                                       "Put \"quotes\" around an exact phrase.")
+        self.search.setPlaceholderText("Search titles, captions, hashtags, products, and what was said…")
         self.search.setClearButtonEnabled(True)
         self.search.setAttribute(Qt.WA_MacShowFocusRect, False)
         self.search.textChanged.connect(self._on_search)
@@ -700,6 +704,9 @@ class BoardPage(QWidget):
         except PipelineError:  # profile was just deleted
             return
         self.cards = {card.id: card for cards in columns.values() for card in cards}
+        hits = {h.row_id: h for h in self.store.search(self.profile.id, self.query)} if self.query else {}
+        for card in self.cards.values():
+            card.search_hit = hits.get(card.id)
         self._refresh_tag_box(self.cards.values())
         self._refresh_product_box(self.cards.values())
         by_column: dict[str, list[Card]] = {c.id: [] for c in self.column_config}
@@ -720,7 +727,8 @@ class BoardPage(QWidget):
             return False
         if self.product_ids and not any(p.get("id") in self.product_ids for p in card.row.item.products or []):
             return False
-        if self.query and not all(word in self._haystack(card) for word in self.query.split()):
+        if self.query and card.search_hit is None and not all(word in self._haystack(card)
+                                                              for word in self.query.split()):
             return False
         r = card.readiness
         if self.filter == "all" or r is None:
