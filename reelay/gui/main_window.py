@@ -25,10 +25,12 @@ from .tips import tip
 
 log = logging.getLogger("reelay")
 
-PAGES = [("download", "Download"), ("board", "Board"), ("accounts", "Accounts"), ("settings", "Settings")]
+PAGES = [("download", "Download"), ("board", "Board"), ("automations", "Automations"), ("accounts", "Accounts"),
+         ("settings", "Settings")]
 NAV_TIPS = {
     "download": "Bring videos in from TikTok, Instagram or YouTube",
     "board": "Your video tickets: write captions, check readiness, schedule and track posts",
+    "automations": "Rules that work your tickets for you: templates, hashtags, platforms and scheduling",
     "accounts": "Connect the accounts videos go out to",
     "settings": "Appearance, automatic posting, tips and AI agents",
     "help": "How Reelay works, step by step (works offline)",
@@ -75,7 +77,9 @@ class MainWindow(QMainWindow):
         self.accounts_page = AccountsPage(store, self.accounts)
         self.settings_page = SettingsPage(store, services)
         self.help_page = HelpPage()
-        self.pages = {"download": self.download, "board": self.board,
+        from .automations_page import AutomationsPage
+        self.automations_page = AutomationsPage(self.pipeline)
+        self.pages = {"download": self.download, "board": self.board, "automations": self.automations_page,
                       "accounts": self.accounts_page, "settings": self.settings_page, "help": self.help_page}
 
         self._build_ui()
@@ -161,6 +165,8 @@ class MainWindow(QMainWindow):
         self.banner_text.setWordWrap(True)
         self.banner_btn = QPushButton("Edit Now")
         set_prop(self.banner_btn, "primary")
+        self._banner_action = None
+        self.banner_btn.clicked.connect(lambda: self._banner_action and self._banner_action())
         bl.addWidget(self.banner_text, 1)
         bl.addWidget(self.banner_btn)
         self.banner.setVisible(False)
@@ -219,12 +225,7 @@ class MainWindow(QMainWindow):
         self.banner_text.setText(text)
         self.banner_btn.setVisible(bool(button))
         self.banner_btn.setText(button)
-        try:
-            self.banner_btn.clicked.disconnect()
-        except (RuntimeError, TypeError):
-            pass
-        if on_click is not None:
-            self.banner_btn.clicked.connect(on_click)
+        self._banner_action = on_click
 
     def check_interrupted(self) -> None:
         """Ask about sends that were cut off or missed (every profile)."""
@@ -248,6 +249,8 @@ class MainWindow(QMainWindow):
             self.board.sync()
         elif page is self.accounts_page:
             self.accounts_page.refresh()
+        elif page is self.automations_page:
+            self.automations_page.refresh()
 
     # ---------------------------------------------------------------- profiles
     def _busy_reason(self) -> str:

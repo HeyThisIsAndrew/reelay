@@ -708,6 +708,8 @@ class BoardPage(QWidget):
             columns = self.pipeline.board(self.profile.id)
         except PipelineError:  # profile was just deleted
             return
+        if self._run_rules():
+            columns = self.pipeline.board(self.profile.id)     # rules changed tickets: show the result
         self.cards = {card.id: card for cards in columns.values() for card in cards}
         hits = {h.row_id: h for h in self.store.search(self.profile.id, self.query)} if self.query else {}
         for card in self.cards.values():
@@ -724,6 +726,25 @@ class BoardPage(QWidget):
             self._reselect_bulk()
         else:
             self._reselect()
+
+    def _run_rules(self) -> bool:
+        """Automations: run enabled rules on videos they haven't handled yet. True if any acted."""
+        if getattr(self, "_rules_running", False) or self.store.read_only or not self.profile:
+            return False
+        from .. import rules
+        self._rules_running = True
+        try:
+            entries = rules.run(self.pipeline, self.profile.id)
+        except Exception:  # noqa: BLE001 — a broken rule must never break the board
+            log.exception("Automations failed")
+            return False
+        finally:
+            self._rules_running = False
+        if entries:
+            names = sorted({e["rule"] for e in entries})
+            self._status(f"Automations: {', '.join(names)} acted on {len(entries)} video"
+                         f"{'s' if len(entries) != 1 else ''}. See Automations → Activity.")
+        return bool(entries)
 
     # ---------------------------------------------------------------- filter
     def _matches(self, card: Card) -> bool:
