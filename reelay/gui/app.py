@@ -13,7 +13,7 @@ from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from .. import APP_ID, APP_NAME, __version__
-from ..paths import db_path, log_dir
+from ..paths import log_dir
 from ..services import Services
 from ..store import Store
 from ..tokens import KeyringTokenStore, TokenStore
@@ -42,6 +42,10 @@ def setup_logging() -> None:
 
 def install_excepthook() -> None:
     def hook(exc_type, exc, tb):
+        from ..store import ReadOnlyError
+        if issubclass(exc_type, ReadOnlyError) and QApplication.instance():
+            QMessageBox.information(None, APP_NAME, str(exc))      # view only: not a crash
+            return
         log.error("Unhandled error:\n%s", "".join(traceback.format_exception(exc_type, exc, tb)))
         if QApplication.instance():
             QMessageBox.critical(None, APP_NAME,
@@ -81,12 +85,20 @@ def main() -> int:
         app.setWindowIcon(QIcon(str(icon)))
     install_excepthook()
 
-    store = Store(db_path())
-    interrupted = store.reset_interrupted_uploads()  # pre-dispatcher posts only
-    if interrupted:
-        log.warning("%d upload(s) were interrupted last session", interrupted)
-    window = create_window(app, store, KeyringTokenStore(), start_services=True)
+    from .shared_db import SharedSession, open_database
+    opened = open_database()
+    if opened is None:
+        return 0
+    store, lease = opened
+    if not store.read_only:
+        interrupted = store.reset_interrupted_uploads()  # pre-dispatcher posts only
+        if interrupted:
+            log.warning("%d upload(s) were interrupted last session", interrupted)
+    # View only: no dispatcher and no agent API, so only the computer that's editing ever posts.
+    window = create_window(app, store, KeyringTokenStore(), start_services=not store.read_only)
+    session = SharedSession(window, store, lease)
     app.aboutToQuit.connect(window.services.stop)  # also covers Cmd-Q without a close event
+    app.aboutToQuit.connect(session.stop)
     window.show()
     if window.services.recovery:      # sends a crash or a closed laptop left undecided: ask, don't guess
         QTimer.singleShot(900, window.check_interrupted)

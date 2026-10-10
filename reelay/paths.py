@@ -33,7 +33,10 @@ def data_dir() -> Path:
 
 
 def db_path() -> Path:
-    return data_dir() / "reelay.db"
+    """The database: the default in the data folder, or the location chosen in Settings
+    (e.g. a shared Google Drive folder; see dblocation.py)."""
+    from .dblocation import current_path
+    return current_path()
 
 
 def cache_dir() -> Path:

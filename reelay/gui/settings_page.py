@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
-from PySide6.QtCore import QUrl, Signal
+from PySide6.QtCore import Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QGuiApplication
 from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
                                QPushButton, QScrollArea, QVBoxLayout, QWidget)
@@ -139,8 +140,28 @@ class SettingsPage(QWidget):
         lay.addWidget(card)
 
         card, cl = _card("Data")
-        cl.addWidget(_muted(f"Database and caches: {data_dir()}\nLogs: {log_dir()}\n"
-                            "Sign-in tokens are stored in your system keychain, not in these folders."))
+        self.db_status = _muted("")
+        self.db_status.setTextInteractionFlags(self.db_status.textInteractionFlags() | Qt.TextSelectableByMouse)
+        cl.addWidget(self.db_status)
+        drow = QHBoxLayout()
+        self.move_db_btn = tip(QPushButton("Move Database…"),
+                               "Move Reelay's database to another folder, e.g. a shared Google Drive, Dropbox or "
+                               "iCloud Drive folder so your team can use it. The current file stays as a backup.")
+        self.move_db_btn.clicked.connect(self._move_database)
+        self.open_db_btn = tip(QPushButton("Open Shared Database…"),
+                               "Use a Reelay database a teammate already keeps in a shared folder")
+        self.open_db_btn.clicked.connect(self._open_shared_database)
+        self.local_db_btn = tip(QPushButton("Use This Computer's Database"),
+                                "Go back to the database in Reelay's own folder on this computer")
+        set_prop(self.local_db_btn, "flat")
+        self.local_db_btn.clicked.connect(self._use_local_database)
+        for b in (self.move_db_btn, self.open_db_btn, self.local_db_btn):
+            drow.addWidget(b)
+        drow.addStretch()
+        cl.addLayout(drow)
+        cl.addWidget(_muted(f"Caches: {data_dir()}\nLogs: {log_dir()}\n"
+                            "Sign-in tokens are stored in your system keychain, never in the database, so sharing "
+                            "the database doesn't share anyone's passwords or sign-ins."))
         row = QHBoxLayout()
         for text, path, hint in (("Open Data Folder", data_dir(), "Where Reelay keeps its database and caches"),
                                  ("Open Logs", log_dir(), "Diagnostic logs, useful when reporting a problem")):
@@ -270,7 +291,77 @@ class SettingsPage(QWidget):
         self.assist_status.setText(("✓ " if ok else "") + message)
         set_prop(self.assist_status, "danger", not ok)
 
+    # ---------------------------------------------------------------- database location
+    def _refresh_db(self) -> None:
+        from .. import dblocation
+        path = Path(self.store.path)
+        service = dblocation.synced_service(path)
+        mode = ("<b>View only</b>: " + self.store.read_only_reason + "." if self.store.read_only else
+                "Open for editing on this computer.")
+        shared = (f"In {service}: your team can open it too. One person edits at a time; others see it view "
+                  "only, and only the editing computer posts." if service else
+                  "On this computer only.")
+        self.db_status.setText(f"<b>Database:</b> {path}<br>{shared}<br>{mode}")
+        self.db_status.setTextFormat(Qt.RichText)
+        self.local_db_btn.setVisible(dblocation.configured_path() is not None)
+        self.move_db_btn.setEnabled(not self.store.read_only)
+
+    def _after_db_change(self, message: str) -> None:
+        if QMessageBox.question(self, "Database", message + "\n\nRestart Reelay now to use it?") == QMessageBox.Yes:
+            import sys
+
+            from PySide6.QtCore import QProcess
+            from PySide6.QtWidgets import QApplication
+            QProcess.startDetached(sys.executable, sys.argv[1:] if getattr(sys, "frozen", False) else sys.argv)
+            QApplication.instance().quit()
+        self._refresh_db()
+
+    def _move_database(self) -> None:
+        from PySide6.QtWidgets import QFileDialog
+
+        from .. import dblocation
+        folder = QFileDialog.getExistingDirectory(self, "Move Database To", str(Path.home()))
+        if not folder:
+            return
+        service = dblocation.synced_service(folder)
+        if service and QMessageBox.question(
+                self, "Move Database",
+                f"This folder is in {service}. Anyone you share it with can open this database in Reelay (one "
+                "person edits at a time). Their sign-ins stay on their own computers. Move it there?") \
+                != QMessageBox.Yes:
+            return
+        try:
+            dest = dblocation.move_database(self.store.conn, folder)
+        except dblocation.LocationError as exc:
+            QMessageBox.warning(self, "Move Database", str(exc))
+            return
+        self._after_db_change(f"Copied the database to {dest}. Reelay uses it from the next start; the old copy "
+                              f"stays at {self.store.path} as a backup.")
+
+    def _open_shared_database(self) -> None:
+        from PySide6.QtWidgets import QFileDialog
+
+        from .. import dblocation
+        path, _ = QFileDialog.getOpenFileName(self, "Open Shared Database", str(Path.home()),
+                                              "Reelay database (reelay.db)")
+        if not path:
+            return
+        try:
+            dest = dblocation.open_existing(path)
+        except dblocation.LocationError as exc:
+            QMessageBox.warning(self, "Open Shared Database", str(exc))
+            return
+        self._after_db_change(f"Reelay will open {dest} from the next start. This computer's own database is "
+                              "kept, untouched.")
+
+    def _use_local_database(self) -> None:
+        from .. import dblocation
+        dblocation.set_location(None)
+        self._after_db_change(f"Reelay will use this computer's database ({dblocation.default_path()}) from the "
+                              "next start. The shared one is untouched.")
+
     def refresh(self) -> None:
+        self._refresh_db()
         current = self.store.get_setting("theme", "dark")
         for name, b in self.theme_buttons.items():
             b.setChecked(name == current)

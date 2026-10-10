@@ -316,18 +316,48 @@ def upload_date_iso(yyyymmdd: str) -> str | None:
     return None
 
 
+class ReadOnlyError(Exception):
+    """A write was attempted on a database opened view only (someone else is editing it)."""
+
+
 class Store:
-    def __init__(self, path: Path | str):
+    def __init__(self, path: Path | str, read_only: bool = False):
         self.path = str(path)
+        self.read_only = read_only
+        self.read_only_reason = ""      # e.g. "lydia on Lydia's MacBook Air is editing it"
         self._lock = threading.RLock()
         self._tls = threading.local()
-        self.conn = sqlite3.connect(self.path, check_same_thread=False, timeout=30)
-        self.conn.row_factory = sqlite3.Row
-        self.conn.execute("PRAGMA foreign_keys = ON")
-        if self.path != ":memory:":
-            self.conn.execute("PRAGMA journal_mode = WAL")
-        self._migrate()
         self._listeners: list[Callable[[Change], None]] = []
+        self.conn = self._connect()
+        if not read_only:
+            self._migrate()
+        elif self.conn.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_VERSION:
+            self.conn.close()
+            raise ReadOnlyError("This database was made by a different version of Reelay. Open it for editing "
+                                "once (when no one else has it open) so it can be updated.")
+
+    def _connect(self) -> sqlite3.Connection:
+        if self.read_only:
+            conn = sqlite3.connect(f"file:{self.path}?mode=ro", uri=True, check_same_thread=False, timeout=30)
+        else:
+            conn = sqlite3.connect(self.path, check_same_thread=False, timeout=30)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        if self.path != ":memory:" and not self.read_only:
+            from .dblocation import journal_mode
+            conn.execute(f"PRAGMA journal_mode = {journal_mode(self.path)}")   # one file in synced folders
+        return conn
+
+    def reopen(self) -> None:
+        """Reconnect (a sync service replaced the file underneath us) and tell everyone to reload."""
+        with self._lock:
+            try:
+                self.conn.close()
+            except sqlite3.Error:
+                pass
+            self.conn = self._connect()
+        for entity in ("profile", "video", "post", "dispatch", "setting"):
+            self._deliver([Change(entity, (), None, "remote")])
 
     def _state(self):
         st = self._tls
@@ -480,6 +510,8 @@ class Store:
         return row["value"] if row else default
 
     def set_setting(self, key: str, value: str) -> None:
+        if self.read_only:      # view only: preferences (theme, column widths…) just aren't saved
+            return
         with self.tx() as c:
             c.execute("INSERT INTO settings (key, value) VALUES (?, ?) "
                       "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (key, value))
@@ -1186,6 +1218,12 @@ def _locked(fn):
                 st.depth += 1
                 try:
                     return fn(self, *args, **kwargs)
+                except sqlite3.OperationalError as exc:
+                    if self.read_only and "readonly" in str(exc).replace(" ", "").replace("-", ""):
+                        raise ReadOnlyError("This database is open view only"
+                                            + (f": {self.read_only_reason}" if self.read_only_reason else "")
+                                            + ". Changes can't be saved until you have it for editing.") from None
+                    raise
                 finally:
                     st.depth -= 1
                     if st.depth == 0:
@@ -1198,5 +1236,6 @@ def _locked(fn):
 
 for _name, _attr in list(vars(Store).items()):
     if callable(_attr) and not _name.startswith("__") and _name not in (
-            "tx", "origin", "subscribe", "_state", "_emit", "_deliver") and not isinstance(_attr, staticmethod):
+            "tx", "origin", "subscribe", "_state", "_emit", "_deliver", "_connect", "reopen") and \
+            not isinstance(_attr, staticmethod):
         setattr(Store, _name, _locked(_attr))

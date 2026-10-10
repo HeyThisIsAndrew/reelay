@@ -7,8 +7,8 @@ import re
 
 from PySide6.QtCore import QRectF, QSettings, QSize, Qt, QUrl
 from PySide6.QtGui import QAction, QActionGroup, QColor, QDesktopServices, QFont, QIcon, QKeySequence, QPainter, QPixmap
-from PySide6.QtWidgets import (QApplication, QButtonGroup, QHBoxLayout, QInputDialog, QLabel, QMainWindow, QMenu,
-                               QMessageBox, QPushButton, QStackedWidget, QToolButton, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QApplication, QButtonGroup, QFrame, QHBoxLayout, QInputDialog, QLabel, QMainWindow,
+                               QMenu, QMessageBox, QPushButton, QStackedWidget, QToolButton, QVBoxLayout, QWidget)
 
 from .. import APP_NAME, __version__
 from ..models import Profile
@@ -150,7 +150,23 @@ class MainWindow(QMainWindow):
         for page in self.pages.values():
             self.stack.addWidget(page)
         h.addWidget(self.stack, 1)
-        self.setCentralWidget(root)
+        outer = QWidget()
+        ov = QVBoxLayout(outer)
+        ov.setContentsMargins(0, 0, 0, 0)
+        ov.setSpacing(0)
+        self.banner = QFrame(objectName="Card")
+        bl = QHBoxLayout(self.banner)
+        bl.setContentsMargins(16, 8, 16, 8)
+        self.banner_text = QLabel()
+        self.banner_text.setWordWrap(True)
+        self.banner_btn = QPushButton("Edit Now")
+        set_prop(self.banner_btn, "primary")
+        bl.addWidget(self.banner_text, 1)
+        bl.addWidget(self.banner_btn)
+        self.banner.setVisible(False)
+        ov.addWidget(self.banner)
+        ov.addWidget(root, 1)
+        self.setCentralWidget(outer)
 
     def _build_menu(self) -> None:
         mb = self.menuBar()
@@ -196,6 +212,20 @@ class MainWindow(QMainWindow):
         return a
 
     # ---------------------------------------------------------------- navigation
+    def set_view_only(self, text: str, button: str = "", on_click=None) -> None:
+        """Show (or with text="" hide) the banner across the top, e.g. for a shared database
+        someone else is editing."""
+        self.banner.setVisible(bool(text))
+        self.banner_text.setText(text)
+        self.banner_btn.setVisible(bool(button))
+        self.banner_btn.setText(button)
+        try:
+            self.banner_btn.clicked.disconnect()
+        except (RuntimeError, TypeError):
+            pass
+        if on_click is not None:
+            self.banner_btn.clicked.connect(on_click)
+
     def check_interrupted(self) -> None:
         """Ask about sends that were cut off or missed (every profile)."""
         from .recovery_dialog import RecoveryDialog
