@@ -34,6 +34,7 @@ from .tips import tip
 from .thumbnails import ThumbnailCache
 from .logos import platform_icon
 from .ticket_widgets import PlatformRow, PublishingHistory, ReadinessHeader, TicketDetails
+from .video_widgets import VideoTools
 from .widgets import Collapsible
 
 # Copy sections in the ticket: (platform for the logo, title, copy blocks).
@@ -180,6 +181,7 @@ class PostPanel(QFrame):
         self.readiness_for = None   # callable(Post) -> Readiness, set by the Board
         self.store = None           # set by the Board (writing help remembers your dictionary and model)
         self.stage_name = None      # callable(stage) -> column name, set by the Board
+        self.original_path_for = None   # callable(VideoRow) -> Path | None, set by the Board
         self._readiness_timer = QTimer(self, singleShot=True, interval=200, timeout=self._refresh_readiness)
 
         self.stack = QStackedWidget()
@@ -318,6 +320,17 @@ class PostPanel(QFrame):
         lay.addWidget(self.copied)
         self._copied_timer = QTimer(self, singleShot=True, interval=2500, timeout=lambda: self.copied.setText(""))
 
+        # ---- the video file itself: local edits
+        self.video_tools = VideoTools()
+        self.video_section = Collapsible(
+            "VIDEO", key="video", expanded=False,
+            hint="Remove or replace the sound and add captions, on this computer. Edits make a new copy that "
+                 "Reelay posts instead; the original download is never changed.")
+        self.video_section.add(self.video_tools)
+        self.video_tools.editChanged.connect(lambda _row: (self._refresh_video_summary(),
+                                                            self._readiness_timer.start()))
+        lay.addWidget(self.video_section)
+
         # ---- automatic posting
         self.form = QWidget()
         fl = QVBoxLayout(self.form)
@@ -413,6 +426,9 @@ class PostPanel(QFrame):
         scroll.setWidget(body)
         return scroll
 
+    def _refresh_video_summary(self) -> None:
+        self.video_section.set_summary(self.video_tools.summary() if self.card else "")
+
     # ---------------------------------------------------------------- state
     def set_enabled_platforms(self, enabled: frozenset[str]) -> None:
         """Platforms Reelay may post to automatically; the others are copy-paste only."""
@@ -441,6 +457,11 @@ class PostPanel(QFrame):
         self.meta.setText(" · ".join(b for b in bits if b and b != "—"))
         name = self.stage_name(card.row.stage) if self.stage_name else Stage.LABELS.get(card.row.stage, card.row.stage)
         self.stage_label.setText(f"In {name}")
+
+        original = self.original_path_for(card.row) if self.original_path_for else None
+        if not same or original != self.video_tools.original:
+            self.video_tools.set_video(self.store, card.id, original)
+        self._refresh_video_summary()
 
         post = card.post or default_post(card.id, item, accounts[0].id if accounts else None)
         locked = self._locked()

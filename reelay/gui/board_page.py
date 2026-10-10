@@ -487,6 +487,8 @@ class BoardPage(QWidget):
         self.panel.readiness_for = lambda post: self.pipeline.readiness(post.video_row, post)
         self.panel.stage_name = self.stage_name
         self.panel.store = self.store
+        self.panel.original_path_for = self.pipeline.original_path
+        self.panel.video_tools.message.connect(self._status)
         self.panel.ticketFieldCommitted.connect(self._commit_ticket_field)
         self.panel.markPostedRequested.connect(self._mark_posted)
         self.panel.unmarkRequested.connect(self._unmark_posted)
@@ -1189,5 +1191,6 @@ class BoardPage(QWidget):
         self._closed = True
         self._reload_timer.stop()
         self._advance_timer.stop()
+        self.panel.video_tools.shutdown()
         if self.sync_worker:
             self.sync_worker.wait(3000)

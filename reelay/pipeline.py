@@ -212,6 +212,11 @@ class Pipeline:
         return self.store.get_setting("add_shorts", "1") == "1"
 
     def video_path(self, row: VideoRow) -> Path | None:
+        """The file to post: the edited version from the ticket's Video tools, else the download."""
+        from .video_tools import edited_path
+        return edited_path(self.store, row.id) or self.original_path(row)
+
+    def original_path(self, row: VideoRow) -> Path | None:
         return row.item.path(self._profile(row.profile_id).output_folder)
 
     def post_or_default(self, row: VideoRow) -> tuple[Post, bool]:
