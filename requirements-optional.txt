@@ -1,0 +1,13 @@
+# Optional extras for power users. Reelay works without any of these.
+
+# Full offline grammar checking (needs Java installed; first run downloads LanguageTool, ~250 MB)
+language_tool_python>=2.8
+
+# Rewrite captions with a local .gguf model instead of Ollama (compiles native code on install)
+llama-cpp-python>=0.3
+
+# Burn-in captions: local speech-to-text (downloads a Whisper model on first use)
+faster-whisper>=1.0
+
+# Assisted posting to TikTok / Instagram in a visible browser (then run: playwright install chromium)
+playwright>=1.45

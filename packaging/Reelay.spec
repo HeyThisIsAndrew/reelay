@@ -33,6 +33,9 @@ for pkg in ("curl_cffi",):
 # yt-dlp ships its own PyInstaller hook; its JS challenge solver is data-only.
 datas += collect_data_files("yt_dlp_ejs")
 
+# The writing helper's offline spelling dictionaries.
+datas += collect_data_files("spellchecker")
+
 # keyring finds its OS backends through package metadata + submodules.
 from PyInstaller.utils.hooks import collect_submodules, copy_metadata  # noqa: E402
 

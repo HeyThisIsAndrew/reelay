@@ -486,6 +486,7 @@ class BoardPage(QWidget):
         self.panel.connectRequested.connect(self.openAccounts.emit)
         self.panel.readiness_for = lambda post: self.pipeline.readiness(post.video_row, post)
         self.panel.stage_name = self.stage_name
+        self.panel.store = self.store
         self.panel.ticketFieldCommitted.connect(self._commit_ticket_field)
         self.panel.markPostedRequested.connect(self._mark_posted)
         self.panel.unmarkRequested.connect(self._unmark_posted)

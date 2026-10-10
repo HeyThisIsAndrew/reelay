@@ -92,7 +92,7 @@ BLOCK_TIPS = {
 class CopyBlock(QWidget):
     """Label + live count + Copy button over an editor."""
 
-    def __init__(self, key: str, label: str, multiline: bool, placeholder: str, on_copy, on_change):
+    def __init__(self, key: str, label: str, multiline: bool, placeholder: str, on_copy, on_change, on_assist=None):
         super().__init__()
         self.key = key
         lay = QVBoxLayout(self)
@@ -110,6 +110,18 @@ class CopyBlock(QWidget):
         set_prop(self.copy_btn, "flat")
         tip(self.copy_btn, "Copy this text so you can paste it into the app or website")
         self.copy_btn.clicked.connect(lambda: on_copy(self))
+        if on_assist is not None and key != "tags":
+            from PySide6.QtWidgets import QMenu, QToolButton
+            self.assist_btn = QToolButton(text="Assist ▾")
+            self.assist_btn.setPopupMode(QToolButton.InstantPopup)
+            self.assist_btn.setAutoRaise(True)
+            tip(self.assist_btn, "Free writing help on this computer: check spelling and grammar, or rewrite with "
+                                 "a local AI model. Nothing is sent to a paid service.")
+            menu = QMenu(self.assist_btn)
+            menu.addAction("Check Spelling & Grammar…", lambda: on_assist(self, "check"))
+            menu.addAction("Rewrite with Local AI…", lambda: on_assist(self, "rewrite"))
+            self.assist_btn.setMenu(menu)
+            head.addWidget(self.assist_btn)
         head.addWidget(self.copy_btn)
         lay.addLayout(head)
         if multiline:
@@ -166,6 +178,7 @@ class PostPanel(QFrame):
         self.accounts: list[Account] = []
         self.enabled: frozenset[str] = frozenset({Platform.YOUTUBE})
         self.readiness_for = None   # callable(Post) -> Readiness, set by the Board
+        self.store = None           # set by the Board (writing help remembers your dictionary and model)
         self.stage_name = None      # callable(stage) -> column name, set by the Board
         self._readiness_timer = QTimer(self, singleShot=True, interval=200, timeout=self._refresh_readiness)
 
@@ -288,9 +301,16 @@ class PostPanel(QFrame):
                                        "against the limit.")
             for key in keys:
                 label, multiline, placeholder = specs[key]
-                block = CopyBlock(key, label, multiline, placeholder, self._copy, self._update_counts)
+                block = CopyBlock(key, label, multiline, placeholder, self._copy, self._update_counts, self._assist)
                 self.blocks[key] = block
                 section.add(block)
+            if platform == Platform.YOUTUBE:
+                seo = tip(QPushButton("Get SEO Suggestions"), "Keyword ideas from YouTube search, a score for the "
+                                                              "title and tags, and one-click tags. Free.")
+                set_prop(seo, "flat")
+                seo.clicked.connect(self._seo)
+                section.add(seo)
+                self.seo_btn = seo
             self.copy_sections[platform or "hashtags"] = section
             lay.addWidget(section)
         self.copied = QLabel()
@@ -545,6 +565,46 @@ class PostPanel(QFrame):
             else:
                 section.set_summary(" · ".join(b[k].counter.text() for k in keys if b[k].text().strip()))
         self._readiness_timer.start()
+
+    # ---------------------------------------------------------------- writing help & SEO
+    LIMITS = {"title": (TITLE_MAX, len), "description": (DESCRIPTION_MAX_BYTES, lambda t: len(t.encode("utf-8"))),
+              "tiktok_text": (TIKTOK_MAX_CHARS, len), "instagram_text": (INSTAGRAM_MAX_CHARS, len),
+              "bluesky_text": (BLUESKY_MAX_GRAPHEMES, grapheme_count),
+              "threads_text": (THREADS_MAX_CHARS, threads_length), "facebook_text": (FACEBOOK_MAX_CHARS, len),
+              "hashtags": (None, len)}
+
+    def _assist(self, block: CopyBlock, action: str) -> None:
+        from .assist_dialogs import GrammarDialog, RewriteDialog
+        if self.store is None or block.editor.isReadOnly():
+            return
+        label = next(lbl for key, lbl, _m, _p in BLOCKS if key == block.key).title()
+        if not block.text().strip():
+            self.copied.setText("Write something first; the helper works on what's there.")
+            self._copied_timer.start()
+            return
+        if action == "check":
+            dialog = GrammarDialog(block.text(), self.store, label, self)
+            if dialog.exec() == GrammarDialog.Accepted and dialog.text != block.text():
+                block.set_text(dialog.text)
+        else:
+            limit, counter = self.LIMITS.get(block.key, (None, len))
+            dialog = RewriteDialog(block.text(), self.store, label, limit, counter, self)
+            if dialog.exec() == RewriteDialog.Accepted and dialog.value():
+                block.set_text(dialog.value())
+
+    def _seo(self) -> None:
+        from .assist_dialogs import SEODialog
+        from ..seo import seeds
+        if self.card is None:
+            return
+        b = self.blocks
+        tags = [t.strip().lstrip("#") for t in b["tags"].text().split(",") if t.strip()]
+        ticket = self.card.row.ticket
+        seed_list = seeds(b["title"].text(), ticket.topic or "", ticket.keywords or "", self.card.row.item.hashtags)
+        dialog = SEODialog(b["title"].text(), tags, b["description"].text(), seed_list, self)
+        if dialog.exec() == SEODialog.Accepted and dialog.chosen():
+            merged = tags + [t for t in dialog.chosen() if t.lower() not in {x.lower() for x in tags}]
+            b["tags"].set_text(", ".join(merged))
 
     def _copy(self, block: CopyBlock) -> None:
         """Copy a block; empty platform blocks copy what Reelay would use instead."""

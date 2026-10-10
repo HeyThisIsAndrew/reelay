@@ -15,7 +15,7 @@ from ..models import Platform
 from ..paths import data_dir, log_dir
 from ..store import Store
 from . import tips
-from .theme import THEMES
+from .theme import THEMES, set_prop
 from .tips import tip
 
 
@@ -104,6 +104,8 @@ class SettingsPage(QWidget):
                             "awake then."))
         lay.addWidget(card)
 
+        self._build_assist_card(lay)
+
         card, cl = _card("AI agents (advanced)")
         cl.addWidget(_muted("Lets AI assistants you run on this Mac read your board, make edits and schedule posts. "
                             "Only programs that have the access key below can use it, and it only listens on this "
@@ -154,6 +156,117 @@ class SettingsPage(QWidget):
         lay.addStretch()
         self.refresh()
 
+    # ---------------------------------------------------------------- local AI helper
+    def _build_assist_card(self, lay) -> None:
+        from PySide6.QtWidgets import QComboBox, QFileDialog
+
+        from .. import assist
+        card, cl = _card("Local AI helper")
+        ok, why = assist.languagetool_available()
+        cl.addWidget(_muted("Free writing help that runs on this computer: no paid AI service, no tokens. "
+                            "Use it from the Assist ▾ menu on any caption."))
+        self.grammar_status = _muted("Spelling & grammar: " + ("LanguageTool (offline, full grammar)." if ok else
+                                     "built-in spelling check. " + why))
+        cl.addWidget(self.grammar_status)
+        row = QHBoxLayout()
+        row.addWidget(_muted("Rewriting with"))
+        self.assist_engine = tip(QComboBox(), "Which local model runner rewrites captions")
+        for key, label in (("ollama", "Ollama (recommended)"), ("llamacpp", "llama.cpp model file"), ("off", "Off")):
+            self.assist_engine.addItem(label, key)
+        row.addWidget(self.assist_engine)
+        row.addStretch()
+        cl.addLayout(row)
+        self.ollama_row = QWidget()
+        orow = QHBoxLayout(self.ollama_row)
+        orow.setContentsMargins(0, 0, 0, 0)
+        self.ollama_url = tip(QLineEdit(), "Where Ollama listens (normally this computer)")
+        self.ollama_url.setPlaceholderText(assist.DEFAULT_OLLAMA_URL)
+        self.assist_model = tip(QComboBox(), "The model to use. Small 1B–3B models are fast; llama3.2:3b is a "
+                                             "good start (`ollama pull llama3.2:3b`).")
+        self.assist_model.setEditable(True)
+        self.assist_model.setMinimumWidth(200)
+        orow.addWidget(self.ollama_url, 1)
+        orow.addWidget(self.assist_model)
+        cl.addWidget(self.ollama_row)
+        self.llama_row = QWidget()
+        lrow = QHBoxLayout(self.llama_row)
+        lrow.setContentsMargins(0, 0, 0, 0)
+        self.llama_path = tip(QLineEdit(), "A .gguf model file on this computer")
+        self.llama_path.setPlaceholderText("Choose a .gguf model file…")
+        pick = tip(QPushButton("Choose…"), "Pick a .gguf model file")
+        pick.clicked.connect(lambda: self._pick_model(QFileDialog))
+        lrow.addWidget(self.llama_path, 1)
+        lrow.addWidget(pick)
+        cl.addWidget(self.llama_row)
+        trow = QHBoxLayout()
+        self.assist_test = tip(QPushButton("Test"), "Check that the local model is ready")
+        self.assist_test.clicked.connect(self._test_assist)
+        get = tip(QPushButton("Get Ollama…"), "Download Ollama, the free app that runs AI models locally")
+        set_prop(get, "flat")
+        get.clicked.connect(lambda: QDesktopServices.openUrl(QUrl("https://ollama.com/download")))
+        trow.addWidget(self.assist_test)
+        trow.addWidget(get)
+        trow.addStretch()
+        cl.addLayout(trow)
+        self.assist_status = _muted("")
+        cl.addWidget(self.assist_status)
+        self.assist_engine.currentIndexChanged.connect(self._save_assist)
+        self.ollama_url.editingFinished.connect(self._save_assist)
+        self.assist_model.currentTextChanged.connect(lambda _t: self._save_assist())
+        self.llama_path.editingFinished.connect(self._save_assist)
+        lay.addWidget(card)
+
+    def _pick_model(self, dialog_cls) -> None:
+        path, _ = dialog_cls.getOpenFileName(self, "Choose a Model File", "", "GGUF models (*.gguf)")
+        if path:
+            self.llama_path.setText(path)
+            self._save_assist()
+
+    def _refresh_assist(self) -> None:
+        from .. import assist
+        widgets = (self.assist_engine, self.ollama_url, self.assist_model, self.llama_path)
+        for w in widgets:
+            w.blockSignals(True)
+        engine = self.store.get_setting(assist.SETTINGS["engine"], "ollama")
+        self.assist_engine.setCurrentIndex(max(self.assist_engine.findData(engine), 0))
+        self.ollama_url.setText(self.store.get_setting(assist.SETTINGS["ollama_url"], ""))
+        model = self.store.get_setting(assist.SETTINGS["model"], assist.DEFAULT_MODEL) or assist.DEFAULT_MODEL
+        if self.assist_model.findText(model) < 0:
+            self.assist_model.addItem(model)
+        self.assist_model.setCurrentText(model)
+        self.llama_path.setText(self.store.get_setting(assist.SETTINGS["llamacpp_path"], ""))
+        for w in widgets:
+            w.blockSignals(False)
+        self.ollama_row.setVisible(engine == "ollama")
+        self.llama_row.setVisible(engine == "llamacpp")
+        self.assist_test.setEnabled(engine != "off")
+
+    def _save_assist(self) -> None:
+        from .. import assist
+        self.store.set_setting(assist.SETTINGS["engine"], self.assist_engine.currentData())
+        self.store.set_setting(assist.SETTINGS["ollama_url"], self.ollama_url.text().strip())
+        self.store.set_setting(assist.SETTINGS["model"], self.assist_model.currentText().strip())
+        self.store.set_setting(assist.SETTINGS["llamacpp_path"], self.llama_path.text().strip())
+        self._refresh_assist()
+
+    def _test_assist(self) -> None:
+        from .. import assist
+        rewriter = assist.rewriter_from(self.store)
+        if rewriter is None:
+            self.assist_status.setText("Rewriting is off.")
+            return
+        ok, message = rewriter.status()
+        if ok and isinstance(rewriter, assist.OllamaRewriter):
+            try:
+                names = rewriter.models()
+                for name in names:
+                    if self.assist_model.findText(name) < 0:
+                        self.assist_model.addItem(name)
+            except assist.AssistError:
+                pass
+        self.assist_status.setText(("✓ " if ok else "") + message)
+        set_prop(self.assist_status, "danger", not ok)
+
     def refresh(self) -> None:
         current = self.store.get_setting("theme", "dark")
         for name, b in self.theme_buttons.items():
@@ -166,6 +279,7 @@ class SettingsPage(QWidget):
         self.tips_box.blockSignals(False)
         self._refresh_flags()
         self._refresh_api()
+        self._refresh_assist()
 
     def _refresh_flags(self) -> None:
         running = self.services.enabled if self.services else frozenset()
