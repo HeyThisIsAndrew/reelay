@@ -47,12 +47,22 @@ def run() -> int:
         return type(backend).__name__
 
     def database():
+        from .models import VideoItem
         from .store import Store
         with tempfile.TemporaryDirectory() as tmp:
             store = Store(Path(tmp) / "t.db")
-            store.create_profile("check", tmp)
+            profile = store.create_profile("check", tmp)
+            row = store.save_video(profile.id, VideoItem(platform="TikTok", video_id="1", url="u"))
+            store.update_ticket(row, {"transcript": "polarized sunglasses"})
+            assert store.search(profile.id, "sungl"), "full-text search (FTS5) isn't working"
             store.close()
-        return "ok"
+        return "ok, with full-text search"
+
+    def captions():
+        from .video_tools import ffmpeg_for
+        path = ffmpeg_for(captions=True)
+        assert path, "no ffmpeg that can draw captions (libass)"
+        return path
 
     def qt():
         from PySide6.QtGui import QImageReader
@@ -90,7 +100,8 @@ def run() -> int:
         return f"{len(text.splitlines())} lines, offline"
 
     for name, fn in (("yt-dlp", ytdlp), ("TikTok impersonation", impersonation), ("ffmpeg", ffmpeg),
-                     ("Keychain", keychain), ("Database", database), ("Qt image plugins", qt),
+                     ("Caption burning", captions), ("Keychain", keychain), ("Database", database),
+                     ("Qt image plugins", qt),
                      ("Agent API server", agent_api), ("Help page", help_page)):
         check(name, fn)
 

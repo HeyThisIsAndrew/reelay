@@ -73,8 +73,15 @@ Click a card to open its ticket:
   - **Scheduled:** you scheduled it in that platform's own app. Reelay asks when it goes live.
   - **Posted:** it's live.
 
+  **Publish…** (next to TikTok, Instagram and any platform Reelay doesn't post to for you) starts **Prepare to Publish**; see below.
+
   The card moves by itself. When every platform it's going to is scheduled or live, it moves to **Scheduled**; when every one is live (a scheduled time passing counts), it moves to **Published**. Unticking a box moves it back. Platforms Reelay posts itself (like YouTube) update on their own.
-- **On the Board,** each card shows its platforms' logos: faded means not scheduled yet, solid means scheduled, a green dot means live, and a red dot means failed. Hover a card for the details.
+- **On the Board,** each card shows a **coverage map**: every platform's logo, always in the same order, with a badge:
+  - green ✓ **published**, blue clock **scheduled**, amber dot **ready to publish**;
+  - red ! **needs work** (a missing caption, a missing file, a failed or interrupted post);
+  - a faint logo with no badge means it isn't going there.
+
+  The line under the logos says what needs doing. Hover a card for each platform's details.
 - **Captions.** Each platform's copy is in its own section, with its logo. Click a section's name to open or close it; the right side shows its length against the limit, "empty", or "⚠ too long". Reelay remembers which sections you keep open. Each box has a **Copy** button and a live count. Red means the text is too long, and Reelay never cuts your text short.
   - An empty TikTok, Instagram or Facebook box copies the YouTube description instead.
   - An empty Bluesky or Threads box copies the title, plus the description if it fits.
@@ -93,11 +100,39 @@ Click a card to open its ticket:
   - **Safe by default.** Empty cells never erase anything, only empty fields are filled unless you tick *Replace what's already filled in*, and rows with a problem (like a caption over a limit) are skipped and explained.
   - **All at once.** The import lands in one go, or not at all.
 
+### Prepare to Publish (TikTok, Instagram)
+
+TikTok and Instagram don't let apps post a creator's videos with their sounds, tags and shop links, so you post in their own uploader, and Reelay does everything around it. Click **Publish…** on the platform's row:
+
+1. Reelay checks the video file and the caption (length, hashtag limits).
+2. **Copy Caption, Open TikTok & Show Video** copies the caption (with your hashtag block), opens the upload page in your browser, and shows the video file selected in Finder, ready to drag in.
+3. Post (or schedule) it there, then paste the post's link back into Reelay (Share → Copy link) and click **Record as Published**. Reelay saves the link and the time, and the card moves on.
+
+### Writing help (Assist ▾)
+
+Every caption box has an **Assist ▾** menu. It runs on this computer: no paid AI service, nothing sent anywhere.
+
+- **Check Spelling & Grammar** lists possible mistakes; click a suggestion to fix it. Hashtags, @handles and links are left alone. **Add to Dictionary** teaches it your slang and names. Full grammar checking needs the free LanguageTool add-on (see Settings → Local AI helper).
+- **Rewrite** suggests a shorter, friendlier or punchier version, or one with a call to action, using a free local model through Ollama (Settings → Local AI helper). You always see the suggestion first and can edit it.
+- **Brand voice** (Settings → Brand voice) tells the helper how you sound: tone, words to avoid, default hashtags and a few example captions. Rewrites follow it, add a "In our brand voice" option, and flag any avoided word. **Fill Empty from Original Post** uses the default hashtags when the original has none.
+- **Get SEO Suggestions** (in the YouTube section) shows what people type into YouTube's search box for your topic, scores the title and tags with tips, and adds the phrases you tick as tags.
+
+### Video tools
+
+The ticket's **VIDEO** section edits the file on this computer:
+
+- **Remove Sound** makes a silent copy, e.g. to drop a TikTok trending sound before posting elsewhere.
+- **Replace Sound…** adds music you have the rights to (royalty-free or your own), looped to the video's length, with the original sound kept quietly underneath if you like.
+- **Add Captions…** draws captions onto the video from a caption file (.srt, .vtt or .ass from CapCut, Premiere or YouTube Studio), or makes them automatically if the free faster-whisper add-on is installed.
+
+Edits never change the original download: they make one edited copy, and Reelay posts that copy until you click **Use Original**.
+
 ### Working on many tickets
 
 - **⌘-click or Shift-click** cards in a column to select several. The side panel then sets the same permission, type, topic, keywords, creator or hashtags on all of them at once, fills them from their original posts, gets their transcripts, or archives them.
 - **Right-click a card** for the same actions on one card or the selection.
-- **Search tickets** and **All hashtags ▾** (under the Board's title) find tickets by any words in their copy, topic or keywords, or by a hashtag from the caption or the ticket's hashtag block.
+- **Search** (under the Board's title) finds videos by any words in their title, original caption, any platform's copy, topic, keywords, notes, **and anything said in the video** (its transcript). Words match as you type ("sungl" finds "sunglasses"); put "quotes" around an exact phrase. A card found by what was said shows the quote. Get transcripts with **Get from Original Post**, or type or paste them into Details.
+- **All hashtags ▾**, **All brands ▾** and **All products ▾** narrow the Board to a hashtag, or to a TikTok Shop brand or product tagged in the video.
 - **Show: …** narrows the Board to tickets that are ready, not ready, or blocked on a particular platform. Each column shows how many of its cards are visible ("3 of 12").
 - **Archive** hides videos from the Board and the Download page without deleting anything. **Archived…** brings them back.
 - **Change History…** lists every saved change. Highlight one and click **Restore the Earlier Value** to undo it. The undo is saved as a new change, so nothing is ever lost.
@@ -111,13 +146,38 @@ Tick the platforms under **Post automatically to**, choose who can see it and wh
 
 **Check YouTube for Updates** moves cards to Published once YouTube shows them as live.
 
+**If Reelay is interrupted.** Every send is written down before it starts, so nothing vanishes when Reelay is closed, crashes, loses power or the Mac sleeps:
+
+- Closing Reelay during a YouTube upload pauses it; it carries on next time Reelay opens.
+- If Reelay stopped in the middle of sending and can't know whether the post went out, it doesn't guess, because guessing could post twice. The card shows **⚠ Interrupted**, and Reelay asks when it opens: **Try Again**, **It Was Posted** (paste the link) or **Cancel It**. Bluesky and Threads posts carry on by themselves: Reelay can check whether they went out.
+- A post whose time passed while Reelay was closed (or the Mac was asleep) would now go out late, so Reelay asks first: **Post Now**, **It Was Posted** or **Cancel It**. YouTube and Facebook posts that those platforms are already holding still go out on time.
+
+---
+
+## Automations
+
+**Automations** (in the sidebar) are rules that work your tickets for you, for example: *when a video is added to the board, if its caption mentions "sunglasses", fill the TikTok caption from a template, add #summer, and schedule it for next Tuesday at 9:00.*
+
+- **When:** a video is added to the board, or moved to a column.
+- **If:** words in the caption or copy, the title, a hashtag, a tagged product or brand, the length, or where it came from (all of them, or any).
+- **Then:** fill an empty field from a template (placeholders: {hook} {caption} {hashtags} {title} {topic} {creator}), add hashtags, choose platforms, set a ticket field, move to a column, or schedule for the next weekday at a time.
+
+Rules are careful:
+
+- Each rule acts on a video once, so it never undoes your edits.
+- A new rule never touches videos already on the board. **Run on Existing Videos…** does that on purpose, after showing how many match.
+- Templates only fill empty fields.
+- Scheduling only happens if the ticket is ready.
+- **Activity** lists everything rules did.
+
 ---
 
 ## Connecting accounts (Accounts)
 
 Each platform has different rules for apps like Reelay:
 
-- **YouTube:** Google requires a free Google Cloud project that you own. Click **Set Up YouTube…** for a five-step guide (about five minutes, once). After that, connecting a channel is just **Sign in with Google**.
+- **Sign in with…** buttons appear for platforms where Reelay's own sign-in is set up: you just sign in with your account, and Reelay is allowed to post and read your analytics. Where they don't appear, use the steps below.
+- **YouTube:** without Reelay's sign-in, Google requires a free Google Cloud project that you own. Click **Set Up YouTube…** for a five-step guide (about five minutes, once). After that, connecting a channel is just **Sign in with Google**.
   - While your project is in *Testing*, Google signs you out every 7 days.
   - Uploads stay private until the project passes YouTube's free API compliance audit.
 - **Bluesky:** connect with an **App Password**, a separate password just for Reelay. Bluesky doesn't offer a sign-in page for apps.
@@ -128,6 +188,17 @@ Each platform has different rules for apps like Reelay:
 Automatic posting to Bluesky, Threads and Facebook is off until you turn it on in **Settings**.
 
 Passwords and tokens are kept in your Mac's Keychain (or Windows Credential Manager), never in files.
+
+---
+
+## Sharing the database with your team
+
+**Settings → Data → Move Database…** moves Reelay's database into a folder you choose: for example a shared Google Drive, Dropbox or iCloud Drive folder, so teammates can open the same board from their computers (**Open Shared Database…**).
+
+- **One person edits at a time.** Whoever opens it first can edit. Anyone else opens it **view only**: they see every change as it syncs, but can't edit, and nothing is posted from their computer, so a video is never sent twice. When the editor quits, **Edit Now** appears.
+- **Take Over** is there for when someone forgot to quit. Their Reelay stops and closes, so you don't overwrite each other's work.
+- Sign-ins and passwords stay in each person's own keychain: sharing the database never shares them.
+- The old copy stays where it was as a backup. **Use This Computer's Database** switches back.
 
 ---
 
@@ -155,5 +226,6 @@ Reelay can let AI assistants on this Mac read your board, edit tickets and sched
 ## Where things are kept
 
 - **Videos:** the folder shown next to **Save videos to** on the Download page.
-- **Database and caches:** **Settings → Open Data Folder**.
+- **Database:** shown at the top of **Settings → Data** (it can live in a shared folder; see above).
+- **Caches:** **Settings → Open Data Folder**.
 - **Passwords and tokens:** your system keychain.

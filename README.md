@@ -66,7 +66,8 @@ It's a native desktop app for macOS (Windows builds included) in a monotone Ligh
 - **Platform tags.** Every ticket has a row per platform (YouTube, TikTok, Instagram, Bluesky, Threads, Facebook), each with its logo and one choice: **Not posting / Preparing / Scheduled** (asks when it goes live) **/ Posted**.
   - **Cards move themselves:** to Scheduled once every Going platform is scheduled or live, and to Published once every one is live. A scheduled time passing counts as live, and unticking moves a card back.
   - **When it's checked:** every minute, by the background dispatcher, whether the app is open or running headless. Facebook posts that Reelay scheduled count as live once their time passes; YouTube is still confirmed with YouTube.
-  - **On the Board,** cards show the logos: faded = to do, solid = scheduled, green dot = live, red dot = failed.
+  - **Coverage map:** every card shows all six platforms in a fixed order: green ✓ published, blue clock scheduled, amber ready to publish, red ! needs work (missing caption or file, failed or interrupted), faint = not going there. The card's status line names what needs work (`coverage.py`; the API returns `coverage` per platform).
+- **Prepare to Publish** (TikTok, Instagram and any platform Reelay isn't posting itself): checks the file and caption, copies the caption, opens the platform's uploader, shows the .mp4 selected in Finder/Explorer, then records the pasted post link and time (`handoff.py`). The person posts in the real uploader, which keeps sounds, tags and Shop links.
 - **Collapsible ticket sections:** each platform's copy has its own section with its logo, its count against the limit in the header, and remembered open/closed state.
 - **Readiness.** The top of every ticket shows a per-platform checklist (✓ ready or ⚠ blocking) and a **READY / NOT READY** badge. The checks:
   - each platform's own copy is written: YouTube's title and description, and the Bluesky, Threads and Facebook posts;
@@ -90,10 +91,17 @@ It's a native desktop app for macOS (Windows builds included) in a monotone Ligh
 - **Change History** can restore any earlier value. The restore is logged as a new change.
 - **Post automatically to** sends the video to YouTube (resumable, with progress) with a `publishAt` time, so YouTube publishes it even when Reelay is closed. Only platforms with automatic posting turned on are offered.
 - **Check YouTube for Updates** moves cards to Published once they go live.
+- **Archive search** (schema v8): an SQLite FTS5 index over every video's title, original caption, **transcript**, every platform's copy, tags, topic, keywords and notes, kept current by triggers. The Board's search uses it (prefix matching, "exact phrases"), and a card found by spoken words shows the quote. `GET /v1/search`.
+- **Writing help, locally:** an **Assist ▾** menu on every caption: spelling and grammar (built-in, or LanguageTool when installed), rewrites through a local model (Ollama or a llama.cpp `.gguf`), and **brand voice** profiles (tone, words to avoid, default hashtags, guidance) sent as the model's system prompt. **Get SEO Suggestions** uses YouTube's search suggestions and scores the title and tags. No paid AI, no tokens.
+- **Video tools** (ffmpeg, on this computer): remove the sound, replace it with a track you have rights to, burn in captions from a .srt/.vtt/.ass (or from faster-whisper when installed). Edits write `<name>.edited.mp4`; the original is never changed, and the edited copy is what gets posted until **Use Original**.
+- **Automations:** when/if/then rules (Automations page; `rules.py`). Triggers: added to the board, moved to a column. Conditions: caption, title, hashtag, product/brand, length, source. Actions: fill an empty field from a template, add hashtags, set platforms, set a ticket field, move, schedule for the next weekday. Once per video per rule, never on existing videos unless asked, templates never overwrite, scheduling respects the Ready gate, and everything is logged.
+- **Durable sends:** every send is recorded before it runs. Closing mid-upload pauses it (continues next launch). A send cut off by a crash or power loss, or one whose time passed while Reelay was closed or asleep, becomes **interrupted** and waits for a person (**Try Again / It Was Posted / Cancel**), never retried blindly. Bluesky and Threads resume by checkpoint.
 
 **Profiles and accounts**
 - Each creator gets a profile with their own library folder, board and connected channels. Switch profiles from the sidebar avatar (or ⌘⌥1–9). **My Channel** (the first profile) opens by default; other profiles stay as they are.
 - You can connect several YouTube channels per profile through Google sign-in. Tokens are kept in the macOS Keychain or Windows Credential Manager, never in files.
+- **Central sign-in** (`oauth.py`, `oauth_config.py`, `server/auth_broker.py`): once Reelay's own apps are registered with each platform (client IDs via `REELAY_*_CLIENT_ID` env or `oauth_config.DEFAULTS`) and the small auth broker is deployed, **Sign in with Google / TikTok / Instagram / Facebook / Threads** buttons appear, with analytics scopes included. Until then the existing bring-your-own-project setup (YouTube setup guide, Meta tokens, Bluesky App Password) stays exactly as it was.
+- **Shared database:** Settings → Data can move the database into Google Drive, Dropbox, iCloud Drive or OneDrive (SQLite backup API, checked copy) or open one a teammate shares. In synced folders it uses a single-file journal, and a heartbeat lock file allows one editor at a time; everyone else is **view only** (no dispatcher, no API, so only one computer posts) and reloads as the file syncs (`dblocation.py`, `gui/shared_db.py`).
 - **Channel Schedule** shows a channel's latest uploads, including private and scheduled ones.
 
 ## Running from source
@@ -212,7 +220,9 @@ For a stable address, create a named tunnel in the Cloudflare dashboard. Every `
 | `POST /v1/videos/{id}/archive`, `…/unarchive` | Hides or restores a video. `GET /v1/board?archived=true` lists archived ones. `409` while it's scheduled or uploading. |
 | `POST /v1/videos/{id}/revisions/{revision_id}/restore` | Puts a field back to its value before that change (logged as a new change). |
 | `PATCH /v1/sources/{id}`, `DELETE /v1/sources/{id}` | Rename a saved source or mark it as yours; remove it (`204`). Connected channels are managed in the app. |
-| `POST /v1/videos/{id}/platforms/{platform}` | Ticks a platform's tag: `{"state": "scheduled", "at": "…"}`, `{"state": "posted"}` or `{"state": "none"}`. The card then moves on its own. Videos carry `platform_states`, and `target_platforms` accepts all six platforms. |
+| `POST /v1/videos/{id}/platforms/{platform}` | Ticks a platform's tag: `{"state": "scheduled", "at": "…"}`, `{"state": "posted", "url": "…"}` or `{"state": "none"}`. A `url` must be on that platform's site (Prepare to Publish). The card then moves on its own. Videos carry `platform_states` and `coverage`, and `target_platforms` accepts all six platforms. |
+| `GET /v1/search?profile=…&q=…` | Full-text search of the archive, including transcripts: results best first, each with `spoken` (found in what was said), a `snippet` with «matches», and the `video`. |
+| `POST /v1/videos/{id}/publications/{platform}/resolve` | For an `interrupted` publication: `{"action": "retry" \| "posted" \| "cancel", "url": "…"}`. `409` if it isn't interrupted. |
 | `GET /v1/videos/{id}/revisions` | The ticket's change log, newest first: `at`, `origin` (`local` = the app, `api` = an agent), `field`, `old_value` and `new_value`. |
 | `POST /v1/videos/{id}/manual-posts` | Records a post made by hand: `{"platform": "tiktok", "posted_at": "…" (optional, not in the future), "url": "…", "note": "…"}`. Returns `201`. It doesn't post anything or move the card. |
 | `GET /v1/sources?profile=…` | The profile's download sources: connected YouTube channels (`kind: "account"`, with an `account` reference) and saved profile links (`kind: "saved"`, with `url`, `mine`, `last_fetched_at`). Duplicates are listed as stored. |
@@ -226,7 +236,7 @@ Errors always come back as `{"detail": "…", "code": "…", "problems": […]}`
 | 400 | Missing or unknown profile |
 | 401 | Missing or invalid token |
 | 404 | Unknown video |
-| 409 | Already scheduled or published |
+| 409 | Already scheduled or published, or not in a state that allows it (e.g. resolving a send that isn't interrupted) |
 | 422 | Invalid input; nothing was changed. `ticket_not_ready` means the ticket isn't ready for a platform being scheduled. Fix the listed problems, or repeat the request with `?force=true`. Other 422 codes can't be forced. |
 
 Each change is regenerated from the code, not edited by hand:
@@ -386,11 +396,14 @@ PyInstaller can't cross-compile, so each platform builds on its own OS. Pushing 
 ## Project layout
 
 ```
-reelay/            engine: fetcher, downloader, naming, library/manifest, store (SQLite + change feed),
+reelay/            engine: fetcher, downloader, naming, library/manifest, store (SQLite + change feed + FTS),
                    pipeline (every board/post/schedule/sync rule), uploads (app-wide upload queue),
-                   scheduler (dispatcher), publishers/ (Bluesky, Threads, Facebook), platform_text,
-                   api (agent API), services (wiring), media (expiring links), youtube, publishing,
-                   accounts + tokens (keychain), cli
+                   scheduler (dispatcher + start-up reconciliation), publishers/ (Bluesky, Threads, Facebook),
+                   platform_text, api (agent API), services (wiring), media (expiring links), youtube,
+                   publishing, accounts + tokens (keychain), oauth (+ oauth_config), handoff, coverage,
+                   rules (automations), assist + seo + vidiq_service (writing help), video_tools (ffmpeg),
+                   dblocation (database location + lock), cli
+server/            auth_broker: the small service that holds platform app secrets for central sign-in
 api/openapi.yaml   agent API contract (generated)
 reelay/gui/        PySide6 app: main_window (sidebar + profiles), download_page, board_page,
                    post_panel, accounts_page, settings_page, theme (Light/Dark/Black)
@@ -412,7 +425,8 @@ How the parts fit:
 - **Calendar view** of everything scheduled across channels.
 - **Task cards.** Notes, checklists and non-video tasks on the board, a personal ticket system.
 - **Automatic Threads token refresh** before the 60-day expiry.
-- **Performance stats** from the YouTube Analytics API, on the cards.
+- **Performance stats** (YouTube Analytics, Instagram and Threads insights) on the cards, using the analytics scopes central sign-in already requests.
+- **Bluesky sign-in** with atproto OAuth (PAR + DPoP) instead of App Passwords.
 - **TikTok and Instagram publishing**, once developer apps are approved.
 - **Signed, notarized builds** with auto-update.
 

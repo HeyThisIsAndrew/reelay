@@ -1,10 +1,36 @@
-# Reelay v0.8.0: implementation report and local test handoff
+# Reelay v0.11.0: implementation report and agent handoff
 
-**For:** Meta Muse  **From:** Claude Code  **Date:** 2026-10-07
-**Repo:** `/Users/thisisandrew/Documents/UpSkill_Projects/Content_Downloader`, single branch `main` (direct commits, no open PRs), tags `v0.6.0`, `v0.7.0` and `v0.8.0`
-**Installed app:** `/Applications/Reelay.app`, v0.8.0, running now
+**For:** Meta Muse  **From:** Claude Code  **Date:** 2026-10-10
+**Repo:** `/Users/thisisandrew/Documents/UpSkill_Projects/Content_Downloader`, single branch `main`, tag `v0.11.0`
+**Installed app:** `/Applications/Reelay.app`, v0.11.0
 
 ---
+
+## v0.11.0 (2026-10-10): what changed for agents
+
+| Item | State |
+|---|---|
+| Automated tests on `main` | **324 passed**, 2 skipped (opt-in live TikTok tests) |
+| Packaged-app self-test | Passed: 9 checks, now including full-text search and caption burning |
+| Real database | Migrated **v7 → v8** (full-text index + brand voices). Backup: `reelay-backup-v7-2026-10-10.db`. 176 videos indexed. |
+| Publishing flags | Unchanged: Bluesky, Threads, Facebook off; no accounts connected. |
+
+**New and changed API (all in `api/openapi.yaml`):**
+- `GET /v1/search?profile=…&q=…`: full-text search over title, original caption, **transcript**, every platform's copy, tags, topic, keywords and notes. Each result has `spoken` (matched what was said), a `snippet` with «matches», and the full `video`. Write transcripts with `PATCH /v1/videos/{id}` `{"transcript": "…"}` to make spoken words searchable.
+- Every video now has **`coverage`**: per platform `published | scheduled | ready | needs_work | not_applicable`, with a `reason` for needs_work. It's the same map as the cards.
+- `POST /v1/videos/{id}/platforms/{platform}` accepts **`url`** (the live post's link; must be on that platform's site). This is how a Prepare to Publish hand-off is recorded.
+- Publications can be **`interrupted`**: Reelay stopped mid-send (crash, power loss) or the time passed while it was closed. Nothing more is sent until someone decides. Resolve with `POST /v1/videos/{id}/publications/{platform}/resolve` `{"action": "retry" | "posted" | "cancel", "url": "…"}` (`409` if it isn't interrupted). **Don't choose `retry` without checking the platform first**: the whole point is to avoid double posts.
+
+**New in the app (no API yet):**
+- **Prepare to Publish** for TikTok and Instagram: checks, copies the caption, opens the uploader, shows the file in Finder, records the link.
+- **Automations** page: when/if/then rules (templates, hashtags, platforms, column moves, schedule for the next weekday). Stored in settings `rules.<profile_id>`; they run when the Board loads. Agents editing tickets through the API won't trigger them until the Board next reloads.
+- **Brand voice** (Settings): the local AI helper's system prompt. Table `brand_profiles`.
+- **Video tools**: remove or replace the sound and burn in captions locally; the edited copy (`<name>.edited.mp4`) is what gets posted. The `file_path` in the API is still the original download.
+- **Shared database**: Settings → Data can move the database into Google Drive, Dropbox or iCloud. A computer that opens it **view only** runs **no agent API** (and no dispatcher), so point agents at the editing computer.
+- **Central sign-in** buttons (Phase 1) only appear once Reelay's own platform apps are registered and the auth broker is deployed; until then the bring-your-own setup is unchanged.
+
+
+## Earlier report (v0.8.0)
 
 ## 1. Status
 
