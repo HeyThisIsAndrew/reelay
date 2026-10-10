@@ -11,7 +11,7 @@ import requests
 from reelay.api import ApiServer, configured_address, create_app
 from reelay.media import MediaLinks
 from reelay.models import DispatchStatus, Platform, PostStatus, Stage
-from tests.fakes import SECRETS, connect_platform, disable_publishing, enable_publishing, make_world
+from tests.fakes import SECRETS, approve_and_run, connect_platform, disable_publishing, enable_publishing, make_world
 
 TOKEN = SECRETS["agent"]
 
@@ -173,7 +173,8 @@ def test_patch_is_atomic_and_never_truncates(api):
 def test_patch_unknown_video_and_locked(api):
     assert api.patch("/v1/videos/99999", json={"title": "x"}).status_code == 404
     vid = api.world.rows[0]
-    assert api.post(f"/v1/videos/{vid}/schedule", json={"scheduled_at": future().isoformat()}).status_code == 200
+    r = api.post(f"/v1/videos/{vid}/schedule", json={"scheduled_at": future().isoformat()})
+    assert approve_and_run(api.world.store, api.world.pipeline, r).status == "executed"
     r = api.patch(f"/v1/videos/{vid}", json={"title": "too late"})
     assert r.status_code == 409 and r.json()["code"] == "locked"
 
@@ -182,12 +183,15 @@ def test_patch_unknown_video_and_locked(api):
 def test_schedule_youtube_goes_through_the_upload_queue(api):
     vid, when = api.world.rows[0], future()
     r = api.post(f"/v1/videos/{vid}/schedule", json={"scheduled_at": when.isoformat()})
-    assert r.status_code == 200, r.text
-    body = r.json()
-    assert body["video_id"] == vid and body["stage"] == "scheduled" and body["target_platforms"] == ["youtube"]
-    assert body["scheduled_at"].startswith(when.strftime("%Y-%m-%dT%H:%M:%S"))
-    job = body["jobs"][0]
-    assert job["platform"] == "youtube" and job["status"] == "dispatching" and job["queue_position"] == 0
+    assert r.status_code == 202, r.text
+    assert r.json()["operation"] == "schedule" and r.json()["target_ids"] == [vid]
+    assert api.world.uploads.jobs == [] and api.world.store.dispatches_for(vid) == []   # nothing until approved
+    done = approve_and_run(api.world.store, api.world.pipeline, r)
+    assert done.status == "executed" and done.result["dispatches"][0]["platform"] == "youtube"
+    assert api.world.store.get_video(vid).stage == "scheduled"
+    assert api.world.store.get_post(vid).publish_at.startswith(when.strftime("%Y-%m-%dT%H:%M:%S"))
+    status = api.get(f"/v1/approvals/{done.id}").json()
+    assert status["status"] == "executed" and status["decided_by"] == "test person"
     assert len(api.world.uploads.jobs) == 1  # one upload queue, never a parallel uploader
     resource = api.world.uploads.jobs[0][3]
     assert resource["status"]["privacyStatus"] == "private" and resource["status"]["publishAt"]
@@ -225,11 +229,12 @@ def test_schedule_other_platforms_need_accounts_then_follow_due_times(api, monke
     connect_platform(api.world.accounts, api.world.profile.id, Platform.FACEBOOK)
     r = api.post(f"/v1/videos/{vid}/schedule",
                  json={"scheduled_at": when.isoformat(), "platforms": ["bluesky", "facebook"]})
-    assert r.status_code == 200, r.text
-    jobs = {j["platform"]: j for j in r.json()["jobs"]}
+    assert approve_and_run(api.world.store, api.world.pipeline, r).status == "executed"
+    jobs = {d.platform: d for d in api.world.store.dispatches_for(vid)}
     assert set(jobs) == {"bluesky", "facebook"} and not api.world.uploads.jobs
-    assert jobs["bluesky"]["status"] == "pending" and jobs["bluesky"]["due_at"].startswith(when.strftime("%Y-%m-%dT%H:%M"))
-    assert datetime.fromisoformat(jobs["facebook"]["due_at"]) <= datetime.now(timezone.utc) + timedelta(seconds=5)
+    assert jobs["bluesky"].status == "pending" and jobs["bluesky"].due_at.startswith(when.strftime("%Y-%m-%dT%H:%M"))
+    assert datetime.fromisoformat(jobs["facebook"].due_at.replace("Z", "+00:00")) <= \
+        datetime.now(timezone.utc) + timedelta(seconds=5)
     assert api.world.store.get_video(vid).stage == Stage.SCHEDULED
 
 
@@ -242,7 +247,7 @@ def test_threads_requires_public_url(api, monkeypatch):
     r = api.post(f"/v1/videos/{vid}/schedule", json={"platforms": ["threads"]})
     assert r.status_code == 422 and "REELAY_PUBLIC_URL" in str(r.json())
     api.world.store.set_setting("public_url", "https://reelay.example.com")
-    assert api.post(f"/v1/videos/{vid}/schedule", json={"platforms": ["threads"]}).status_code == 200
+    assert api.post(f"/v1/videos/{vid}/schedule", json={"platforms": ["threads"]}).status_code == 202
 
 
 # ------------------------------------------------------------------ GET /v1/platforms
@@ -335,10 +340,9 @@ def test_disabled_targets_are_reported_as_manual(api):
     vid = api.world.rows[0]
     api.patch(f"/v1/videos/{vid}", json={"target_platforms": ["youtube", "bluesky", "threads"]})
     r = api.post(f"/v1/videos/{vid}/schedule", json={"scheduled_at": future().isoformat()})
-    assert r.status_code == 200, r.text
-    body = r.json()
-    assert body["target_platforms"] == ["youtube"] and body["manual_platforms"] == ["bluesky", "threads"]
-    assert [j["platform"] for j in body["jobs"]] == ["youtube"]
+    done = approve_and_run(api.world.store, api.world.pipeline, r)
+    assert done.result["manual_platforms"] == ["bluesky", "threads"]
+    assert [d["platform"] for d in done.result["dispatches"]] == ["youtube"]
     only_manual = api.world.rows[1]
     api.patch(f"/v1/videos/{only_manual}", json={"target_platforms": ["threads"]})
     r = api.post(f"/v1/videos/{only_manual}/schedule", json={})
@@ -352,7 +356,7 @@ def test_env_override_enables_a_platform(api, monkeypatch):
     assert info["bluesky"]["auto_post"] is True
     api.patch(f"/v1/videos/{api.world.rows[0]}", json={"bluesky_text": "Letting go"})
     r = api.post(f"/v1/videos/{api.world.rows[0]}/schedule", json={"platforms": ["bluesky"]})
-    assert r.status_code == 200 and r.json()["jobs"][0]["platform"] == "bluesky"
+    assert approve_and_run(api.world.store, api.world.pipeline, r).result["dispatches"][0]["platform"] == "bluesky"
 
 
 # ------------------------------------------------------------------ download sources
@@ -398,7 +402,8 @@ def test_coverage_and_handoff_link_through_the_api(api):
     assert bad.status_code == 422 and "TikTok link" in bad.text
     ok = api.post(f"/v1/videos/{row}/platforms/tiktok",
                   json={"state": "posted", "url": "https://www.tiktok.com/@x/video/9"})
-    assert ok.status_code == 200 and ok.json()["coverage"]["tiktok"]["state"] == "published"
+    assert approve_and_run(api.world.store, api.world.pipeline, ok).status == "executed"
+    assert api.world.pipeline.card(row).coverage["tiktok"].state == "published"
     assert api.world.store.manual_posts(row)[0].url == "https://www.tiktok.com/@x/video/9"
 
 

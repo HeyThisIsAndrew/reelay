@@ -245,7 +245,7 @@ paths:
     post:
       tags:
       - videos
-      summary: Schedule or publish a video to its platforms
+      summary: Ask to schedule or publish a video (needs approval)
       description: 'Queues automatic posting through Reelay''s pipeline. YouTube uploads join the app''s upload
         queue (one at
 
@@ -255,7 +255,12 @@ paths:
 
         platform whose checklist isn''t passing (422 ticket_not_ready, see the video''s `readiness`) unless
 
-        force=true. 409 if any requested platform is already scheduled or published.'
+        force=true. 409 if any requested platform is already scheduled or published.
+
+
+        **Needs a person''s approval**: answered with 202 and an approval_id; nothing is scheduled until a person
+
+        approves (see GET /v1/approvals/{approval_id}). When carried out, the result lists the queued jobs.'
       operationId: scheduleVideo
       security:
       - HTTPBearer: []
@@ -271,12 +276,12 @@ paths:
         required: false
         schema:
           type: boolean
-          description: true schedules even if the ticket isn't ready (skips the Ready gate). Platform rules that
-            would make the post fail still apply.
+          description: true asks to schedule even if the ticket isn't ready (skips the Ready gate when approved).
+            It never skips approval.
           default: false
           title: Force
-        description: true schedules even if the ticket isn't ready (skips the Ready gate). Platform rules that would
-          make the post fail still apply.
+        description: true asks to schedule even if the ticket isn't ready (skips the Ready gate when approved).
+          It never skips approval.
       requestBody:
         content:
           application/json:
@@ -286,12 +291,12 @@ paths:
               - type: 'null'
               title: Request
       responses:
-        '200':
+        '202':
           description: Successful Response
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ScheduleResponse'
+                $ref: '#/components/schemas/ApprovalOut'
         '401':
           description: Missing or invalid bearer token.
           content:
@@ -306,6 +311,13 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
           description: Conflicts with the video's current state (already scheduled).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '429':
+          description: Too many changes too quickly (rate_limited), or too many requests already waiting for approval
+            (too_many_pending).
           content:
             application/json:
               schema:
@@ -368,11 +380,16 @@ paths:
     post:
       tags:
       - videos
-      summary: Record that a video was posted by hand
+      summary: Ask to record that a video was posted by hand (needs approval)
       description: 'For the copy-paste workflow: record that the video went out on a platform, so its publishing
         history is
 
-        complete. Doesn''t post anything or move the card.'
+        complete. Doesn''t post anything or move the card.
+
+
+        **Needs a person''s approval**: answered with 202 and an approval_id; nothing changes until a person
+
+        approves (see GET /v1/approvals/{approval_id}).'
       operationId: markPosted
       security:
       - HTTPBearer: []
@@ -390,12 +407,12 @@ paths:
             schema:
               $ref: '#/components/schemas/ManualPostCreate'
       responses:
-        '201':
+        '202':
           description: Successful Response
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HistoryItem'
+                $ref: '#/components/schemas/ApprovalOut'
         '401':
           description: Missing or invalid bearer token.
           content:
@@ -410,6 +427,13 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '422':
           description: Invalid input; nothing was changed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '429':
+          description: Too many changes too quickly (rate_limited), or too many requests already waiting for approval
+            (too_many_pending).
           content:
             application/json:
               schema:
@@ -418,11 +442,18 @@ paths:
     post:
       tags:
       - videos
-      summary: Apply the same edit to many videos
+      summary: Ask to apply the same edit to many videos (needs approval)
       description: 'Same rules as PATCH /v1/videos/{video_id}, for many videos at once, in one transaction: if any
         video
 
-        has a problem, nothing is written and every problem is listed (422).'
+        has a problem when it''s carried out, nothing is written and the request is marked failed with every
+
+        problem listed.
+
+
+        **Needs a person''s approval**: answered with 202 and an approval_id; nothing changes until a person
+
+        approves (see GET /v1/approvals/{approval_id}).'
       operationId: bulkUpdateVideos
       requestBody:
         content:
@@ -431,12 +462,12 @@ paths:
               $ref: '#/components/schemas/BulkUpdate'
         required: true
       responses:
-        '200':
+        '202':
           description: Successful Response
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/BulkResult'
+                $ref: '#/components/schemas/ApprovalOut'
         '401':
           description: Missing or invalid bearer token.
           content:
@@ -449,8 +480,21 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: Conflicts with the video's current state (already scheduled).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
         '422':
           description: Invalid input; nothing was changed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '429':
+          description: Too many changes too quickly (rate_limited), or too many requests already waiting for approval
+            (too_many_pending).
           content:
             application/json:
               schema:
@@ -506,7 +550,7 @@ paths:
     post:
       tags:
       - videos
-      summary: Tick a platform as scheduled or posted (by hand)
+      summary: Ask to tick a platform as scheduled or posted (needs approval)
       description: 'The ticket''s per-platform checkboxes, for posts made in the platform''s own app. Marking makes
         the
 
@@ -514,7 +558,12 @@ paths:
 
         scheduled or live, to Published when every target is live (a scheduled time passing counts). 409 for a
 
-        platform Reelay is posting itself.'
+        platform Reelay is posting itself.
+
+
+        **Needs a person''s approval**: answered with 202 and an approval_id; nothing changes until a person
+
+        approves (see GET /v1/approvals/{approval_id}).'
       operationId: markPlatform
       security:
       - HTTPBearer: []
@@ -545,12 +594,12 @@ paths:
             schema:
               $ref: '#/components/schemas/PlatformMark'
       responses:
-        '200':
+        '202':
           description: Successful Response
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Video'
+                $ref: '#/components/schemas/ApprovalOut'
         '401':
           description: Missing or invalid bearer token.
           content:
@@ -575,15 +624,27 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '429':
+          description: Too many changes too quickly (rate_limited), or too many requests already waiting for approval
+            (too_many_pending).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
   /v1/videos/{video_id}/publications/{platform}/resolve:
     post:
       tags:
       - videos
-      summary: Decide what happened to an interrupted send
+      summary: Ask to decide what happened to an interrupted send (needs approval)
       description: 'For a publication whose status is interrupted: Reelay won''t guess whether it was posted (that
         could
 
-        post twice), so someone checks the platform and says. 409 if it isn''t interrupted.'
+        post twice), so someone checks the platform and says. 409 if it isn''t interrupted.
+
+
+        **Needs a person''s approval**: answered with 202 and an approval_id; nothing changes until a person
+
+        approves (see GET /v1/approvals/{approval_id}).'
       operationId: resolveInterrupted
       security:
       - HTTPBearer: []
@@ -612,12 +673,12 @@ paths:
             schema:
               $ref: '#/components/schemas/InterruptedResolve'
       responses:
-        '200':
+        '202':
           description: Successful Response
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Video'
+                $ref: '#/components/schemas/ApprovalOut'
         '401':
           description: Missing or invalid bearer token.
           content:
@@ -642,15 +703,27 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '429':
+          description: Too many changes too quickly (rate_limited), or too many requests already waiting for approval
+            (too_many_pending).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
   /v1/videos/{video_id}/archive:
     post:
       tags:
       - videos
-      summary: Archive a video
+      summary: Ask to archive a video (needs approval)
       description: 'Hides the video from the board and the Download page; its file, ticket and history are kept.
         409 if it''s
 
-        scheduled or uploading.'
+        scheduled or uploading.
+
+
+        **Needs a person''s approval**: answered with 202 and an approval_id; nothing changes until a person
+
+        approves (see GET /v1/approvals/{approval_id}).'
       operationId: archiveVideo
       security:
       - HTTPBearer: []
@@ -662,12 +735,12 @@ paths:
           type: integer
           title: Video Id
       responses:
-        '200':
+        '202':
           description: Successful Response
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Video'
+                $ref: '#/components/schemas/ApprovalOut'
         '401':
           description: Missing or invalid bearer token.
           content:
@@ -692,11 +765,24 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '429':
+          description: Too many changes too quickly (rate_limited), or too many requests already waiting for approval
+            (too_many_pending).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
   /v1/videos/{video_id}/unarchive:
     post:
       tags:
       - videos
-      summary: Bring an archived video back
+      summary: Ask to bring an archived video back (needs approval)
+      description: 'Shows the video on the board again.
+
+
+        **Needs a person''s approval**: answered with 202 and an approval_id; nothing changes until a person
+
+        approves (see GET /v1/approvals/{approval_id}).'
       operationId: unarchiveVideo
       security:
       - HTTPBearer: []
@@ -708,12 +794,12 @@ paths:
           type: integer
           title: Video Id
       responses:
-        '200':
+        '202':
           description: Successful Response
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Video'
+                $ref: '#/components/schemas/ApprovalOut'
         '401':
           description: Missing or invalid bearer token.
           content:
@@ -728,6 +814,13 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '422':
           description: Invalid input; nothing was changed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '429':
+          description: Too many changes too quickly (rate_limited), or too many requests already waiting for approval
+            (too_many_pending).
           content:
             application/json:
               schema:
@@ -845,13 +938,17 @@ paths:
     post:
       tags:
       - import
-      summary: Import a spreadsheet (CSV) into tickets
+      summary: Import a spreadsheet (CSV) into tickets (applying needs approval)
       description: 'Matches each row to a video (by link, video ID, file name or your name for it), maps columns
         to ticket
 
         fields, and fills them. Empty cells never clear anything; over-limit or invalid rows are skipped and
 
-        reported. With dry_run=false every changing row is written in one transaction, each change logged.'
+        reported. dry_run=true (the default) only reports. dry_run=false asks to apply it: **needs a person''s
+
+        approval** (202 with an approval_id); when approved, every changing row is written in one transaction,
+
+        each change logged.'
       operationId: importSheet
       security:
       - HTTPBearer: []
@@ -904,6 +1001,19 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '429':
+          description: Too many changes too quickly (rate_limited), or too many requests already waiting for approval
+            (too_many_pending).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '202':
+          description: 'dry_run=false: waiting for a person''s approval.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApprovalOut'
   /v1/platforms:
     get:
       tags:
@@ -1098,8 +1208,13 @@ paths:
     delete:
       tags:
       - sources
-      summary: Remove a saved source
-      description: Removes the saved link only. Videos already listed or downloaded from it stay.
+      summary: Ask to remove a saved source (needs approval)
+      description: 'Removes the saved link only. Videos already listed or downloaded from it stay.
+
+
+        **Needs a person''s approval**: answered with 202 and an approval_id; nothing changes until a person
+
+        approves (see GET /v1/approvals/{approval_id}).'
       operationId: deleteSource
       security:
       - HTTPBearer: []
@@ -1111,8 +1226,132 @@ paths:
           type: integer
           title: Source Id
       responses:
-        '204':
+        '202':
           description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApprovalOut'
+        '401':
+          description: Missing or invalid bearer token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: No video with that id.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Invalid input; nothing was changed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '429':
+          description: Too many changes too quickly (rate_limited), or too many requests already waiting for approval
+            (too_many_pending).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+  /v1/approvals:
+    get:
+      tags:
+      - approvals
+      summary: List approval requests
+      description: 'What agents asked for and what happened. Agents can''t approve or reject: a person does that
+        in
+
+        Reelay (`python -m reelay.approvals` for now).'
+      operationId: listApprovals
+      security:
+      - HTTPBearer: []
+      parameters:
+      - name: profile
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: Only this profile (sidebar name).
+          title: Profile
+        description: Only this profile (sidebar name).
+      - name: status
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - enum:
+            - pending
+            - approved
+            - rejected
+            - expired
+            - executed
+            - failed
+            - stale
+            type: string
+          - type: 'null'
+          title: Status
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 200
+          minimum: 1
+          default: 50
+          title: Limit
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApprovalsResponse'
+        '400':
+          description: Bad request (e.g. missing or unknown profile).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '401':
+          description: Missing or invalid bearer token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Invalid input; nothing was changed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+  /v1/approvals/{approval_id}:
+    get:
+      tags:
+      - approvals
+      summary: One approval request
+      operationId: getApproval
+      security:
+      - HTTPBearer: []
+      parameters:
+      - name: approval_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Approval Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApprovalRequestOut'
         '401':
           description: Missing or invalid bearer token.
           content:
@@ -1133,6 +1372,136 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
 components:
   schemas:
+    ApprovalOut:
+      properties:
+        approval_id:
+          type: integer
+          title: Approval Id
+        operation:
+          type: string
+          title: Operation
+          description: schedule, archive, bulk_update, import_sheet, set_platform_state, mark_posted, resolve_interrupted
+            or delete_source.
+        status:
+          type: string
+          const: pending
+          title: Status
+          default: pending
+        expires_at:
+          type: string
+          format: date-time
+          title: Expires At
+          description: If nobody decides by then, it expires and nothing happens.
+        target_ids:
+          items:
+            type: integer
+          type: array
+          title: Target Ids
+          description: The videos it would change.
+        reused:
+          type: boolean
+          title: Reused
+          description: True if an identical request was already waiting (no new one made).
+          default: false
+        status_url:
+          type: string
+          title: Status Url
+      type: object
+      required:
+      - approval_id
+      - operation
+      - expires_at
+      - target_ids
+      - status_url
+      title: ApprovalOut
+      description: '202 Accepted: the request is waiting for a person.'
+    ApprovalRequestOut:
+      properties:
+        id:
+          type: integer
+          title: Id
+        profile_id:
+          type: integer
+          title: Profile Id
+        operation:
+          type: string
+          title: Operation
+        status:
+          type: string
+          enum:
+          - pending
+          - approved
+          - rejected
+          - expired
+          - executed
+          - failed
+          - stale
+          title: Status
+          description: pending → approved → executed | failed | stale; or pending → rejected | expired | stale.
+            stale = the video changed after the request, so it wasn't done.
+        target_ids:
+          items:
+            type: integer
+          type: array
+          title: Target Ids
+        payload:
+          additionalProperties: true
+          type: object
+          title: Payload
+          description: What was asked, exactly as it will be carried out.
+        requested_by:
+          type: string
+          title: Requested By
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+        expires_at:
+          type: string
+          format: date-time
+          title: Expires At
+        decided_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Decided At
+        decided_by:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Decided By
+        result:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Result
+          description: What happened (executed), the error (failed), or why (stale).
+      type: object
+      required:
+      - id
+      - profile_id
+      - operation
+      - status
+      - target_ids
+      - payload
+      - requested_by
+      - created_at
+      - expires_at
+      title: ApprovalRequestOut
+    ApprovalsResponse:
+      properties:
+        approvals:
+          items:
+            $ref: '#/components/schemas/ApprovalRequestOut'
+          type: array
+          title: Approvals
+          description: Newest first.
+      type: object
+      required:
+      - approvals
+      title: ApprovalsResponse
     BoardPage:
       properties:
         profile:
@@ -1179,16 +1548,6 @@ components:
       - offset
       - videos
       title: BoardPage
-    BulkResult:
-      properties:
-        changed:
-          type: integer
-          title: Changed
-          description: 'Tickets updated. All or nothing: on any problem nothing is written (422).'
-      type: object
-      required:
-      - changed
-      title: BulkResult
     BulkUpdate:
       properties:
         video_ids:
@@ -1870,56 +2229,6 @@ components:
       - attempts
       - updated_at
       title: Publication
-    QueueJob:
-      properties:
-        platform:
-          type: string
-          enum:
-          - youtube
-          - bluesky
-          - threads
-          - facebook
-          title: Platform
-        job_id:
-          type: integer
-          title: Job Id
-          description: Id of this platform's publishing job.
-        status:
-          type: string
-          enum:
-          - pending
-          - dispatching
-          - scheduled
-          - published
-          - failed
-          - interrupted
-          title: Status
-        due_at:
-          type: string
-          format: date-time
-          title: Due At
-          description: When Reelay sends it. YouTube and Facebook are sent right away and scheduled on the platform;
-            Bluesky and Threads are sent at publish time.
-        publish_at:
-          anyOf:
-          - type: string
-            format: date-time
-          - type: 'null'
-          title: Publish At
-        queue_position:
-          anyOf:
-          - type: integer
-          - type: 'null'
-          title: Queue Position
-          description: 'Place in line: 0 = being processed now, null = not waiting. YouTube uploads run one at a
-            time.'
-      type: object
-      required:
-      - platform
-      - job_id
-      - status
-      - due_at
-      title: QueueJob
     ReadinessCheck:
       properties:
         id:
@@ -2025,57 +2334,6 @@ components:
       additionalProperties: false
       type: object
       title: ScheduleRequest
-    ScheduleResponse:
-      properties:
-        video_id:
-          type: integer
-          title: Video Id
-        stage:
-          type: string
-          title: Stage
-        scheduled_at:
-          anyOf:
-          - type: string
-            format: date-time
-          - type: 'null'
-          title: Scheduled At
-          description: When it goes live (UTC); null = as soon as possible.
-        target_platforms:
-          items:
-            type: string
-            enum:
-            - youtube
-            - bluesky
-            - threads
-            - facebook
-          type: array
-          title: Target Platforms
-          description: Platforms Reelay will post to.
-        manual_platforms:
-          items:
-            type: string
-            enum:
-            - youtube
-            - tiktok
-            - instagram
-            - bluesky
-            - threads
-            - facebook
-          type: array
-          title: Manual Platforms
-          description: 'The video''s other targets, which have automatic posting turned off: post these by hand.'
-        jobs:
-          items:
-            $ref: '#/components/schemas/QueueJob'
-          type: array
-          title: Jobs
-      type: object
-      required:
-      - video_id
-      - stage
-      - target_platforms
-      - jobs
-      title: ScheduleResponse
     SearchResponse:
       properties:
         profile:

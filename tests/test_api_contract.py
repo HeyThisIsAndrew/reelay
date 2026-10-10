@@ -49,26 +49,28 @@ def test_contract_covers_every_endpoint_with_auth_and_errors():
     assert contract["openapi"].startswith("3.1")
     expected = {("/v1/board", "get"): {"200", "400", "401", "422"},
                 ("/v1/videos/{video_id}", "patch"): {"200", "401", "404", "409", "422"},
-                ("/v1/videos/{video_id}/schedule", "post"): {"200", "401", "404", "409", "422"},
+                ("/v1/videos/{video_id}/schedule", "post"): {"202", "401", "404", "409", "422", "429"},
                 ("/v1/platforms", "get"): {"200", "400", "401", "422"},
                 ("/v1/sources", "get"): {"200", "400", "401", "422"},
                 ("/v1/sources", "post"): {"201", "400", "401", "422"},
                 ("/v1/videos/{video_id}/revisions", "get"): {"200", "401", "404", "422"},
-                ("/v1/videos/{video_id}/manual-posts", "post"): {"201", "401", "404", "422"},
+                ("/v1/videos/{video_id}/manual-posts", "post"): {"202", "401", "404", "422", "429"},
                 ("/v1/sources/{source_id}", "patch"): {"200", "401", "404", "422"},
-                ("/v1/sources/{source_id}", "delete"): {"204", "401", "404", "422"},
-                ("/v1/videos/bulk-update", "post"): {"200", "401", "404", "422"},
+                ("/v1/sources/{source_id}", "delete"): {"202", "401", "404", "422", "429"},
+                ("/v1/videos/bulk-update", "post"): {"202", "401", "404", "409", "422", "429"},
                 ("/v1/videos/fill-from-original", "post"): {"200", "401", "404", "422"},
-                ("/v1/videos/{video_id}/archive", "post"): {"200", "401", "404", "409", "422"},
-                ("/v1/videos/{video_id}/unarchive", "post"): {"200", "401", "404", "422"},
+                ("/v1/videos/{video_id}/archive", "post"): {"202", "401", "404", "409", "422", "429"},
+                ("/v1/videos/{video_id}/unarchive", "post"): {"202", "401", "404", "422", "429"},
                 ("/v1/videos/{video_id}/revisions/{revision_id}/restore", "post"): {"200", "401", "404", "409", "422"},
                 ("/v1/videos/{video_id}/transcript", "post"): {"200", "401", "404", "422"},
-                ("/v1/import", "post"): {"200", "400", "401", "422"}}
+                ("/v1/import", "post"): {"200", "202", "400", "401", "422", "429"},
+                ("/v1/approvals", "get"): {"200", "400", "401", "422"},
+                ("/v1/approvals/{approval_id}", "get"): {"200", "401", "404", "422"}}
     for (path, method), statuses in expected.items():
         op = contract["paths"][path][method]
         assert set(op["responses"]) == statuses, (path, method)
         assert op["security"] == [{"HTTPBearer": []}] and op["operationId"]
-        for status in statuses - {"200", "201", "204"}:
+        for status in statuses - {"200", "201", "202", "204"}:
             ref = op["responses"][status]["content"]["application/json"]["schema"]["$ref"]
             assert ref.endswith("/ErrorBody")
     assert not any(p.startswith("/media") for p in contract["paths"])  # expiring links aren't agent tools

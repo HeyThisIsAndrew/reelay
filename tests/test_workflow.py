@@ -15,7 +15,7 @@ from reelay.sheet_import import (SheetError, convert, fetch_google_sheet, google
                                  parse_date, read_csv, video_key_from_url)
 from reelay.transcripts import TranscriptError, captions_to_text, fetch_transcript, pick_track
 from tests.conftest import FakeResponse
-from tests.fakes import SECRETS, disable_publishing, make_world
+from tests.fakes import approve_and_run, SECRETS, disable_publishing, make_world
 
 
 def future(days=2):
@@ -308,7 +308,9 @@ def test_api_sources_patch_and_delete(api):
     assert api.patch(f"{base}/{made['id']}", json={"name": ""}, timeout=10).status_code == 422
     assert api.patch(f"{base}/{made['id']}", json={}, timeout=10).status_code == 422
     assert api.patch(f"{base}/999", json={"mine": True}, timeout=10).status_code == 404
-    assert api.delete(f"{base}/{made['id']}", timeout=10).status_code == 204
+    r = api.delete(f"{base}/{made['id']}", timeout=10)
+    assert r.status_code == 202 and len(w.store.list_sources(w.profile.id)) == 1     # waits for a person
+    assert approve_and_run(w.store, w.pipeline, r).status == "executed"
     assert w.store.list_sources(w.profile.id) == []
     assert api.delete(f"{base}/{made['id']}", timeout=10).status_code == 404
 
@@ -320,7 +322,9 @@ def test_api_workflow_endpoints(api, monkeypatch):
     assert r.status_code == 200 and r.json()["applied"] is False and r.json()["changed"] == 2
     assert w.store.get_post(v0) is None                                  # a dry run writes nothing
     r = api.post(f"{api.base}/v1/import?profile=Lydia%20Livingood&dry_run=false", json={"csv": SHEET}, timeout=10)
-    assert r.json()["applied"] is True and w.store.get_post(v0).title == "Letting Go"
+    assert r.status_code == 202 and w.store.get_post(v0) is None                       # waits for a person
+    assert approve_and_run(w.store, w.pipeline, r).result == {"changed": 2}
+    assert w.store.get_post(v0).title == "Letting Go"
     assert api.post(f"{api.base}/v1/import?profile=Lydia%20Livingood",
                     json={"csv": SHEET, "mapping": {"Topic": "nope"}}, timeout=10).status_code == 422
 
@@ -329,7 +333,7 @@ def test_api_workflow_endpoints(api, monkeypatch):
 
     r = api.post(f"{api.base}/v1/videos/bulk-update", json={"video_ids": [v0, v1],
                                                            "changes": {"authorization": "Own content"}}, timeout=10)
-    assert r.json() == {"changed": 2}
+    assert approve_and_run(w.store, w.pipeline, r).result == {"changed": 2}
     assert api.post(f"{api.base}/v1/videos/bulk-update", json={"video_ids": [v0], "changes": {"stage": "x"}},
                     timeout=10).status_code == 422
 
@@ -338,13 +342,16 @@ def test_api_workflow_endpoints(api, monkeypatch):
     r = api.post(f"{api.base}/v1/videos/{v0}/revisions/{title_rev['id']}/restore", timeout=10)
     assert r.status_code == 200 and r.json()["title"] == "Letting Go"
 
-    assert api.post(f"{api.base}/v1/videos/{v0}/archive", timeout=10).json()["archived"] is True
+    r = api.post(f"{api.base}/v1/videos/{v0}/archive", timeout=10)
+    assert approve_and_run(w.store, w.pipeline, r).status == "executed"
     board = api.get(f"{api.base}/v1/board", params={"profile": "Lydia Livingood"}, timeout=10).json()
     assert v0 not in [v["id"] for v in board["videos"]]
     archived = api.get(f"{api.base}/v1/board", params={"profile": "Lydia Livingood", "archived": "true"},
                        timeout=10).json()
     assert [v["id"] for v in archived["videos"]] == [v0]
-    assert api.post(f"{api.base}/v1/videos/{v0}/unarchive", timeout=10).json()["archived"] is False
+    r = api.post(f"{api.base}/v1/videos/{v0}/unarchive", timeout=10)
+    assert approve_and_run(w.store, w.pipeline, r).status == "executed"
+    assert w.store.get_video(v0).archived_at is None
 
     import reelay.transcripts as transcripts
     monkeypatch.setattr(transcripts, "fetch_transcript", lambda url, opts: ("hello there", {}))

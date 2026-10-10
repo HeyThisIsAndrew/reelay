@@ -320,3 +320,126 @@ def test_terminal_commands(world, capsys):
     assert approvals.main(["reject", str(other.approval_id), "--reason", "no"], store=world.store) == 0
     assert approvals.main(["list"], store=world.store) == 0
     assert "Nothing waiting" in capsys.readouterr().out.splitlines()[-1]
+
+
+# ------------------------------------------------------------------ the REST API can't get around it
+def test_no_route_reaches_a_mutating_pipeline_method(world, monkeypatch):
+    """Every route that changes state, over real HTTP, with a spy in place of the pipeline."""
+    import requests
+
+    from reelay.api import ApiServer, create_app
+    from reelay.media import MediaLinks
+    from tests.fakes import connect_platform
+    connect_platform(world.accounts, world.profile.id, "bluesky")
+    spy = Spy(world.pipeline)
+    server = ApiServer(create_app(world.store, spy, world.accounts, lambda: "t" * 40, MediaLinks()),
+                       host="127.0.0.1", port=0)
+    assert server.start()
+    h = {"Authorization": "Bearer " + "t" * 40}
+    a, b = world.rows[0], world.rows[1]
+    from reelay.models import Source
+    src = world.store.add_source(Source(profile_id=world.profile.id, name="s", platform="tiktok",
+                                        url="https://www.tiktok.com/@x"))
+    tables = ("posts", "dispatches", "manual_posts", "sources")
+
+    def counts():
+        return {t: world.store.conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in tables} | {
+            "archived": world.store.conn.execute("SELECT COUNT(*) FROM videos WHERE archived_at IS NOT NULL")
+            .fetchone()[0]}
+    before = counts()
+    sheet = "Video ID,Topic\n7000,Eyewear\n"
+    calls = [
+        ("post", f"/v1/videos/{a}/schedule", {"scheduled_at": future().isoformat()}),
+        ("post", f"/v1/videos/{a}/schedule?force=true", {}),
+        ("post", f"/v1/videos/{a}/archive", None), ("post", f"/v1/videos/{a}/unarchive", None),
+        ("post", "/v1/videos/bulk-update", {"video_ids": [a, b], "changes": {"topic": "x"}}),
+        ("post", f"/v1/videos/{a}/platforms/tiktok", {"state": "posted"}),
+        ("post", f"/v1/videos/{a}/manual-posts", {"platform": "instagram"}),
+        ("post", f"/v1/import?profile={world.profile.id}&dry_run=false", {"csv": sheet}),
+        ("delete", f"/v1/sources/{src.id}", None),
+    ]
+    try:
+        for method, path, body in calls:
+            r = getattr(requests, method)(server.url + path, json=body, headers=h, timeout=10)
+            assert r.status_code == 202, (path, r.status_code, r.text)
+        assert spy.calls == [] and counts() == before and world.uploads.jobs == []
+        assert len(world.store.list_approvals(status="pending")) == len(calls)
+    finally:
+        server.stop()
+
+
+def test_api_module_only_uses_the_boundary():
+    """Static check: inside create_app, `pipeline.*` is a ScopedPipeline method and `store.*` a read."""
+    import ast
+    import inspect
+
+    import reelay.api as api_module
+    from reelay.scoped_pipeline import ReadOnlyStore
+    tree = ast.parse(inspect.getsource(api_module))
+    create = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "create_app")
+    allowed_pipeline = {n for n in dir(ScopedPipeline) if not n.startswith("_")}
+    bad = []
+    nodes = [n for stmt in create.body for n in ast.walk(stmt)]   # the body (not the signature's type hints)
+    for node in nodes:
+        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+            if node.value.id == "pipeline" and node.attr not in allowed_pipeline:
+                bad.append(f"pipeline.{node.attr}")
+            if node.value.id == "store" and node.attr not in ReadOnlyStore.READS:
+                bad.append(f"store.{node.attr}")
+            if node.value.id == "accounts":
+                bad.append(f"accounts.{node.attr}")
+        if isinstance(node, ast.Name) and node.id in ("Pipeline", "SourceService", "AccountService", "Store") \
+                and isinstance(getattr(node, "ctx", None), ast.Load):
+            bad.append(node.id)
+    # the one allowed use of the raw objects: wrapping them, and binding two read-only account helpers
+    allowed = {"accounts.has_credentials", "accounts.oauth_client"}
+    assert [b for b in bad if b not in allowed] == []
+
+
+# ------------------------------------------------------------------ input handling (downloader, links, paths)
+def test_download_outside_the_folder_is_refused(tmp_path, monkeypatch):
+    import reelay.downloader as dl
+    from reelay.models import VideoItem as Item
+    outside = tmp_path / "elsewhere" / "evil.mp4"
+    outside.parent.mkdir()
+    outside.write_bytes(b"x")
+    inside_file = tmp_path / "lib" / "ok.mp4"
+
+    class FakeYDL:
+        def __init__(self, opts):
+            self.opts = opts
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def extract_info(self, url, download=False):
+            return {"id": "1", "title": "t"}
+
+        def process_ie_result(self, info, download=True):
+            return {"requested_downloads": [{"filepath": str(FakeYDL.target)}]}
+    monkeypatch.setattr(dl.yt_dlp, "YoutubeDL", FakeYDL)
+    folder = tmp_path / "lib"
+    folder.mkdir()
+    item = Item(platform="TikTok", video_id="1", url="https://www.tiktok.com/@x/video/1")
+    FakeYDL.target = outside
+    with pytest.raises(dl.DownloadError, match="outside the chosen folder"):
+        dl.download_item(item, folder, "best", {}, lambda i: "name")
+    inside_file.write_bytes(b"v")
+    FakeYDL.target = inside_file
+    assert dl.download_item(item, folder, "best", {}, lambda i: "name").filename == "ok.mp4"
+
+
+def test_link_and_path_rules():
+    from reelay.urlsafety import image_path_problem, inside, media_url_problem
+    for ok in ("https://www.tiktok.com/@x/video/1", "https://vm.tiktok.com/Z/", "http://instagram.com/reel/a",
+               "https://youtu.be/dQw4w9WgXcQ", "https://m.youtube.com/shorts/x"):
+        assert media_url_problem(ok) is None, ok
+    for bad in ("file:///etc/passwd", "http://127.0.0.1:8471/v1/board", "https://evil-tiktok.com/x",
+                "https://tiktok.com.evil.net/x", "javascript:alert(1)", "ftp://youtube.com/x",
+                "https://user:pw@www.youtube.com/x", "", "https://[::1]/"):
+        assert media_url_problem(bad), bad
+    assert inside("/a/b/c.mp4", "/a/b") and not inside("/a/b/../c.mp4", "/a/b") and not inside("/a/bc/x", "/a/b")
+    assert image_path_problem("", "/lib") is None and image_path_problem("/lib/x.gif", "/lib")

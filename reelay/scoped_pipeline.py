@@ -412,23 +412,29 @@ class ScopedPipeline:
         return self._pipeline.fetch_transcript(video_id, restrict_ydl(ydl_opts), replace_existing=replace_existing)
 
     def add_source(self, profile_id: int, url: str, name: str | None = None, mine: bool = False):
-        from .sources import SourceService
+        from .sources import SourceError, SourceService
         self.check_profile(profile_id)
         problem = media_url_problem(url if "://" in (url or "") else "https://" + (url or ""))
         if problem:
             raise PipelineError(problem, "invalid_source")
         self.limiter.take(profile_id)
-        return SourceService(self._store, self._pipeline.accounts).add(profile_id, url, name, mine)
+        try:
+            return SourceService(self._store, self._pipeline.accounts).add(profile_id, url, name, mine)
+        except SourceError as exc:
+            raise PipelineError(str(exc), "invalid_source") from None
 
     def update_source(self, source_id: int, name: str | None = None, mine: bool | None = None):
-        from .sources import SourceService
+        from .sources import SourceError, SourceService
         src = self._source(source_id)
         self.limiter.take(src.profile_id)
         service = SourceService(self._store, self._pipeline.accounts)
-        if name is not None:
-            service.rename(source_id, name)
-        if mine is not None:
-            service.set_mine(source_id, mine)
+        try:
+            if name is not None:
+                service.rename(source_id, name)
+            if mine is not None:
+                service.set_mine(source_id, mine)
+        except SourceError as exc:
+            raise PipelineError(str(exc), "invalid_source") from None
 
     def _source(self, source_id: int):
         if type(source_id) is not int or source_id <= 0:

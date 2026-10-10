@@ -12,6 +12,7 @@ import yt_dlp
 from yt_dlp.utils import DownloadCancelled, DownloadError
 
 from .models import Status, VideoItem
+from .urlsafety import inside
 
 QUALITY_BEST = "best"
 QUALITY_720 = "720p"
@@ -150,6 +151,10 @@ def download_item(
     filepath = _final_filepath(info or {})
     if not filepath or not filepath.is_file():
         raise DownloadError("Download finished but the video file was not found.")
+    if not inside(filepath, folder):
+        # The name is built from a sanitised stem, but the final path comes from yt-dlp's metadata:
+        # never record (or later upload) a file outside the folder Reelay was told to use.
+        raise DownloadError("The download was written outside the chosen folder, so Reelay didn't use it.")
 
     result.filename = filepath.name
     result.format_id = info.get("format_id") or ""

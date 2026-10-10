@@ -11,7 +11,7 @@ import requests
 
 from reelay.models import DispatchStatus, Platform, Post, Stage
 from reelay.pipeline import PipelineError
-from tests.fakes import SECRETS, disable_publishing, make_world
+from tests.fakes import approve_and_run, SECRETS, disable_publishing, make_world
 
 NOW = datetime.now(timezone.utc).replace(microsecond=0)
 
@@ -134,12 +134,14 @@ def test_api_platform_tags(api):
     assert r.status_code == 200 and r.json()["target_platforms"] == ["tiktok", "instagram"]
     when = (NOW + timedelta(days=1)).isoformat()
     r = api.post(f"{api.base}/v1/videos/{vid}/platforms/tiktok", json={"state": "scheduled", "at": when}, timeout=10)
-    assert r.status_code == 200
-    tags = r.json()["platform_states"]
-    assert tags["tiktok"] == {"target": True, "state": "scheduled", "at": tags["tiktok"]["at"], "automatic": False}
-    assert tags["instagram"]["state"] == "none" and r.json()["stage"] == "staging"
+    assert r.status_code == 202 and api.world.store.manual_posts(vid) == []          # waits for a person
+    approve_and_run(api.world.store, api.world.pipeline, r)
+    states = api.world.pipeline.platform_states(vid)
+    assert states["tiktok"].state == "scheduled" and not states["tiktok"].automatic
+    assert states["instagram"].state == "none" and api.world.store.get_video(vid).stage == "staging"
     r = api.post(f"{api.base}/v1/videos/{vid}/platforms/instagram", json={"state": "posted"}, timeout=10)
-    assert r.json()["stage"] == "scheduled" and r.json()["readiness"]["tiktok"]["state"] == "not_checked"
+    approve_and_run(api.world.store, api.world.pipeline, r)
+    assert api.world.store.get_video(vid).stage == "scheduled"
     assert api.post(f"{api.base}/v1/videos/{vid}/platforms/myspace", json={"state": "posted"},
                     timeout=10).status_code == 422
     assert api.post(f"{api.base}/v1/videos/{vid}/platforms/tiktok", json={"state": "later"},

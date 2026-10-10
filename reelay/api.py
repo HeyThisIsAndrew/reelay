@@ -29,7 +29,7 @@ import uvicorn
 from fastapi import Depends, FastAPI, Query, Request, Security
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -44,6 +44,7 @@ from .flags import env_var
 from .platform_text import (BLUESKY_MAX_GRAPHEMES, FACEBOOK_MAX_CHARS, INSTAGRAM_MAX_CHARS, INSTAGRAM_MAX_HASHTAGS,
                             THREADS_MAX_CHARS, TIKTOK_MAX_CHARS)
 from .publishing import TITLE_MAX, parse_utc
+from .scoped_pipeline import ApprovalPending, ScopedPipeline
 from .store import Store
 
 log = logging.getLogger("reelay")
@@ -67,7 +68,8 @@ STATUS_FOR_CODE = {
     "locked": 409, "already_scheduled": 409, "already_uploading": 409, "needs_upload": 409, "conflict": 409,
     "invalid_post": 422, "invalid_field": 422, "invalid_stage": 422, "invalid_time": 422,
     "invalid_platform": 422, "platform_disabled": 422, "invalid": 422, "ticket_not_ready": 422,
-    "invalid_request": 422, "no_transcript": 422,
+    "invalid_request": 422, "no_transcript": 422, "invalid_id": 422, "invalid_source": 422,
+    "rate_limited": 429, "too_many_pending": 429,
 }
 
 
@@ -86,12 +88,47 @@ ERRORS = {
     404: {"model": ErrorBody, "description": "No video with that id."},
     409: {"model": ErrorBody, "description": "Conflicts with the video's current state (already scheduled)."},
     422: {"model": ErrorBody, "description": "Invalid input; nothing was changed."},
+    429: {"model": ErrorBody, "description": "Too many changes too quickly (rate_limited), or too many requests "
+                                             "already waiting for approval (too_many_pending)."},
 }
 SCHEDULE_422 = {"model": ErrorBody, "description": (
     "Nothing was scheduled. code=ticket_not_ready: the ticket isn't ready for one or more of the platforms being "
     "scheduled (`problems` lists each one, prefixed with the platform, e.g. \"Bluesky: Write the Bluesky post "
     "…\"). Fix them with PATCH /v1/videos/{video_id}, or repeat the request with ?force=true to schedule anyway. "
     "Other codes (invalid_post, invalid_time, platform_disabled, invalid_platform) can't be forced.")}
+
+
+class ApprovalOut(BaseModel):
+    """202 Accepted: the request is waiting for a person."""
+    approval_id: int
+    operation: str = Field(description="schedule, archive, bulk_update, import_sheet, set_platform_state, "
+                                       "mark_posted, resolve_interrupted or delete_source.")
+    status: Literal["pending"] = "pending"
+    expires_at: datetime = Field(description="If nobody decides by then, it expires and nothing happens.")
+    target_ids: list[int] = Field(description="The videos it would change.")
+    reused: bool = Field(False, description="True if an identical request was already waiting (no new one made).")
+    status_url: str
+
+
+class ApprovalRequestOut(BaseModel):
+    id: int
+    profile_id: int
+    operation: str
+    status: Literal["pending", "approved", "rejected", "expired", "executed", "failed", "stale"] = Field(
+        description="pending → approved → executed | failed | stale; or pending → rejected | expired | stale. "
+                    "stale = the video changed after the request, so it wasn't done.")
+    target_ids: list[int]
+    payload: dict = Field(description="What was asked, exactly as it will be carried out.")
+    requested_by: str
+    created_at: datetime
+    expires_at: datetime
+    decided_at: datetime | None = None
+    decided_by: str | None = None
+    result: dict | None = Field(None, description="What happened (executed), the error (failed), or why (stale).")
+
+
+class ApprovalsResponse(BaseModel):
+    approvals: list[ApprovalRequestOut] = Field(description="Newest first.")
 
 
 class ProfileRef(BaseModel):
@@ -366,9 +403,6 @@ class BulkUpdate(BaseModel):
     changes: VideoPatch = Field(description="The same fields PATCH /v1/videos/{video_id} accepts.")
 
 
-class BulkResult(BaseModel):
-    changed: int = Field(description="Tickets updated. All or nothing: on any problem nothing is written (422).")
-
 
 class VideoIds(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -461,25 +495,6 @@ class ScheduleRequest(BaseModel):
                                         "target_platforms that are enabled; the rest are reported as manual.")
 
 
-class QueueJob(BaseModel):
-    platform: PlatformName
-    job_id: int = Field(description="Id of this platform's publishing job.")
-    status: PublicationStatus
-    due_at: datetime = Field(description="When Reelay sends it. YouTube and Facebook are sent right away and "
-                                         "scheduled on the platform; Bluesky and Threads are sent at publish time.")
-    publish_at: datetime | None = None
-    queue_position: int | None = Field(None, description="Place in line: 0 = being processed now, null = not "
-                                                         "waiting. YouTube uploads run one at a time.")
-
-
-class ScheduleResponse(BaseModel):
-    video_id: int
-    stage: StageName
-    scheduled_at: datetime | None = Field(None, description="When it goes live (UTC); null = as soon as possible.")
-    target_platforms: list[PlatformName] = Field(description="Platforms Reelay will post to.")
-    manual_platforms: list[ManualPlatformName] = Field(default_factory=list, description="The video's other targets, "
-                                                 "which have automatic posting turned off: post these by hand.")
-    jobs: list[QueueJob]
 
 
 class PlatformAccount(BaseModel):
@@ -574,7 +589,13 @@ def create_app(store: Store, pipeline: Pipeline, accounts: AccountService, token
                     "show up immediately on the Reelay desktop board.",
         docs_url=None, redoc_url=None,
     )
-    media = media or pipeline.media
+    # External clients only ever see the authorization boundary: from here on `pipeline` is a ScopedPipeline
+    # and `store` its read-only view (scoped_pipeline.py). The raw objects aren't reachable from any route.
+    scoped = pipeline if isinstance(pipeline, ScopedPipeline) else ScopedPipeline(pipeline, requested_by="api")
+    media = media or scoped.media
+    credential_present = accounts.has_credentials
+    oauth_client = accounts.oauth_client             # bound now: `accounts` itself is dropped just below
+    pipeline, store, accounts = scoped, scoped.store, None
     bearer = HTTPBearer(auto_error=False, description="Agent API token (system keychain: service \"Reelay\", "
                                                       "account \"agent_api_token\"; or REELAY_API_TOKEN).")
 
@@ -620,7 +641,23 @@ def create_app(store: Store, pipeline: Pipeline, accounts: AccountService, token
             known = ", ".join(p.name for p in store.list_profiles())
             raise ApiError(400, f"Unknown profile “{name}”. Known profiles: {known}." if not matches
                            else f"More than one profile is named “{name}”.", "unknown_profile")
+        try:
+            pipeline.check_profile(matches[0].id)          # the client's scope
+        except PipelineError:
+            raise ApiError(400, f"Unknown profile “{name}”.", "unknown_profile") from None
         return matches[0]
+
+    def accepted(pending: ApprovalPending) -> JSONResponse:
+        body = ApprovalOut(approval_id=pending.approval_id, operation=pending.operation, expires_at=pending.expires_at,
+                           target_ids=pending.target_ids, reused=pending.reused,
+                           status_url=f"/v1/approvals/{pending.approval_id}")
+        return JSONResponse(jsonable_encoder(body), status_code=202)
+
+    def approval_out(req) -> ApprovalRequestOut:
+        return ApprovalRequestOut(id=req.id, profile_id=req.profile_id, operation=req.operation, status=req.status,
+                                  target_ids=req.target_ids, payload=req.payload, requested_by=req.requested_by,
+                                  created_at=req.created_at, expires_at=req.expires_at,
+                                  decided_at=req.decided_at, decided_by=req.decided_by, result=req.result)
 
     def to_video(card: Card, profile: Profile, channels: dict) -> Video:
         row, item = card.row, card.row.item
@@ -780,65 +817,70 @@ def create_app(store: Store, pipeline: Pipeline, accounts: AccountService, token
                 raise pipeline_error(exc) from None
         return video_by_id(video_id)
 
-    @app.post("/v1/videos/{video_id}/schedule", response_model=ScheduleResponse, operation_id="scheduleVideo",
-              summary="Schedule or publish a video to its platforms",
-              responses={**{k: ERRORS[k] for k in (401, 404, 409)}, 422: SCHEDULE_422}, **v1)
+    @app.post("/v1/videos/{video_id}/schedule", response_model=ApprovalOut, status_code=202,
+              operation_id="scheduleVideo", summary="Ask to schedule or publish a video (needs approval)",
+              responses={**{k: ERRORS[k] for k in (401, 404, 409, 429)}, 422: SCHEDULE_422}, **v1)
     def schedule_video(video_id: int, request: ScheduleRequest | None = None,
-                       force: bool = Query(False, description="true schedules even if the ticket isn't ready "
-                                                              "(skips the Ready gate). Platform rules that would make "
-                                                              "the post fail still apply.")) -> ScheduleResponse:
+                       force: bool = Query(False, description="true asks to schedule even if the ticket isn't "
+                                                              "ready (skips the Ready gate when approved). It never "
+                                                              "skips approval.")) -> ApprovalOut:
         """Queues automatic posting through Reelay's pipeline. YouTube uploads join the app's upload queue (one at
         a time) and are scheduled on YouTube. Bluesky, Threads and Facebook post automatically only when enabled
         (see GET /v1/platforms auto_post); otherwise their copy is posted by hand. The Ready gate refuses any
         platform whose checklist isn't passing (422 ticket_not_ready, see the video's `readiness`) unless
-        force=true. 409 if any requested platform is already scheduled or published."""
+        force=true. 409 if any requested platform is already scheduled or published.
+
+        **Needs a person's approval**: answered with 202 and an approval_id; nothing is scheduled until a person
+        approves (see GET /v1/approvals/{approval_id}). When carried out, the result lists the queued jobs."""
         request = request or ScheduleRequest()
         with store.origin("api"):
             try:
-                result = pipeline.schedule(video_id, scheduled_at=request.scheduled_at,
-                                           platforms=list(request.platforms) if request.platforms else None,
-                                           force=force)
+                pending = pipeline.schedule(video_id, scheduled_at=request.scheduled_at,
+                                            platforms=list(request.platforms) if request.platforms else None,
+                                            force=force)
             except PipelineError as exc:
                 raise pipeline_error(exc) from None
-        targets = [d.platform for d in result.dispatches
-                   if d.platform in (request.platforms or result.post.target_platforms) and d.platform not in result.manual]
-        jobs = [QueueJob(platform=d.platform, job_id=d.id, status=d.status, due_at=parse_utc(d.due_at),
-                         publish_at=parse_utc(d.publish_at), queue_position=pipeline.queue_position(d))
-                for d in result.dispatches if d.platform in targets]
-        row = store.get_video(video_id)
-        return ScheduleResponse(video_id=video_id, stage=row.stage, scheduled_at=parse_utc(result.post.publish_at),
-                                target_platforms=targets, manual_platforms=result.manual, jobs=jobs)
+        return accepted(pending)
 
     @app.get("/v1/videos/{video_id}/revisions", response_model=RevisionsResponse, operation_id="getRevisions",
              summary="A ticket's change history", responses={k: ERRORS[k] for k in (401, 404, 422)}, **v1)
     def get_revisions(video_id: int) -> RevisionsResponse:
         """Every saved change to the ticket's copy and fields: when, who (local app or api), which field, and the
         old and new values. Newest first. Typing isn't logged, only saves."""
-        if store.get_video(video_id) is None:
+        try:
+            pipeline.video(video_id)
+        except PipelineError:
             raise ApiError(404, f"No video with id {video_id}.", "not_found")
         return RevisionsResponse(video_id=video_id, revisions=[
             RevisionOut(id=r.id, at=parse_utc(r.at), origin=r.origin, field=r.field, old_value=r.old_value,
                         new_value=r.new_value) for r in store.revisions(video_id)])
 
-    @app.post("/v1/videos/{video_id}/manual-posts", response_model=HistoryItem, status_code=201,
-              operation_id="markPosted", summary="Record that a video was posted by hand",
-              responses={k: ERRORS[k] for k in (401, 404, 422)}, **v1)
-    def mark_posted(video_id: int, body: ManualPostCreate) -> HistoryItem:
+    @app.post("/v1/videos/{video_id}/manual-posts", response_model=ApprovalOut, status_code=202,
+              operation_id="markPosted", summary="Ask to record that a video was posted by hand (needs approval)",
+              responses={k: ERRORS[k] for k in (401, 404, 422, 429)}, **v1)
+    def mark_posted(video_id: int, body: ManualPostCreate) -> ApprovalOut:
         """For the copy-paste workflow: record that the video went out on a platform, so its publishing history is
-        complete. Doesn't post anything or move the card."""
+        complete. Doesn't post anything or move the card.
+
+        **Needs a person's approval**: answered with 202 and an approval_id; nothing changes until a person
+        approves (see GET /v1/approvals/{approval_id})."""
         with store.origin("api"):
             try:
-                manual = pipeline.mark_posted(video_id, body.platform, body.posted_at, body.url or "", body.note or "")
+                pending = pipeline.mark_posted(video_id, body.platform, body.posted_at, body.url or "", body.note or "")
             except PipelineError as exc:
                 raise pipeline_error(exc) from None
-        return HistoryItem(method="manual", status="posted", at=parse_utc(manual.posted_at), url=manual.url or None,
-                           note=manual.note or None, id=manual.id)
+        return accepted(pending)
 
-    @app.post("/v1/videos/bulk-update", response_model=BulkResult, operation_id="bulkUpdateVideos",
-              summary="Apply the same edit to many videos", responses={k: ERRORS[k] for k in (401, 404, 422)}, **v1)
-    def bulk_update(body: BulkUpdate) -> BulkResult:
+    @app.post("/v1/videos/bulk-update", response_model=ApprovalOut, status_code=202, operation_id="bulkUpdateVideos",
+              summary="Ask to apply the same edit to many videos (needs approval)",
+              responses={k: ERRORS[k] for k in (401, 404, 409, 422, 429)}, **v1)
+    def bulk_update(body: BulkUpdate) -> ApprovalOut:
         """Same rules as PATCH /v1/videos/{video_id}, for many videos at once, in one transaction: if any video
-        has a problem, nothing is written and every problem is listed (422)."""
+        has a problem when it's carried out, nothing is written and the request is marked failed with every
+        problem listed.
+
+        **Needs a person's approval**: answered with 202 and an approval_id; nothing changes until a person
+        approves (see GET /v1/approvals/{approval_id})."""
         changes = body.changes.model_dump(exclude_unset=True)
         if not changes:
             raise ApiError(422, "Send at least one field to change.", "invalid_request")
@@ -846,10 +888,10 @@ def create_app(store: Store, pipeline: Pipeline, accounts: AccountService, token
             changes["original_publish_date"] = changes["original_publish_date"].isoformat()
         with store.origin("api"):
             try:
-                changed = pipeline.bulk_update(body.video_ids, changes)
+                pending = pipeline.bulk_update(body.video_ids, changes)
             except PipelineError as exc:
                 raise pipeline_error(exc) from None
-        return BulkResult(changed=changed)
+        return accepted(pending)
 
     @app.post("/v1/videos/fill-from-original", response_model=FillResult, operation_id="fillFromOriginal",
               summary="Fill empty copy from the original posts", responses={k: ERRORS[k] for k in (401, 404, 422)},
@@ -864,61 +906,78 @@ def create_app(store: Store, pipeline: Pipeline, accounts: AccountService, token
             except PipelineError as exc:
                 raise pipeline_error(exc) from None
 
-    @app.post("/v1/videos/{video_id}/platforms/{platform}", response_model=Video, operation_id="markPlatform",
-              summary="Tick a platform as scheduled or posted (by hand)",
-              responses={k: ERRORS[k] for k in (401, 404, 409, 422)}, **v1)
-    def mark_platform(video_id: int, platform: ManualPlatformName, body: PlatformMark) -> Video:
+    @app.post("/v1/videos/{video_id}/platforms/{platform}", response_model=ApprovalOut, status_code=202,
+              operation_id="markPlatform", summary="Ask to tick a platform as scheduled or posted (needs approval)",
+              responses={k: ERRORS[k] for k in (401, 404, 409, 422, 429)}, **v1)
+    def mark_platform(video_id: int, platform: ManualPlatformName, body: PlatformMark) -> ApprovalOut:
         """The ticket's per-platform checkboxes, for posts made in the platform's own app. Marking makes the
         platform a target if it wasn't. Then the card moves on its own: to Scheduled when every target is
         scheduled or live, to Published when every target is live (a scheduled time passing counts). 409 for a
-        platform Reelay is posting itself."""
+        platform Reelay is posting itself.
+
+        **Needs a person's approval**: answered with 202 and an approval_id; nothing changes until a person
+        approves (see GET /v1/approvals/{approval_id})."""
         with store.origin("api"):
             try:
-                if body.url and body.state != "none":
-                    pipeline.confirm_handoff(video_id, platform, body.url, body.at, scheduled=body.state == "scheduled")
-                else:
-                    pipeline.set_platform_state(video_id, platform, body.state, body.at)
+                pending = pipeline.set_platform_state(video_id, platform, body.state, body.at, body.url or "")
             except PipelineError as exc:
                 raise pipeline_error(exc) from None
-        return video_by_id(video_id)
+        return accepted(pending)
 
-    @app.post("/v1/videos/{video_id}/publications/{platform}/resolve", response_model=Video,
-              operation_id="resolveInterrupted", summary="Decide what happened to an interrupted send",
-              responses={k: ERRORS[k] for k in (401, 404, 409, 422)}, **v1)
-    def resolve_interrupted(video_id: int, platform: PlatformName, body: InterruptedResolve) -> Video:
+    @app.post("/v1/videos/{video_id}/publications/{platform}/resolve", response_model=ApprovalOut, status_code=202,
+              operation_id="resolveInterrupted",
+              summary="Ask to decide what happened to an interrupted send (needs approval)",
+              responses={k: ERRORS[k] for k in (401, 404, 409, 422, 429)}, **v1)
+    def resolve_interrupted(video_id: int, platform: PlatformName, body: InterruptedResolve) -> ApprovalOut:
         """For a publication whose status is interrupted: Reelay won't guess whether it was posted (that could
-        post twice), so someone checks the platform and says. 409 if it isn't interrupted."""
+        post twice), so someone checks the platform and says. 409 if it isn't interrupted.
+
+        **Needs a person's approval**: answered with 202 and an approval_id; nothing changes until a person
+        approves (see GET /v1/approvals/{approval_id})."""
+        try:
+            pipeline.video(video_id)
+        except PipelineError as exc:
+            raise pipeline_error(exc) from None
         dispatch = next((d for d in store.dispatches_for(video_id) if d.platform == platform), None)
         if dispatch is None:
             raise ApiError(404, "That video has no send to that platform.", "not_found")
         with store.origin("api"):
             try:
-                pipeline.resolve_interrupted(dispatch.id, body.action, body.url or "")
+                pending = pipeline.resolve_interrupted(dispatch.id, body.action, body.url or "")
             except PipelineError as exc:
                 raise pipeline_error(exc) from None
-        return video_by_id(video_id)
+        return accepted(pending)
 
-    @app.post("/v1/videos/{video_id}/archive", response_model=Video, operation_id="archiveVideo",
-              summary="Archive a video", responses={k: ERRORS[k] for k in (401, 404, 409, 422)}, **v1)
-    def archive_video(video_id: int) -> Video:
+    @app.post("/v1/videos/{video_id}/archive", response_model=ApprovalOut, status_code=202,
+              operation_id="archiveVideo", summary="Ask to archive a video (needs approval)",
+              responses={k: ERRORS[k] for k in (401, 404, 409, 422, 429)}, **v1)
+    def archive_video(video_id: int) -> ApprovalOut:
         """Hides the video from the board and the Download page; its file, ticket and history are kept. 409 if it's
-        scheduled or uploading."""
-        with store.origin("api"):
-            try:
-                pipeline.archive([video_id], True)
-            except PipelineError as exc:
-                raise pipeline_error(exc) from None
-        return video_by_id(video_id)
+        scheduled or uploading.
 
-    @app.post("/v1/videos/{video_id}/unarchive", response_model=Video, operation_id="unarchiveVideo",
-              summary="Bring an archived video back", responses={k: ERRORS[k] for k in (401, 404, 422)}, **v1)
-    def unarchive_video(video_id: int) -> Video:
+        **Needs a person's approval**: answered with 202 and an approval_id; nothing changes until a person
+        approves (see GET /v1/approvals/{approval_id})."""
         with store.origin("api"):
             try:
-                pipeline.archive([video_id], False)
+                pending = pipeline.archive([video_id], True)
             except PipelineError as exc:
                 raise pipeline_error(exc) from None
-        return video_by_id(video_id)
+        return accepted(pending)
+
+    @app.post("/v1/videos/{video_id}/unarchive", response_model=ApprovalOut, status_code=202,
+              operation_id="unarchiveVideo", summary="Ask to bring an archived video back (needs approval)",
+              responses={k: ERRORS[k] for k in (401, 404, 422, 429)}, **v1)
+    def unarchive_video(video_id: int) -> ApprovalOut:
+        """Shows the video on the board again.
+
+        **Needs a person's approval**: answered with 202 and an approval_id; nothing changes until a person
+        approves (see GET /v1/approvals/{approval_id})."""
+        with store.origin("api"):
+            try:
+                pending = pipeline.archive([video_id], False)
+            except PipelineError as exc:
+                raise pipeline_error(exc) from None
+        return accepted(pending)
 
     @app.post("/v1/videos/{video_id}/revisions/{revision_id}/restore", response_model=Video,
               operation_id="restoreRevision", summary="Undo one logged change",
@@ -941,9 +1000,10 @@ def create_app(store: Store, pipeline: Pipeline, accounts: AccountService, token
         them as the ticket's transcript. Network call; takes a few seconds. 422 no_transcript when the post has
         no captions; 422 invalid_post when a transcript exists and replace is false."""
         from .ytdl import base_options
-        row = store.get_video(video_id)
-        if row is None:
-            raise ApiError(404, f"No video with id {video_id}.", "not_found")
+        try:
+            row = pipeline.video(video_id)
+        except PipelineError as exc:
+            raise pipeline_error(exc) from None
         profile = store.get_profile(row.profile_id)
         with store.origin("api"):
             try:
@@ -954,15 +1014,19 @@ def create_app(store: Store, pipeline: Pipeline, accounts: AccountService, token
         return video_by_id(video_id)
 
     @app.post("/v1/import", response_model=ImportReport, operation_id="importSheet",
-              summary="Import a spreadsheet (CSV) into tickets", tags=["import"],
-              dependencies=[Depends(require_token)], responses={k: ERRORS[k] for k in (400, 401, 422)})
+              summary="Import a spreadsheet (CSV) into tickets (applying needs approval)", tags=["import"],
+              dependencies=[Depends(require_token)],
+              responses={**{k: ERRORS[k] for k in (400, 401, 422, 429)},
+                         202: {"model": ApprovalOut, "description": "dry_run=false: waiting for a person's approval."}})
     def import_sheet(body: ImportRequest,
                      profile: str = Query(..., description="Profile name exactly as shown in Reelay's sidebar."),
                      dry_run: bool = Query(True, description="true (default) only reports what would change.")
                      ) -> ImportReport:
         """Matches each row to a video (by link, video ID, file name or your name for it), maps columns to ticket
         fields, and fills them. Empty cells never clear anything; over-limit or invalid rows are skipped and
-        reported. With dry_run=false every changing row is written in one transaction, each change logged."""
+        reported. dry_run=true (the default) only reports. dry_run=false asks to apply it: **needs a person's
+        approval** (202 with an approval_id); when approved, every changing row is written in one transaction,
+        each change logged."""
         from .sheet_import import FIELDS, MATCH_KEYS, SheetError, guess_mapping, read_csv
         prof = find_profile(profile)
         try:
@@ -977,8 +1041,13 @@ def create_app(store: Store, pipeline: Pipeline, accounts: AccountService, token
         changed = len(plan.changing)
         if not dry_run and changed:
             with store.origin("api"):
-                pipeline.apply_sheet(plan)
-        return ImportReport(applied=not dry_run, changed=changed, mapping=mapping, summary=plan.summary(),
+                try:
+                    pending = pipeline.apply_sheet(prof.id, headers, rows, mapping, body.overwrite)
+                except PipelineError as exc:
+                    raise pipeline_error(exc) from None
+            if pending is not None:
+                return accepted(pending)
+        return ImportReport(applied=False, changed=changed, mapping=mapping, summary=plan.summary(),
                             rows=[ImportRowOut(row=r.number, video_id=r.video_id, matched_by=r.matched_by or None,
                                                fields=r.fields, kept=r.kept, problems=r.problems)
                                   for r in plan.rows])
@@ -995,15 +1064,15 @@ def create_app(store: Store, pipeline: Pipeline, accounts: AccountService, token
         for platform in Platform.ALL:
             listed = store.list_accounts(prof.id, platform)
             entries = [PlatformAccount(name=a.display_name, handle=a.handle or None, external_id=a.external_id,
-                                       credential_present=accounts.has_credentials(a),
+                                       credential_present=credential_present(a),
                                        last_verified_at=parse_utc(a.last_verified_at)) for a in listed]
             issue = None
             auto_post = platform in pipeline.enabled_platforms()
             if not auto_post:
                 issue = (f"Automatic posting is off (copy-paste only). Turn it on with {env_var(platform)}=1 or "
                          "Reelay → Settings → Automatic posting, then restart Reelay.")
-            elif platform == Platform.YOUTUBE and accounts.oauth_client() is None:
-                issue = "Import Google API credentials in Reelay → Accounts."
+            elif platform == Platform.YOUTUBE and oauth_client() is None:
+                issue = "Sign in with Google in Reelay → Accounts."
             elif not listed:
                 issue = f"No {Platform.LABELS[platform]} account connected in Reelay → Accounts."
             elif not any(e.credential_present for e in entries):
@@ -1015,9 +1084,6 @@ def create_app(store: Store, pipeline: Pipeline, accounts: AccountService, token
         return PlatformsResponse(profile=ProfileRef(id=prof.id, name=prof.name), platforms=infos)
 
     # ---------------------------------------------------------------- download sources
-    from .sources import SourceError, SourceService
-    sources = SourceService(store, accounts)
-
     def to_source(view) -> SourceOut:
         acc = view.account
         return SourceOut(id=view.source_id, kind=view.kind, name=view.name, platform=view.platform, url=view.url,
@@ -1036,7 +1102,7 @@ def create_app(store: Store, pipeline: Pipeline, accounts: AccountService, token
         publishing out is separate (see /v1/platforms)."""
         prof = find_profile(profile)
         return SourcesResponse(profile=ProfileRef(id=prof.id, name=prof.name),
-                               sources=[to_source(v) for v in sources.all_sources(prof.id)])
+                               sources=[to_source(v) for v in pipeline.sources(prof.id)])
 
     @app.post("/v1/sources", response_model=SourceOut, status_code=201, operation_id="addSource",
               summary="Save a download source for a profile", tags=["sources"],
@@ -1049,15 +1115,19 @@ def create_app(store: Store, pipeline: Pipeline, accounts: AccountService, token
         prof = find_profile(profile)
         with store.origin("api"):
             try:
-                saved = sources.add(prof.id, body.url, body.name, body.mine)
-            except SourceError as exc:
-                raise ApiError(422, str(exc), "invalid_source") from None
-        view = next(v for v in sources.all_sources(prof.id) if v.source_id == saved.id)
+                saved = pipeline.add_source(prof.id, body.url, body.name, body.mine)
+            except PipelineError as exc:
+                raise pipeline_error(exc) from None
+        view = next(v for v in pipeline.sources(prof.id) if v.source_id == saved.id)
         return to_source(view)
 
     def source_by_id(source_id: int):
-        view = next((v for v in sources.all_sources(store.get_source(source_id).profile_id)
-                     if v.source_id == source_id), None) if store.get_source(source_id) else None
+        src = store.get_source(source_id)
+        try:
+            views = pipeline.sources(src.profile_id) if src else []
+        except PipelineError:
+            views = []
+        view = next((v for v in views if v.source_id == source_id), None)
         if view is None:
             raise ApiError(404, f"No saved source with id {source_id}.", "not_found")
         return view
@@ -1073,23 +1143,50 @@ def create_app(store: Store, pipeline: Pipeline, accounts: AccountService, token
             raise ApiError(422, "Send name and/or mine.", "invalid_request")
         with store.origin("api"):
             try:
-                if "name" in changes:
-                    sources.rename(source_id, changes["name"] or "")
-                if changes.get("mine") is not None:
-                    sources.set_mine(source_id, changes["mine"])
-            except SourceError as exc:
-                raise ApiError(422, str(exc), "invalid_source") from None
+                pipeline.update_source(source_id, (changes["name"] or "") if "name" in changes else None,
+                                       changes.get("mine"))
+            except PipelineError as exc:
+                raise pipeline_error(exc) from None
         return to_source(source_by_id(source_id))
 
-    @app.delete("/v1/sources/{source_id}", status_code=204, operation_id="deleteSource",
-                summary="Remove a saved source", tags=["sources"], dependencies=[Depends(require_token)],
-                responses={k: ERRORS[k] for k in (401, 404, 422)})
-    def delete_source(source_id: int) -> Response:
-        """Removes the saved link only. Videos already listed or downloaded from it stay."""
+    @app.delete("/v1/sources/{source_id}", response_model=ApprovalOut, status_code=202, operation_id="deleteSource",
+                summary="Ask to remove a saved source (needs approval)", tags=["sources"],
+                dependencies=[Depends(require_token)], responses={k: ERRORS[k] for k in (401, 404, 422, 429)})
+    def delete_source(source_id: int) -> ApprovalOut:
+        """Removes the saved link only. Videos already listed or downloaded from it stay.
+
+        **Needs a person's approval**: answered with 202 and an approval_id; nothing changes until a person
+        approves (see GET /v1/approvals/{approval_id})."""
         source_by_id(source_id)
         with store.origin("api"):
-            sources.remove(source_id)
-        return Response(status_code=204)
+            try:
+                pending = pipeline.delete_source(source_id)
+            except PipelineError as exc:
+                raise pipeline_error(exc) from None
+        return accepted(pending)
+
+    # ---------------------------------------------------------------- approval requests (read only)
+    @app.get("/v1/approvals", response_model=ApprovalsResponse, operation_id="listApprovals",
+             summary="List approval requests", tags=["approvals"], dependencies=[Depends(require_token)],
+             responses={k: ERRORS[k] for k in (400, 401, 422)})
+    def list_approvals(profile: str | None = Query(None, description="Only this profile (sidebar name)."),
+                       status: Literal["pending", "approved", "rejected", "expired", "executed", "failed",
+                                       "stale"] | None = Query(None),
+                       limit: int = Query(50, ge=1, le=200)) -> ApprovalsResponse:
+        """What agents asked for and what happened. Agents can't approve or reject: a person does that in
+        Reelay (`python -m reelay.approvals` for now)."""
+        prof = find_profile(profile) if profile else None
+        return ApprovalsResponse(approvals=[approval_out(r) for r in
+                                            pipeline.approvals(prof.id if prof else None, status, limit)])
+
+    @app.get("/v1/approvals/{approval_id}", response_model=ApprovalRequestOut, operation_id="getApproval",
+             summary="One approval request", tags=["approvals"], dependencies=[Depends(require_token)],
+             responses={k: ERRORS[k] for k in (401, 404, 422)})
+    def get_approval(approval_id: int) -> ApprovalRequestOut:
+        try:
+            return approval_out(pipeline.approval(approval_id))
+        except PipelineError as exc:
+            raise pipeline_error(exc) from None
 
     # ---------------------------------------------------------------- media links (Threads)
     @app.api_route("/media/{token}", methods=["GET", "HEAD"], include_in_schema=False)

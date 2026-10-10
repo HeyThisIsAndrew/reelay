@@ -15,7 +15,7 @@ import requests
 from reelay.models import DispatchStatus, Platform, Post, Stage, VideoItem
 from reelay.pipeline import PipelineError
 from reelay.readiness import NOT_CHECKED, NOT_READY, READY, evaluate
-from tests.fakes import SECRETS, connect_platform, disable_publishing, enable_publishing, make_world
+from tests.fakes import approve_and_run, SECRETS, connect_platform, disable_publishing, enable_publishing, make_world
 
 
 def future(days=2):
@@ -338,8 +338,8 @@ def test_api_422_ticket_not_ready_then_force(api, monkeypatch):
     video = next(v for v in board["videos"] if v["id"] == vid)
     assert video["ready"] is True and video["readiness"]["youtube"]["state"] == "ready"
     r = api.post(f"{api.base}/v1/videos/{vid}/schedule?force=true", json={"platforms": ["bluesky"]}, timeout=10)
-    assert r.status_code == 200, r.text
-    assert [j["platform"] for j in r.json()["jobs"]] == ["bluesky"]
+    done = approve_and_run(w.store, w.pipeline, r)          # force skips the Ready gate, never the approval
+    assert [d["platform"] for d in done.result["dispatches"]] == ["bluesky"]
 
 
 def test_api_patch_ticket_fields_logs_revisions_and_marks_posted(api):
@@ -358,7 +358,7 @@ def test_api_patch_ticket_fields_logs_revisions_and_marks_posted(api):
     revs = api.get(f"{api.base}/v1/videos/{vid}/revisions", timeout=10).json()["revisions"]
     assert {(x["field"], x["origin"]) for x in revs} >= {("topic", "api"), ("authorization", "api")}
     r = api.post(f"{api.base}/v1/videos/{vid}/manual-posts", json={"platform": "instagram"}, timeout=10)
-    assert r.status_code == 201 and r.json()["method"] == "manual"
+    assert approve_and_run(w.store, w.pipeline, r).status == "executed"
     assert api.post(f"{api.base}/v1/videos/{vid}/manual-posts", json={"platform": "myspace"},
                     timeout=10).status_code == 422
     board = api.get(f"{api.base}/v1/board", params={"profile": "Lydia Livingood"}, timeout=10).json()

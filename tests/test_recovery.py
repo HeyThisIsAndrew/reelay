@@ -13,7 +13,7 @@ from reelay.models import PostStatus, Stage
 from reelay.pipeline import INTERRUPTED_MESSAGE, MISSED_MESSAGE, PAUSED_MESSAGE, UNSURE_MESSAGE, PipelineError, utc_iso
 from reelay.scheduler import Dispatcher
 from reelay.uploads import UploadFailure
-from tests.fakes import connect_platform, enable_publishing, make_world
+from tests.fakes import approve_and_run, connect_platform, enable_publishing, make_world
 
 NOW = datetime.now(timezone.utc).replace(microsecond=0)
 
@@ -276,9 +276,10 @@ def test_resolve_through_the_api(tmp_path, monkeypatch):
         w.store.interrupt_dispatch(x.id, INTERRUPTED_MESSAGE)
         r = requests.post(url, json={"action": "posted", "url": "https://bsky.app/profile/x/post/3k"},
                           headers=h, timeout=10)
-        assert r.status_code == 200
-        pub = next(p for p in r.json()["publications"] if p["platform"] == "bluesky")
-        assert pub["status"] == "published" and pub["url"].endswith("/3k")
+        assert w.store.dispatches_for(row)[0].status == "interrupted"                # waits for a person
+        assert approve_and_run(w.store, w.pipeline, r).status == "executed"
+        pub = w.store.dispatches_for(row)[0]
+        assert pub.status == "published" and pub.remote_url.endswith("/3k")
     finally:
         server.stop()
         w.store.close()

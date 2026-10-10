@@ -139,3 +139,14 @@ def connect_platform(accounts: AccountService, profile_id: int, platform: str) -
                             {"page_id": "1029384756", "page_access_token": SECRETS["facebook"]}),
     }[platform]
     return accounts.connect_platform(profile_id, platform, identity, secret)
+
+
+def approve_and_run(store, pipeline, response):
+    """A person approves an agent's request (the 202 response), then the app carries it out.
+    Returns the finished approval request (status executed / failed / stale)."""
+    from reelay import approvals
+    assert response.status_code == 202, response.text
+    approval_id = response.json()["approval_id"]
+    approvals.approve(store, approval_id, "test person")
+    approvals.execute_approved(pipeline)
+    return store.get_approval(approval_id)
