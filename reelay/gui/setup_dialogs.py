@@ -387,3 +387,90 @@ class TokenSetupDialog(QDialog):
         if self.worker:
             self.worker.wait(3000)
         super().reject()
+
+
+# ====================================================================== Reelay's own apps (any platform)
+class ProviderSignInDialog(QDialog):
+    """"Sign in with TikTok / Instagram / Threads / Facebook" through Reelay's own
+    app: progress, reopen-the-page, Cancel. Emits the accounts found."""
+
+    signedIn = Signal(object, list)   # TokenSet, [found accounts]
+
+    def __init__(self, provider_key: str, parent=None, open_browser=webbrowser.open, sign_in=None, identity=None):
+        super().__init__(parent)
+        from ..oauth import PROVIDERS
+        from ..oauth import identity as find_accounts
+        from ..oauth import sign_in as run_sign_in
+        provider = PROVIDERS[provider_key]
+        self.setWindowTitle(f"Sign in with {provider.label}")
+        self.setMinimumWidth(460)
+        self._open = open_browser
+        self._url = ""
+        self.cancel = threading.Event()
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(24, 20, 24, 16)
+        lay.setSpacing(12)
+        lay.addWidget(QLabel(f"Sign in with {provider.label}", objectName="DetailTitle"))
+        self.message = _text(f"A {provider.label} sign-in page is opening in your browser. Sign in to the account "
+                             "you want to connect, allow access, then come back here. Reelay never sees your "
+                             "password.", "muted")
+        lay.addWidget(self.message)
+        self.bar = QProgressBar()
+        self.bar.setRange(0, 0)
+        self.bar.setTextVisible(False)
+        lay.addWidget(self.bar)
+        row = QHBoxLayout()
+        self.reopen_btn = QPushButton("Open the Sign-in Page Again")
+        set_prop(self.reopen_btn, "flat")
+        tip(self.reopen_btn, "If the browser didn't open, or you closed the tab")
+        self.reopen_btn.clicked.connect(lambda: self._url and self._open(self._url))
+        row.addWidget(self.reopen_btn)
+        row.addStretch()
+        self.cancel_btn = QPushButton("Cancel")
+        self.cancel_btn.clicked.connect(self._cancel)
+        row.addWidget(self.cancel_btn)
+        lay.addLayout(row)
+        run = sign_in or run_sign_in
+        lookup = identity or find_accounts
+
+        def work():
+            tokens = run(provider_key, open_browser=self._open_page, cancel=self.cancel)
+            return tokens, lookup(provider_key, tokens)
+        self.worker = CallWorker(work, parent=self)
+        self.worker.succeeded.connect(self._done)
+        self.worker.failed.connect(self._failed)
+
+    def _open_page(self, url: str) -> None:
+        self._url = url
+        self._open(url)
+
+    def exec(self) -> int:  # noqa: A003
+        self.worker.start()
+        return super().exec()
+
+    def _done(self, result) -> None:
+        tokens, found = result
+        if not found:
+            self._failed("Signed in, but no account was found to connect. (For Facebook, you need to manage a Page.)")
+            return
+        self.signedIn.emit(tokens, found)
+        self.accept()
+
+    def _failed(self, message: str) -> None:
+        if self.cancel.is_set():
+            self.reject()
+            return
+        self.bar.hide()
+        self.message.setText(f"Sign-in didn't finish: {message}")
+        self.cancel_btn.setText("Close")
+        self.reopen_btn.hide()
+
+    def _cancel(self) -> None:
+        self.cancel.set()
+        if not self.worker.isRunning():
+            self.reject()
+
+    def reject(self) -> None:
+        self.cancel.set()
+        self.worker.wait(3000)
+        super().reject()

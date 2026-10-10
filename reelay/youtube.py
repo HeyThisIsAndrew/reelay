@@ -111,12 +111,13 @@ def pkce_pair() -> tuple[str, str]:
     return verifier, challenge
 
 
-def build_auth_url(client: OAuthClient, redirect_uri: str, state: str, challenge: str) -> str:
+def build_auth_url(client: OAuthClient, redirect_uri: str, state: str, challenge: str,
+                   scopes: list[str] | None = None) -> str:
     query = {
         "client_id": client.client_id,
         "redirect_uri": redirect_uri,
         "response_type": "code",
-        "scope": " ".join(SCOPES),
+        "scope": " ".join(scopes or SCOPES),
         "state": state,
         "code_challenge": challenge,
         "code_challenge_method": "S256",
@@ -189,12 +190,12 @@ class LoopbackReceiver:
 
 def authorize(client: OAuthClient, open_browser: Callable[[str], object] = webbrowser.open,
               timeout: float = 300, cancel: threading.Event | None = None,
-              session: requests.Session | None = None) -> Tokens:
+              session: requests.Session | None = None, scopes: list[str] | None = None) -> Tokens:
     """Run the full browser sign-in and return tokens."""
     verifier, challenge = pkce_pair()
     state = secrets.token_urlsafe(24)
     receiver = LoopbackReceiver()
-    open_browser(build_auth_url(client, receiver.redirect_uri, state, challenge))
+    open_browser(build_auth_url(client, receiver.redirect_uri, state, challenge, scopes))
     params = receiver.wait(timeout, cancel)
     if params.get("state") != state:
         raise YouTubeError("Sign-in response didn't match this request. Please try again.")

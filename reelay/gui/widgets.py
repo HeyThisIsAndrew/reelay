@@ -246,3 +246,135 @@ class Collapsible(QWidget):
         self.summary.setProperty("danger", danger)
         self.summary.style().unpolish(self.summary)
         self.summary.style().polish(self.summary)
+
+
+class ProductFilter(QWidget):
+    """Brand first, then product: two menus. Brands come from the tagged
+    products (renameable: a brand's name is remembered across the app)."""
+
+    changed = Signal(object)   # set of product ids to show, or None for everything
+
+    SETTING = "brand_names"
+
+    def __init__(self, store=None, parent=None):
+        super().__init__(parent)
+        from PySide6.QtWidgets import QToolButton
+        self.store = store
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
+        self.brand = QComboBox()
+        self.brand.setToolTip("Show only videos tagged with one brand's products (TikTok Shop). Then narrow it to "
+                              "one product on the right. The number is how many videos.")
+        self.brand.setMinimumWidth(150)
+        self.product = QComboBox()
+        self.product.setToolTip("Show only videos tagged with one product. Pick a brand first to shorten this list.")
+        self.product.setMinimumWidth(170)
+        for combo in (self.brand, self.product):
+            combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+            combo.setMinimumContentsLength(12)
+        self.rename_btn = QToolButton(text="✎")
+        self.rename_btn.setToolTip("Rename the chosen brand (e.g. “Happy” → “Happy Saffron”)")
+        self.rename_btn.setEnabled(False)
+        self.rename_btn.clicked.connect(self._rename)
+        lay.addWidget(self.brand)
+        lay.addWidget(self.rename_btn)
+        lay.addWidget(self.product)
+        self._products: dict = {}      # id -> Product
+        self._count: dict = {}         # id -> videos
+        self._brand_of: dict = {}      # id -> brand shown
+        self.brand.currentIndexChanged.connect(self._on_brand)
+        self.product.currentIndexChanged.connect(self._emit)
+        self._fill_brands()
+
+    # ---------------------------------------------------------------- names
+    def _overrides(self) -> dict:
+        import json
+        if self.store is None:
+            return {}
+        try:
+            return json.loads(self.store.get_setting(self.SETTING, "") or "{}")
+        except ValueError:
+            return {}
+
+    def _rename(self) -> None:
+        import json
+
+        from PySide6.QtWidgets import QInputDialog
+        current = self.brand.currentData()
+        if not current or self.store is None:
+            return
+        name, ok = QInputDialog.getText(self, "Rename Brand", "Brand name:", text=current)
+        if not ok or not name.strip() or name.strip() == current:
+            return
+        overrides = self._overrides()
+        auto = next((a for a, n in overrides.items() if n == current), current)
+        overrides[auto] = name.strip()
+        self.store.set_setting(self.SETTING, json.dumps(overrides))
+        self.set_videos(self._videos, keep=(name.strip(), self.product.currentData()))
+
+    # ---------------------------------------------------------------- data
+    def set_videos(self, product_lists, keep=None) -> None:
+        """product_lists: for each video, its list of Product."""
+        from collections import Counter
+
+        from ..products import brand_map
+        self._videos = [list(ps) for ps in product_lists]
+        self._products = {p.id: p for ps in self._videos for p in ps}
+        self._count = Counter(pid for ps in self._videos for pid in {p.id for p in ps})
+        overrides = self._overrides()
+        self._brand_of = {pid: overrides.get(b, b) for pid, b in brand_map(self._products.values()).items()}
+        brand, product = keep or (self.brand.currentData(), self.product.currentData())
+        self._fill_brands(brand, product)
+
+    def _fill_brands(self, brand=None, product=None) -> None:
+        from collections import Counter
+        videos_per_brand = Counter()
+        for ps in getattr(self, "_videos", []):
+            for b in {self._brand_of.get(p.id) for p in ps}:
+                videos_per_brand[b] += 1
+        wanted = [("", "All brands")] + [(b, f"{b}  ({n})") for b, n in
+                                          sorted(videos_per_brand.items(), key=lambda kv: (-kv[1], kv[0].lower()))]
+        self.brand.blockSignals(True)
+        if [(self.brand.itemData(i), self.brand.itemText(i)) for i in range(self.brand.count())] != wanted:
+            self.brand.clear()
+            for key, label in wanted:
+                self.brand.addItem(label, key)
+        self.brand.setCurrentIndex(max(self.brand.findData(brand or ""), 0))
+        self.brand.blockSignals(False)
+        self._fill_products(product)
+
+    def _fill_products(self, product=None) -> None:
+        brand = self.brand.currentData() or ""
+        ids = [pid for pid in self._products if not brand or self._brand_of.get(pid) == brand]
+        ids.sort(key=lambda pid: (-self._count[pid], self._products[pid].label.lower()))
+        self.product.blockSignals(True)
+        self.product.clear()
+        self.product.addItem("All products" if not brand else f"All {brand} products", "")
+        for pid in ids:
+            self.product.addItem(f"{self._products[pid].label}  ({self._count[pid]})", pid)
+            self.product.setItemData(self.product.count() - 1, self._products[pid].title, Qt.ToolTipRole)
+        self.product.setCurrentIndex(max(self.product.findData(product or ""), 0))
+        self.product.blockSignals(False)
+        self.rename_btn.setEnabled(bool(brand))
+        self._emit()
+
+    def _on_brand(self) -> None:
+        self._fill_products()
+
+    def _emit(self) -> None:
+        self.changed.emit(self.selection())
+
+    def selection(self):
+        pid = self.product.currentData()
+        if pid:
+            return {pid}
+        brand = self.brand.currentData()
+        if brand:
+            return {p for p, b in self._brand_of.items() if b == brand}
+        return None
+
+    def select_product(self, product_id: str) -> None:
+        brand = self._brand_of.get(product_id)
+        if brand is not None:
+            self._fill_brands(brand, product_id)

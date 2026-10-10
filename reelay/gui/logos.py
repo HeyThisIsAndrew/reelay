@@ -104,7 +104,7 @@ DRAW = {"youtube": _youtube, "tiktok": _tiktok, "instagram": _instagram, "bluesk
 def platform_pixmap(platform: str, size: int = 16, faded: bool = False) -> QPixmap:
     pix, p = _canvas(size)
     if faded:
-        p.setOpacity(0.32)
+        p.setOpacity(0.72)   # "to do": still clearly recognizable; the card adds a dashed ring
     draw = DRAW.get(platform)
     if draw:
         draw(p, float(size))

@@ -31,6 +31,7 @@ class Product:
     title: str              # the product's full listing title
     platform: str = "tiktok"
     url: str = ""           # the product page
+    seller_id: str = ""     # the shop selling it (groups a brand's products)
 
     def to_record(self) -> dict:
         return asdict(self)
@@ -74,7 +75,8 @@ def products_from_item(item: dict) -> list[Product]:
             name = str(entry.get("keyword") or inner.get("elastic_title") or title).strip()
             url = str(inner.get("seo_url") or "").split("?", 1)[0]
             found[pid] = Product(id=pid, name=name, title=title or name,
-                                 url=url if url.startswith("https://") else "")
+                                 url=url if url.startswith("https://") else "",
+                                 seller_id=str(inner.get("seller_id") or ""))
     return list(found.values())
 
 
@@ -103,4 +105,41 @@ def tiktok_products(url: str, ydl_opts: dict, ydl_factory=None) -> list[Product]
 
 def video_products(item) -> list[Product]:
     """The products recorded on a VideoItem (empty when none, or not looked up yet)."""
-    return [Product(**p) for p in (item.products or []) if isinstance(p, dict) and p.get("id")]
+    known = set(Product.__dataclass_fields__)
+    return [Product(**{k: v for k, v in p.items() if k in known})
+            for p in (item.products or []) if isinstance(p, dict) and p.get("id")]
+
+
+_FILLER = {"the", "a", "an", "new", "official", "-", "–", "|", "by"}
+
+
+def _words(title: str) -> list[str]:
+    return [w.strip(",.:;|()[]") for w in (title or "").split() if w.strip(",.:;|()[]")]
+
+
+def brand_map(products) -> dict[str, str]:
+    """product id → brand name, for filtering by brand first.
+
+    Products from the same shop (seller) share a brand; its name is the words
+    their titles start with ("Blenders Eyewear Candy Cove…" and "Blenders North
+    Park…" → "Blenders"). A product on its own uses the first word of its title.
+    Listing titles almost always lead with the brand."""
+    products = {p.id: p for p in products}
+    groups: dict[str, list] = {}
+    for p in products.values():
+        groups.setdefault(p.seller_id or f"title:{(_words(p.title)[:1] or [p.id])[0].lower()}", []).append(p)
+    result: dict[str, str] = {}
+    for members in groups.values():
+        titles = [_words(p.title or p.name) for p in members]
+        common: list[str] = []
+        if len(titles) > 1:
+            for column in zip(*titles):
+                if len({w.lower() for w in column}) != 1:
+                    break
+                common.append(column[0])
+        name = " ".join(common[:3]) if common else (titles[0][0] if titles and titles[0] else members[0].name)
+        while name.split() and name.split()[-1].lower() in _FILLER:
+            name = " ".join(name.split()[:-1])
+        for p in members:
+            result[p.id] = name or p.name
+    return result

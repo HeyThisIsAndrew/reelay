@@ -38,6 +38,8 @@ CREDENTIAL_FIELDS: dict[str, tuple[str, ...]] = {
     "bluesky": ("handle", "app_password"),
     "threads": ("access_token",),
     "facebook": ("page_id", "page_access_token"),
+    "tiktok": ("access_token",),        # signed in with Reelay's TikTok app (analytics; posting stays by hand)
+    "instagram": ("access_token",),     # signed in with Reelay's Instagram app
 }
 
 
@@ -47,7 +49,8 @@ class AccountService:
         self.tokens = tokens
 
     # ---------------------------------------------------------------- OAuth client
-    def oauth_client(self) -> OAuthClient | None:
+    def own_oauth_client(self) -> OAuthClient | None:
+        """The Google project the person set up themselves (Set Up YouTube…)."""
         raw = self.store.get_setting(GOOGLE_CLIENT_SETTING)
         if not raw:
             return None
@@ -55,6 +58,24 @@ class AccountService:
             return OAuthClient(**json.loads(raw))
         except (ValueError, TypeError):
             return None
+
+    @staticmethod
+    def central_oauth_client() -> OAuthClient | None:
+        """Reelay's own Google app ("Sign in with Google" with no setup), if this build has one."""
+        from . import oauth_config
+        cid, secret = oauth_config.client_id("google"), oauth_config.value("GOOGLE_CLIENT_SECRET")
+        return OAuthClient(cid, secret) if cid and secret else None
+
+    def oauth_client(self) -> OAuthClient | None:
+        """The Google app to sign in with: your own project if you set one up,
+        otherwise Reelay's."""
+        return self.own_oauth_client() or self.central_oauth_client()
+
+    def google_client_source(self) -> str | None:
+        """"own" (your Google project), "reelay" (Reelay's app) or None (needs setup)."""
+        if self.own_oauth_client():
+            return "own"
+        return "reelay" if self.central_oauth_client() else None
 
     def set_oauth_client(self, client: OAuthClient | None) -> None:
         self.store.set_setting(GOOGLE_CLIENT_SETTING,
@@ -84,8 +105,13 @@ class AccountService:
     @staticmethod
     def sign_in(oauth: OAuthClient, open_browser: Callable[[str], object],
                 cancel: threading.Event | None = None) -> tuple[dict, Tokens]:
-        """Background thread: browser sign-in, then read the channel."""
-        tokens = authorize(oauth, open_browser=open_browser, cancel=cancel)
+        """Background thread: browser sign-in, then read the channel. Reelay's own
+        app also asks for read-only YouTube Analytics (for the analytics to come)."""
+        from .oauth import PROVIDERS
+        central = AccountService.central_oauth_client()
+        scopes = list(PROVIDERS["google"].scopes + PROVIDERS["google"].analytics_scopes) \
+            if central and oauth == central else None
+        tokens = authorize(oauth, open_browser=open_browser, cancel=cancel, scopes=scopes)
         channel = YouTubeClient(oauth, tokens).my_channel()
         return channel, tokens
 
@@ -146,6 +172,14 @@ class AccountService:
         account = self.store.save_account(account)
         self.store.mark_verified(account.id)
         return account
+
+    def connect_signed_in(self, profile_id: int, platform: str, tokens, found: dict) -> Account:
+        """Store an account attached with Reelay's "Sign in with …" (TikTok,
+        Instagram, Threads, Facebook). `found` is one entry from oauth.identity()."""
+        secret = {"access_token": tokens.access_token, "refresh_token": tokens.refresh_token,
+                  "expires_at": tokens.expires_at, "via": "reelay", **found.get("secret", {})}
+        identity = {k: found[k] for k in ("external_id", "display_name", "handle") if k in found}
+        return self.connect_platform(profile_id, platform, identity, secret)
 
     def account_for(self, profile_id: int, platform: str, account_id: int | None = None) -> Account | None:
         """The account a post should use on a platform: the given one, else the profile's first."""

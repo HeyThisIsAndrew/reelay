@@ -338,7 +338,7 @@ class VideoFilterProxy(QSortFilterProxyModel):
         super().__init__(parent)
         self._query = ""
         self._tag = ""
-        self._product = ""
+        self._product_ids: set | None = None
         self.setSortRole(SORT_ROLE)
         self.setDynamicSortFilter(False)  # don't reshuffle rows while downloading
 
@@ -353,18 +353,22 @@ class VideoFilterProxy(QSortFilterProxyModel):
 
     def set_product(self, product_id: str | None) -> None:
         """Only videos tagged with this product; empty shows every video."""
-        self._product = product_id or ""
+        self.set_product_ids({product_id} if product_id else None)
+
+    def set_product_ids(self, ids: set | None) -> None:
+        """Only videos tagged with one of these products (a brand's, or one); None = all."""
+        self._product_ids = set(ids) if ids else None
         self.invalidateFilter()
 
     @property
     def filtering(self) -> bool:
-        return bool(self._query or self._tag or self._product)
+        return bool(self._query or self._tag or self._product_ids)
 
     def filterAcceptsRow(self, source_row: int, source_parent) -> bool:
         item = self.sourceModel().item(source_row)
         if self._tag and self._tag not in item.hashtags:
             return False
-        if self._product and not any(p.get("id") == self._product for p in item.products or []):
+        if self._product_ids and not any(p.get("id") in self._product_ids for p in item.products or []):
             return False
         if not self._query:
             return True

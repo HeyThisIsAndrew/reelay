@@ -9,7 +9,8 @@ import time
 from dataclasses import replace
 from datetime import datetime
 
-from PySide6.QtCore import (QAbstractListModel, QItemSelectionModel, QMimeData, QModelIndex, QRect, QRectF, QSize,
+from PySide6.QtCore import (QAbstractListModel, QItemSelectionModel, QMimeData, QModelIndex, QRect, QRectF, QSettings,
+                            QSize,
                             Qt, QTimer, Signal)
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QListView, QMenu,
@@ -42,7 +43,8 @@ MIME = "application/x-reelay-cards"
 CARD_HEIGHT = 132
 COVER_W, COVER_H = 52, 92
 SYNC_EVERY_SECONDS = 600
-COLUMN_MIN_WIDTH = 190
+COLUMN_MIN_WIDTH = 280      # columns never squeeze below this; drag the gaps between them to resize
+CARD_LOGO_SIZE = 18
 
 
 # ====================================================================== model / delegate
@@ -77,8 +79,8 @@ class BoardModel(QAbstractListModel):
         if role == Qt.DisplayRole:
             return card.title
         if role == Qt.ToolTipRole:
-            words = {"none": "not scheduled yet", "failed": "failed", "scheduled": "scheduled",
-                     "sending": "posting now", "published": "live"}
+            words = {"none": "to do (dashed ring)", "failed": "failed (red dot)", "scheduled": "scheduled (amber dot)",
+                     "sending": "posting now", "published": "live (green dot)"}
             lines = [f"{Platform.LABELS.get(n, n)}: {words.get(s.state, s.state)}"
                      for n, s in card.platform_states.items() if s.target]
             return card.row.item.hook + ("\n\n" + "\n".join(lines) if lines else "")
@@ -188,7 +190,7 @@ class CardDelegate(QStyledItemDelegate):
         painter.drawText(QRect(x, y + 4, w, sfm.height()), Qt.AlignLeft | Qt.AlignVCenter,
                          sfm.elidedText(meta, Qt.ElideRight, w))
 
-        self._draw_platforms(painter, card, x, int(r.bottom()) - sfm.height() - 30)
+        self._draw_platforms(painter, card, x + 2, int(r.bottom()) - sfm.height() - 34)
 
         status, color = self._status(card)
         painter.setPen(QColor(color))
@@ -201,22 +203,30 @@ class CardDelegate(QStyledItemDelegate):
         painter.restore()
 
     @staticmethod
-    def _draw_platforms(painter: QPainter, card: Card, x: int, y: int, size: int = 14) -> None:
-        """The platforms the video is going to: faded = not scheduled yet, solid =
-        scheduled, a green dot = live, a red dot = failed."""
+    def _draw_platforms(painter: QPainter, card: Card, x: int, y: int, size: int = CARD_LOGO_SIZE) -> None:
+        """The platforms the video is going to, each clearly visible:
+        to do = the logo in a dashed ring; scheduled = amber dot; live = green
+        dot; failed = red dot."""
         from .logos import platform_pixmap
         p = theme.P
         for name, state in card.platform_states.items():
             if not state.target:
                 continue
-            faded = state.state in ("none", "failed")
-            painter.drawPixmap(x, y, platform_pixmap(name, size, faded))
-            dot = p.success if state.state == "published" else p.danger if state.state == "failed" else None
+            todo = state.state in ("none", "failed")
+            painter.drawPixmap(x, y, platform_pixmap(name, size, faded=todo))
+            if todo:
+                pen = QPen(QColor(p.text2), 1.2)
+                pen.setStyle(Qt.DashLine)
+                painter.setPen(pen)
+                painter.setBrush(Qt.NoBrush)
+                painter.drawRoundedRect(QRectF(x - 2.5, y - 2.5, size + 5, size + 5), 6, 6)
+            dot = {"published": p.success, "failed": p.danger, "scheduled": "#F2A93B",
+                   "sending": "#F2A93B"}.get(state.state)
             if dot:
                 painter.setPen(QPen(QColor(p.raised), 1.5))
                 painter.setBrush(QColor(dot))
-                painter.drawEllipse(QRectF(x + size - 5, y + size - 5, 6, 6))
-            x += size + 4
+                painter.drawEllipse(QRectF(x + size - 6, y + size - 6, 8, 8))
+            x += size + 8
 
     @staticmethod
     def _status(card: Card) -> tuple[str, str]:
@@ -371,7 +381,7 @@ class BoardPage(QWidget):
         self.bulk_ids: list[int] = []
         self.filter = "all"
         self.tag = ""
-        self.product = ""
+        self.product_ids: set | None = None
         self.query = ""
         self.sync_worker: CallWorker | None = None
         self.task_worker: CallWorker | None = None
@@ -446,21 +456,19 @@ class BoardPage(QWidget):
         self.tag_box.addItem("All hashtags", "")
         self.tag_box.currentIndexChanged.connect(self._on_filter)
         find.addWidget(self.tag_box)
-        self.product_box = tip(QComboBox(), "Show only tickets tagged with one product (TikTok Shop), even when their "
-                                            "captions and hashtags differ")
-        self.product_box.setMinimumWidth(170)
-        self.product_box.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
-        self.product_box.setMinimumContentsLength(14)
-        self.product_box.addItem("All products", "")
-        self.product_box.currentIndexChanged.connect(self._on_filter)
-        find.addWidget(self.product_box)
+        from .widgets import ProductFilter
+        self.products_filter = ProductFilter(self.store)
+        self.product_box = self.products_filter.product       # brand menu: products_filter.brand
+        self.products_filter.changed.connect(lambda _ids: self._on_filter())
+        find.addWidget(self.products_filter)
         find.addWidget(self.filter_box)
         outer.addLayout(find)
 
         cols_body = QWidget(objectName="Page")
         self.columns_layout = QHBoxLayout(cols_body)
         self.columns_layout.setContentsMargins(0, 0, 0, 0)
-        self.columns_layout.setSpacing(10)
+        self.columns_layout.setSpacing(0)
+        self.columns_splitter: QSplitter | None = None
         self.columns: dict[str, BoardColumn] = {}
         self.column_config = default_columns()
         self._build_columns()
@@ -505,12 +513,19 @@ class BoardPage(QWidget):
 
     # ---------------------------------------------------------------- columns
     def _build_columns(self) -> None:
+        """Columns sit in a splitter: drag the gap between two columns to resize them
+        (remembered per profile); below the minimum width the board scrolls sideways."""
         while self.columns_layout.count():
             w = self.columns_layout.takeAt(0).widget()
             if w:
                 w.hide()
                 w.setParent(None)
                 w.deleteLater()
+        self.columns_splitter = QSplitter(Qt.Horizontal)
+        self.columns_splitter.setChildrenCollapsible(False)
+        self.columns_splitter.setHandleWidth(10)
+        self.columns_splitter.setToolTip("")
+        self.columns_layout.addWidget(self.columns_splitter)
         self.columns = {}
         for column in self.column_config:
             col = BoardColumn(column, self.thumbs)
@@ -526,9 +541,29 @@ class BoardPage(QWidget):
             col.editRequested.connect(self.edit_columns)
             col.setMinimumWidth(COLUMN_MIN_WIDTH)
             self.columns[column.id] = col
-            self.columns_layout.addWidget(col, 1)
+            self.columns_splitter.addWidget(col)
+        for i in range(1, self.columns_splitter.count()):
+            self.columns_splitter.handle(i).setToolTip("Drag to make the columns wider or narrower")
+        self._restore_column_sizes()
+        self.columns_splitter.splitterMoved.connect(lambda *_a: self._save_column_sizes())
         if hasattr(self, "panel"):
             self.panel.stage_name = self.stage_name
+
+    def _sizes_key(self) -> str:
+        return f"board/column_widths/{self.profile.id if self.profile else 0}"
+
+    def _save_column_sizes(self) -> None:
+        widths = dict(zip(self.columns, self.columns_splitter.sizes()))
+        QSettings().setValue(self._sizes_key(), json.dumps(widths))
+
+    def _restore_column_sizes(self) -> None:
+        try:
+            saved = json.loads(QSettings().value(self._sizes_key(), "") or "{}")
+        except (TypeError, ValueError):
+            saved = {}
+        if saved:
+            self.columns_splitter.setSizes([max(int(saved.get(cid, COLUMN_MIN_WIDTH)), COLUMN_MIN_WIDTH)
+                                            for cid in self.columns])
 
     def _column_for(self, stage: str) -> BoardColumn:
         return self.columns[column_for(self.column_config, stage).id]
@@ -658,7 +693,7 @@ class BoardPage(QWidget):
         from ..tags import video_tags
         if self.tag and self.tag not in video_tags(card.row.item, card.post):
             return False
-        if self.product and not any(p.get("id") == self.product for p in card.row.item.products or []):
+        if self.product_ids and not any(p.get("id") in self.product_ids for p in card.row.item.products or []):
             return False
         if self.query and not all(word in self._haystack(card) for word in self.query.split()):
             return False
@@ -703,28 +738,11 @@ class BoardPage(QWidget):
         self.tag_box.blockSignals(False)
 
     def _refresh_product_box(self, cards) -> None:
-        from collections import Counter
-
         from ..products import video_products
-        products, count = {}, Counter()
-        for c in cards:
-            for p in video_products(c.row.item):
-                products.setdefault(p.id, p)
-                count[p.id] += 1
-        ordered = sorted(products.values(), key=lambda p: (-count[p.id], p.label.lower()))
-        wanted = [("", "All products")] + [(p.id, f"{p.label}  ({count[p.id]})") for p in ordered]
-        if [(self.product_box.itemData(i), self.product_box.itemText(i))
-                for i in range(self.product_box.count())] == wanted:
-            return
-        self.product_box.blockSignals(True)
-        self.product_box.clear()
-        for pid, label in wanted:
-            self.product_box.addItem(label, pid)
-        index = self.product_box.findData(self.product)
-        self.product_box.setCurrentIndex(max(index, 0))
-        if index < 0:
-            self.product = ""
-        self.product_box.blockSignals(False)
+        self.products_filter.blockSignals(True)
+        self.products_filter.set_videos(video_products(c.row.item) for c in cards)
+        self.products_filter.blockSignals(False)
+        self.product_ids = self.products_filter.selection()
 
     def filter_by_tag(self, tag: str) -> None:
         index = self.tag_box.findData(tag.lstrip("#").lower())
@@ -734,7 +752,7 @@ class BoardPage(QWidget):
     def _on_filter(self) -> None:
         self.filter = self.filter_box.currentData()
         self.tag = self.tag_box.currentData() or ""
-        self.product = self.product_box.currentData() or ""
+        self.product_ids = self.products_filter.selection()
         self.reload()
 
     # ---------------------------------------------------------------- multi-select & bulk

@@ -159,3 +159,42 @@ def test_api_lists_tagged_products(tmp_path, monkeypatch):
     finally:
         server.stop()
         w.store.close()
+
+
+# ------------------------------------------------------------------ brand → product
+def test_brands_group_a_sellers_products():
+    from reelay.products import brand_map
+    ps = [Product("1", "a", "Blenders Eyewear Candy Cove Sunglasses", seller_id="s1"),
+          Product("2", "b", "Blenders North Park Rosemary Beach", seller_id="s1"),
+          Product("5", "c", "Ray-Ban Meta Wayfarer Gen 2", seller_id="s9"),
+          Product("6", "d", "Ray-Ban Meta Skyler", seller_id="s9"),
+          Product("7", "e", "Happy Saffron Plus | BrainMD")]
+    assert brand_map(ps) == {"1": "Blenders", "2": "Blenders", "5": "Ray-Ban Meta", "6": "Ray-Ban Meta",
+                             "7": "Happy"}
+
+
+def test_brand_then_product_filter_and_renaming(ui, monkeypatch):
+    from PySide6.QtWidgets import QInputDialog
+
+    from reelay.gui.widgets import ProductFilter
+    _window, store = ui
+    f = ProductFilter(store)
+    videos = [[Product(*CANDY, seller_id="s1")], [Product(*CANDY, seller_id="s1")],
+              [Product(*NORTH, seller_id="s1")], [Product("7", "Saffron", "Happy Saffron Plus | BrainMD")]]
+    seen = []
+    f.changed.connect(seen.append)
+    f.set_videos(videos)
+    assert [f.brand.itemText(i) for i in range(f.brand.count())] == ["All brands", "Blenders  (3)", "Happy  (1)"]
+    assert f.selection() is None and f.product.count() == 4
+    f.brand.setCurrentIndex(1)                                      # Blenders: both its products
+    assert f.selection() == {CANDY[0], NORTH[0]} and f.product.count() == 3
+    assert f.product.itemText(0) == "All Blenders products"
+    f.product.setCurrentIndex(f.product.findData(NORTH[0]))
+    assert f.selection() == {NORTH[0]} and seen[-1] == {NORTH[0]}
+    f.brand.setCurrentIndex(f.brand.findData("Happy"))
+    monkeypatch.setattr(QInputDialog, "getText", lambda *a, **k: ("Happy Saffron", True))
+    f._rename()
+    assert f.brand.currentData() == "Happy Saffron" and f.selection() == {"7"}
+    again = ProductFilter(store)                                     # remembered everywhere
+    again.set_videos(videos)
+    assert again.brand.findData("Happy Saffron") > 0

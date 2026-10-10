@@ -22,7 +22,7 @@ from ..publishing import parse_utc
 from ..store import Store
 from ..youtube import OAuthClient, YouTubeError, watch_url
 from .post_panel import local_text
-from .setup_dialogs import GoogleSignInDialog, TokenSetupDialog, YouTubeSetupWizard
+from .setup_dialogs import GoogleSignInDialog, ProviderSignInDialog, TokenSetupDialog, YouTubeSetupWizard
 from .theme import set_prop
 from .tips import tip
 from .workers import CallWorker
@@ -121,6 +121,7 @@ class AccountsPage(QWidget):
         set_prop(replace_creds, "flat")
         tip(replace_creds, "Use a different Google client ID and secret")
         replace_creds.clicked.connect(lambda: self._setup_youtube(paste=True))
+        self.replace_creds = replace_creds
         crow.addWidget(self.connect_btn)
         crow.addStretch()
         crow.addWidget(replace_creds)
@@ -168,25 +169,20 @@ class AccountsPage(QWidget):
             self.platform_cards[spec.platform] = card
             self.body.addWidget(card)
 
-        # ---- TikTok / Instagram: honest status
-        for name, status, text in (
-            ("TikTok", "Copy and paste",
+        # ---- TikTok / Instagram: sign in to attach the account (analytics); posting stays by hand
+        for platform, text in (
+            ("tiktok",
              "Reelay can't post to TikTok for you. TikTok only allows automatic posting from developer apps "
              "it has reviewed and approved; without that approval, an app can only send private (“Only me”) "
-             "posts or drafts. Copy the TikTok caption from a ticket and post in the TikTok app. Downloading "
-             "your TikTok videos works on the Download page."),
-            ("Instagram", "Copy and paste",
-             "Reelay can't post to Instagram for you yet. Instagram requires a Professional (Creator or Business) "
-             "account linked to a Facebook Page, and a Meta developer app that passes App Review. Copy the "
-             "Instagram caption from a ticket and post in the Instagram app."),
+             "posts or drafts. Copy the TikTok caption from a ticket and post in the TikTok app. Signing in "
+             "attaches your account for analytics. Downloading your TikTok videos works on the Download page."),
+            ("instagram",
+             "Reelay can't post to Instagram for you yet. Instagram needs a Professional (Creator or Business) "
+             "account and a Meta app that passes App Review. Copy the Instagram caption from a ticket and post in "
+             "the Instagram app. Signing in attaches your account for analytics."),
         ):
-            card, lay = _card()
-            row = QHBoxLayout()
-            row.addWidget(QLabel(name, objectName="DetailTitle"))
-            row.addStretch()
-            row.addWidget(_label(status, "faint"))
-            lay.addLayout(row)
-            lay.addWidget(_label(text, "muted"))
+            card = SignInOnlyCard(platform, text, self)
+            self.platform_cards[platform] = card
             self.body.addWidget(card)
         self.body.addStretch()
 
@@ -200,9 +196,14 @@ class AccountsPage(QWidget):
 
     def refresh(self) -> None:
         client = self.service.oauth_client()
+        source = self.service.google_client_source()
         self.setup_box.setVisible(client is None)
         self.connected_box.setVisible(client is not None)
-        self.creds_label.setText("Google setup done" if client else "")
+        self.creds_label.setText({"own": "Using your Google project",
+                                  "reelay": "Using Reelay's Google sign-in"}.get(source, ""))
+        self.replace_creds.setText("Use My Own Google Project…" if source == "reelay" else "Change Google Setup…")
+        tip(self.replace_creds, "Advanced: sign in through your own Google Cloud project instead of Reelay's"
+            if source == "reelay" else "Use a different Google client ID and secret")
 
         while self.accounts_list.count():
             w = self.accounts_list.takeAt(0).widget()
@@ -372,6 +373,9 @@ class PlatformCard(QFrame):
         self.list.setSpacing(4)
         lay.addLayout(self.list)
         row = QHBoxLayout()
+        self.signin = SignInButton(spec.platform, self)
+        self.signin.connected.connect(self._signed_in)
+        row.addWidget(self.signin)
         self.connect_btn = QPushButton(f"Connect {Platform.LABELS[spec.platform]}…")
         set_prop(self.connect_btn, "primary")
         tip(self.connect_btn, "Step-by-step setup. Reelay checks the details with "
@@ -380,11 +384,20 @@ class PlatformCard(QFrame):
         row.addWidget(self.connect_btn)
         row.addStretch()
         lay.addLayout(row)
+        lay.addWidget(self.signin.note)
         self.status = _label("", "muted")
         lay.addWidget(self.status)
 
+    def _signed_in(self, account) -> None:
+        self.status.setText(f"Connected {account.display_name}.")
+        self.refresh()
+
     def refresh(self) -> None:
         from ..flags import env_var, publishing_enabled
+        if self.signin.available:   # Reelay's own app: one click; your own app/token stays as a fallback
+            self.connect_btn.setText("Use Your Own App Instead…")
+            set_prop(self.connect_btn, "primary", False)
+            set_prop(self.connect_btn, "flat", True)
         on = publishing_enabled(self.spec.platform, self.page.store)
         self.flag_label.setText("Automatic posting on" if on else "Copy and paste (automatic posting is off)")
         tip(self.flag_label, "Automatic posting is on: Reelay posts scheduled videos here for you." if on else
@@ -460,3 +473,109 @@ class PlatformCard(QFrame):
     def shutdown(self) -> None:
         if self.worker:
             self.worker.wait(3000)
+
+
+# ====================================================================== "Sign in with …" (Reelay's own apps)
+class SignInButton(QPushButton):
+    """"Sign in with <platform>" through Reelay's own app, shown only when this
+    build has that app; otherwise hidden, with `note` saying why."""
+
+    connected = Signal(object)   # Account
+
+    def __init__(self, platform: str, card):
+        from ..oauth import availability, provider_for
+        self.platform, self.card = platform, card
+        self.provider = provider_for(platform)
+        label = self.provider.label if self.provider else Platform.LABELS.get(platform, platform)
+        super().__init__(f"Sign in with {label}")
+        set_prop(self, "primary")
+        tip(self, f"Connect your {label} account in your browser. Reelay never sees your password.")
+        self.available, why = availability(self.provider) if self.provider else (False, "")
+        self.note = _label("" if self.available else why, "faint")
+        self.note.setVisible(bool(why) and not self.available)
+        self.setVisible(self.available)
+        self.clicked.connect(self._sign_in)
+
+    def _sign_in(self) -> None:
+        page = self.card.page
+        if not page.profile or self.provider is None:
+            return
+        dialog = ProviderSignInDialog(self.provider.key, self.window())
+        dialog.signedIn.connect(self._finish)
+        dialog.exec()
+
+    def _finish(self, tokens, found: list) -> None:
+        from PySide6.QtWidgets import QInputDialog
+        page = self.card.page
+        choice = found[0]
+        if len(found) > 1:   # e.g. several Facebook Pages
+            names = [f["display_name"] for f in found]
+            name, ok = QInputDialog.getItem(self.window(), "Choose an Account", "Which one should this profile use?",
+                                            names, 0, False)
+            if not ok:
+                return
+            choice = found[names.index(name)]
+        try:
+            account = page.service.connect_signed_in(page.profile.id, self.platform, tokens, choice)
+        except ValueError as exc:
+            QMessageBox.warning(self.window(), "Sign in", str(exc))
+            return
+        self.connected.emit(account)
+        page.accountsChanged.emit()
+
+
+class SignInOnlyCard(QFrame):
+    """TikTok / Instagram: attach the account with Reelay's sign-in (for
+    analytics); posting stays copy-and-paste."""
+
+    def __init__(self, platform: str, text: str, page: "AccountsPage"):
+        super().__init__(objectName="Card")
+        self.platform, self.page = platform, page
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(18, 16, 18, 16)
+        lay.setSpacing(8)
+        head = QHBoxLayout()
+        head.addWidget(QLabel(Platform.LABELS[platform], objectName="DetailTitle"))
+        head.addStretch()
+        head.addWidget(_label("Copy and paste", "faint"))
+        lay.addLayout(head)
+        lay.addWidget(_label(text, "muted"))
+        self.list = QVBoxLayout()
+        self.list.setSpacing(4)
+        lay.addLayout(self.list)
+        row = QHBoxLayout()
+        self.signin = SignInButton(platform, self)
+        self.signin.connected.connect(lambda account: (self.status.setText(f"Connected {account.display_name}."),
+                                                       self.refresh()))
+        row.addWidget(self.signin)
+        row.addStretch()
+        lay.addLayout(row)
+        lay.addWidget(self.signin.note)
+        self.status = _label("", "muted")
+        lay.addWidget(self.status)
+
+    def refresh(self) -> None:
+        while self.list.count():
+            w = self.list.takeAt(0).widget()
+            if w:
+                w.deleteLater()
+        profile = self.page.profile
+        for acc in self.page.store.list_accounts(profile.id, self.platform) if profile else []:
+            row = QFrame()
+            rl = QHBoxLayout(row)
+            rl.setContentsMargins(0, 2, 0, 2)
+            rl.addWidget(QLabel(f"<b>{acc.display_name}</b>  <span style='opacity:.6'>{acc.handle}</span>"))
+            rl.addStretch()
+            remove = tip(QPushButton("Disconnect"), "Remove this account from the profile")
+            set_prop(remove, "flat")
+            remove.clicked.connect(lambda _=False, a=acc: self._disconnect(a))
+            rl.addWidget(remove)
+            self.list.addWidget(row)
+
+    def _disconnect(self, account) -> None:
+        if QMessageBox.question(self, "Disconnect", f"Disconnect {account.display_name}?") == QMessageBox.Yes:
+            self.page.service.disconnect(account)
+            self.refresh()
+
+    def shutdown(self) -> None:
+        pass
