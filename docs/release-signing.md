@@ -1,0 +1,61 @@
+# Signing and notarizing Reelay
+
+How release builds are signed, what was verified, and what's still needed from accounts only you can create.
+
+## macOS
+
+**What `packaging/build_mac.sh` does**
+
+| Identity in the keychain | Signature | Hardened runtime | Notarized |
+|---|---|---|---|
+| none (or `REELAY_SIGN_IDENTITY=-`) | ad-hoc | no (library validation would refuse the bundled libraries without a Team ID) | no |
+| "Apple Development" (free, Xcode) | stable, so macOS remembers "Allow" across rebuilds | **yes** | no (Apple only notarizes Developer ID) |
+| "Developer ID Application" (paid program) | distributable | **yes** | when `REELAY_NOTARY_PROFILE` is set |
+
+With `REELAY_NOTARY_PROFILE`, the script signs with a secure timestamp, notarizes the app (zip) and staples
+it, builds the `.dmg`, signs and notarizes that, staples it, and checks both with `spctl`. It refuses to run
+if the identity isn't Developer ID.
+
+**Entitlements: none.** Verified on 2026-10-11 with Reelay 0.12.0 (PyInstaller, PySide6 6.x with QtMultimedia
+and its FFmpeg backend, yt-dlp 2026.08.19 with curl_cffi, imageio-ffmpeg, keyring): the packaged app was
+signed with `--options runtime` and **no entitlements**, then
+
+- `Reelay --self-test` passed every check (yt-dlp extractors, TikTok browser impersonation, ffmpeg, caption
+  burning with the bundled ffmpeg, Keychain, SQLite with FTS5, Qt image plugins, the video player's codecs,
+  the agent API server, the offline help page);
+- the window opened and ran normally against a fresh data folder;
+- the bundled ffmpeg encoded a test clip.
+
+So none of `allow-jit`, `allow-unsigned-executable-memory`, `disable-library-validation` or
+`allow-dyld-environment-variables` is needed. Don't add one without a failing case that proves it. If a later
+dependency needs one (e.g. an optional local AI library loaded from outside the bundle), put it in a plist,
+pass it with `REELAY_ENTITLEMENTS=packaging/entitlements.plist`, and record the failing case here.
+
+**One-time setup for notarized releases**
+
+1. Join the Apple Developer Program and create a "Developer ID Application" certificate (Xcode → Settings →
+   Accounts → Manage Certificates).
+2. Make an app-specific password at appleid.apple.com, then store it once:
+   `xcrun notarytool store-credentials reelay-notary --apple-id <you> --team-id <TEAMID> --password <app-specific>`
+3. Build: `REELAY_NOTARY_PROFILE=reelay-notary ./packaging/build_mac.sh`
+
+Not done yet: there's no Developer ID certificate on this Mac (only "Apple Development"), so builds are signed
+with the hardened runtime but not notarized; Gatekeeper still warns on other Macs until they are.
+
+## Windows
+
+`packaging/build_windows.ps1` signs `Reelay.exe` and the bundled `.exe`/`.dll`/`.pyd` files that aren't signed
+yet (SHA-256, RFC 3161 timestamp), then verifies `Reelay.exe`, when either is set:
+
+- `REELAY_WIN_SIGN_THUMBPRINT`: a code-signing certificate in the user's certificate store (including a USB
+  token or a cloud HSM that exposes one there, which current CA rules require for new certificates);
+- `REELAY_WIN_PFX` and `REELAY_WIN_PFX_PASSWORD`: a `.pfx` file (never in the repository; `*.pfx` is ignored).
+
+`REELAY_WIN_TIMESTAMP_URL` overrides the timestamp server (default DigiCert's). Without either variable the
+build is unsigned, as before. Not verified on Windows yet: there's no Windows machine or certificate here, so
+run it once on Windows with a certificate before the first signed release.
+
+## Keys and secrets
+
+Signing certificates live in the macOS Keychain or the Windows certificate store, notarization credentials in
+a `notarytool` keychain profile. Nothing secret goes in the repository, the build scripts or their output.

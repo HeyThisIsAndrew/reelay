@@ -29,3 +29,10 @@ cookies*.txt
 .DS_Store
 .idea/
 .vscode/
+
+# Signing keys and certificates (never commit)
+*.pfx
+*.p12
+*.p8
+*.cer
+*.mobileprovision
