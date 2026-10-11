@@ -24,7 +24,9 @@ from . import icons, theme
 from .table_model import fmt_count, fmt_duration, short_date
 
 from ..readiness import SHORT_FORM_MAX_SECONDS as SHORT_MAX_SECONDS   # Shorts top out at 3 minutes
-CARD_MIN_WIDTH = 236
+CARD_MIN_WIDTH = 240             # the default tile size (Medium)
+TILE_SIZES = {"Small": 180, "Medium": 240, "Large": 320, "XL": 400}
+TILE_MIN, TILE_MAX = 160, 480
 CARD_GAP = 16
 CARD_TEXT_HEIGHT = 62
 RADIUS = theme.RADIUS_LG
@@ -255,25 +257,43 @@ class MediaGrid(QListView):
         self.viewport().setAttribute(Qt.WA_Hover)
         self.setAttribute(Qt.WA_MacShowFocusRect, False)
         self.setSpacing(0)
+        self.setViewportMargins(CARD_GAP // 2, CARD_GAP // 2, 0, 0)
+        self.card_min_width = CARD_MIN_WIDTH          # the tile size control sets this
         self.card_size = QSize(CARD_MIN_WIDTH, self._card_height(CARD_MIN_WIDTH))
         self.fader = HoverFader(self.viewport(), self._card_rect)
         self.mouse = QPoint(-1, -1)
+        # Resizing (dragging the panel edge, the window) relayouts once the drag pauses, not every pixel.
+        self._relayout_timer = QTimer(self, singleShot=True, interval=60, timeout=self._relayout)
 
     @staticmethod
     def _card_height(width: int) -> int:
         return int(width * 9 / 16) + CARD_TEXT_HEIGHT
 
     def resizeEvent(self, event) -> None:  # noqa: N802
-        self._relayout()
         super().resizeEvent(event)
+        if not self.isVisible() or self.gridSize().width() <= 0:
+            self._relayout()                       # first layout: right away
+        else:
+            self._relayout_timer.start()
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        self._relayout()
+
+    def set_card_min_width(self, width: int) -> None:
+        self.card_min_width = max(TILE_MIN, min(TILE_MAX, int(width)))
+        self._relayout()
 
     def _relayout(self) -> None:
-        width = self.viewport().width() - CARD_GAP
-        columns = max(1, (width + CARD_GAP) // (CARD_MIN_WIDTH + CARD_GAP))
-        card_w = max(CARD_MIN_WIDTH, (width - CARD_GAP * (columns - 1)) // columns - 1)
+        """As many columns of at least ``card_min_width`` as fit, stretched to fill the row. A view
+        narrower than one tile gets one card exactly as wide as the view (never wider)."""
+        width = max(self.viewport().width() - CARD_GAP, 1)
+        min_w = self.card_min_width
+        columns = max(1, (width + CARD_GAP) // (min_w + CARD_GAP))
+        card_w = (width - CARD_GAP * (columns - 1)) // columns - 1
+        card_w = max(1, min(card_w, width)) if columns == 1 else max(min_w, card_w)
         self.card_size = QSize(card_w, self._card_height(card_w))
         self.setGridSize(QSize(card_w + CARD_GAP, self.card_size.height() + CARD_GAP))
-        self.setViewportMargins(CARD_GAP // 2, CARD_GAP // 2, 0, 0)
 
     def _card_rect(self, key: str) -> QRect | None:
         model = self.model()

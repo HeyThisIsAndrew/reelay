@@ -195,3 +195,8 @@ QLabel#CommandTitle { font-size: {font_h1}pt; font-weight: 700; }
 QWidget#ActionDock { background: {bg_surface}; border-top: 1px solid {divider}; }
 QLabel#DockSummary { color: {text_secondary}; font-size: {font_sm}pt; }
 QPlainTextEdit#CopyText, QLineEdit#CopyText { font-size: {font_lg}pt; }
+QSlider#TileSlider::groove:horizontal { height: 4px; background: {bg_pressed}; border-radius: 2px; }
+QSlider#TileSlider::sub-page:horizontal { background: {accent_color}; border-radius: 2px; }
+QSlider#TileSlider::handle:horizontal { background: {text_primary}; width: 12px; height: 12px; margin: -4px 0;
+                                        border-radius: 6px; }
+QSlider#TileSlider::handle:horizontal:hover { background: {accent_color}; }

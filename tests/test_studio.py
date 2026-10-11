@@ -260,3 +260,27 @@ def test_library_pages(app_window, qtbot, monkeypatch):
     assert len(page.model.checked_items()) == 60
     page.page_size.setCurrentIndex(page.page_size.findData(0))     # All
     assert page.pager.rowCount() == 60 and page.prev_btn.isHidden()
+
+
+# ------------------------------------------------------------------ tile size
+def test_tile_size_presets_slider_and_narrow_views(app_window, qtbot, monkeypatch):
+    window, store, _ = app_window
+    page = fetch_fake(window, qtbot, monkeypatch, make_items(4))
+    assert page.grid.card_min_width == 240 and page.tile_controls.isVisibleTo(page)
+    page.step_tile_size(1)
+    assert page.grid.card_min_width == 320 and page.tile_slider.value() == 320
+    assert store.get_setting("ui.library.tile_size") == "320"
+    page.step_tile_size(1)
+    page.step_tile_size(1)                                         # XL is the top preset
+    assert page.grid.card_min_width == 400
+    page.tile_slider.setValue(190)
+    assert page.grid.card_min_width == 190
+    page.step_tile_size(-1)
+    assert page.grid.card_min_width == 180
+    page.grid.set_card_min_width(10_000)                           # clamped
+    assert page.grid.card_min_width == 480
+    page.grid.resize(260, 400)                                     # narrower than one tile
+    page.grid._relayout()
+    assert page.grid.card_size.width() <= page.grid.viewport().width()
+    page.view_toggle.set_mode("list", emit=True)
+    assert not page.tile_controls.isVisibleTo(page)               # tile size only applies to the grid

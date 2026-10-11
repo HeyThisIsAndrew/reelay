@@ -12,7 +12,7 @@ from PySide6.QtCore import QSettings, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QKeySequence, QShortcut
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
                                QFrame, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QMenu,
-                               QMessageBox, QProgressBar, QPushButton, QScrollArea, QStackedWidget,
+                               QMessageBox, QProgressBar, QPushButton, QScrollArea, QSlider, QStackedWidget,
                                QTableView, QToolButton, QVBoxLayout, QWidget)
 
 from .. import APP_NAME
@@ -36,7 +36,7 @@ from .inspector import ContextualSplitter, Inspector, MediaPane
 from .player import PlayerWidget
 from .scrub import ScrubCache
 from .dialogs import RenamePreviewDialog, tokens_help_html
-from .cards import LibraryCardDelegate, MediaGrid
+from .cards import CARD_MIN_WIDTH, TILE_MAX, TILE_MIN, TILE_SIZES, LibraryCardDelegate, MediaGrid
 from .table_model import ROW_HEIGHT, Col, CoverDelegate, PageProxy, VideoFilterProxy, VideoTableModel
 from .theme import set_prop
 from .tips import tip
@@ -255,6 +255,9 @@ class DownloadPage(QWidget):
         self.page_size.setCurrentIndex(index if index >= 0 else self.page_size.findData(DEFAULT_PAGE_SIZE))
         self.page_size.blockSignals(False)
         self.pager.set_size(self.page_size.currentData())
+        saved_tile = self.store.get_setting("ui.library.tile_size", str(CARD_MIN_WIDTH))
+        self.set_tile_size(int(saved_tile) if saved_tile.isdigit() else CARD_MIN_WIDTH)
+        self.tile_controls.setVisible(self.view_toggle.mode == "grid")
         self._bridge = change_bridge(store)
         self._bridge.changed.connect(self._on_store_change)
 
@@ -282,6 +285,25 @@ class DownloadPage(QWidget):
         self.filter_popover = Popover(self)
         self.filter_btn = FilterButton(self.filter_popover)
         head.addWidget(self.filter_btn)
+        # tile size (grid only): zoom out, slider, zoom in; ⌘− / ⌘+ step through the presets
+        self.tile_controls = QWidget()
+        tl = QHBoxLayout(self.tile_controls)
+        tl.setContentsMargins(0, 0, 0, 0)
+        tl.setSpacing(2)
+        self.zoom_out_btn = icon_button("zoom_out", "Smaller tiles (⌘−)")
+        self.tile_slider = QSlider(Qt.Horizontal, objectName="TileSlider")
+        self.tile_slider.setRange(TILE_MIN, TILE_MAX)
+        self.tile_slider.setSingleStep(20)
+        self.tile_slider.setPageStep(80)
+        self.tile_slider.setFixedWidth(110)
+        tip(self.tile_slider, "Tile size: drag for smaller or bigger thumbnails")
+        self.zoom_in_btn = icon_button("zoom_in", "Bigger tiles (⌘+)")
+        self.zoom_out_btn.clicked.connect(lambda: self.step_tile_size(-1))
+        self.zoom_in_btn.clicked.connect(lambda: self.step_tile_size(1))
+        self.tile_slider.valueChanged.connect(self.set_tile_size)
+        for w in (self.zoom_out_btn, self.tile_slider, self.zoom_in_btn):
+            tl.addWidget(w)
+        head.addWidget(self.tile_controls)
         self.view_toggle = ViewToggle(self.store, "library")
         self.view_toggle.changed.connect(self._set_view)
         head.addWidget(self.view_toggle)
@@ -607,12 +629,35 @@ class DownloadPage(QWidget):
         grid.doubleClicked.connect(self._toggle_check_at)
         space = QShortcut(QKeySequence(Qt.Key_Space), grid, context=Qt.WidgetShortcut)
         space.activated.connect(self._toggle_selected)
+        for keys, step in ((QKeySequence.ZoomIn, 1), (QKeySequence.ZoomOut, -1), ("Ctrl+=", 1)):
+            QShortcut(QKeySequence(keys), self, context=Qt.WidgetWithChildrenShortcut).activated.connect(
+                lambda s=step: self.view_toggle.mode == "grid" and self.step_tile_size(s))
         return grid
+
+    def set_tile_size(self, width: int) -> None:
+        """Tile width in points (160–480), remembered."""
+        width = max(TILE_MIN, min(TILE_MAX, int(width)))
+        if self.tile_slider.value() != width:
+            self.tile_slider.blockSignals(True)
+            self.tile_slider.setValue(width)
+            self.tile_slider.blockSignals(False)
+        self.grid.set_card_min_width(width)
+        self.store.set_setting("ui.library.tile_size", str(width))
+
+    def step_tile_size(self, direction: int) -> None:
+        """Jump to the next preset (Small 180, Medium 240, Large 320, XL 400) up or down."""
+        current = self.grid.card_min_width
+        presets = sorted(TILE_SIZES.values())
+        bigger = [p for p in presets if p > current]
+        smaller = [p for p in presets if p < current]
+        target = (bigger[0] if bigger else presets[-1]) if direction > 0 else (smaller[-1] if smaller else presets[0])
+        self.set_tile_size(target)
 
     def _view_index(self) -> int:
         return 2 if self.view_toggle.mode == "grid" else 1
 
     def _set_view(self, mode: str) -> None:
+        self.tile_controls.setVisible(mode == "grid")
         if self.model.items():
             self.list_stack.setCurrentIndex(self._view_index())
         current = self.table.selectionModel().currentIndex()
