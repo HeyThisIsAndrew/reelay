@@ -1,15 +1,20 @@
-"""Accounts page: where videos go OUT. Guided setup for YouTube (your own Google
-project, then one-click "Sign in with Google"), Bluesky (App Password),
-Threads and Facebook (your own Meta app), and honest notes on TikTok and
-Instagram."""
+"""Accounts page: where videos go OUT, as a grid of integration cards.
+
+Each card shows the platform, whether it's connected, and what Reelay can do there. Connecting is one click
+with Reelay's own apps ("Sign in with Google / TikTok / Instagram / Threads / Facebook"); your own developer
+app and keys stay available under "Advanced Setup", which opens by itself when it's the only way in (for
+example while Reelay's Google sign-in is still being set up). Bluesky connects with an App Password;
+TikTok, Instagram and Snapchat are posted by hand."""
 
 from __future__ import annotations
 
+import html
 from datetime import datetime
 
 from PySide6.QtCore import Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import (QComboBox, QFileDialog, QFrame, QHBoxLayout, QHeaderView, QLabel,
+from PySide6.QtWidgets import (QComboBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel,
+                               QSizePolicy, QToolButton,
                                QMessageBox,
                                QPushButton, QScrollArea, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
@@ -21,6 +26,8 @@ from ..publishers import BlueskyPublisher, FacebookPublisher, ThreadsPublisher
 from ..publishing import parse_utc
 from ..store import Store
 from ..youtube import OAuthClient, YouTubeError, watch_url
+from . import theme
+from .logos import platform_pixmap
 from .post_panel import local_text
 from .setup_dialogs import GoogleSignInDialog, ProviderSignInDialog, TokenSetupDialog, YouTubeSetupWizard
 from .theme import set_prop
@@ -46,6 +53,119 @@ def _card() -> tuple[QFrame, QVBoxLayout]:
     return frame, lay
 
 
+# ====================================================================== integration cards
+class StatusPill(QLabel):
+    """Connected / Not connected / Signed out / Posted by hand."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("StatusPill")
+        self.set_state("off", "Not connected")
+
+    def set_state(self, state: str, text: str) -> None:
+        self.setText(text)
+        set_prop(self, "state", state)
+
+
+class AdvancedSection(QWidget):
+    """"Advanced Setup: use my own developer keys", folded away unless it's the only way in."""
+
+    def __init__(self, title: str = "Advanced Setup: use my own developer keys", parent=None):
+        super().__init__(parent)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 4, 0, 0)
+        lay.setSpacing(8)
+        self.toggle = QToolButton(objectName="AdvancedToggle")
+        self.toggle.setText(title)
+        self.toggle.setCheckable(True)
+        self.toggle.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.toggle.setArrowType(Qt.RightArrow)
+        self.toggle.setCursor(Qt.PointingHandCursor)
+        tip(self.toggle, "For developers and agencies: connect through your own developer app and keys instead "
+                         "of Reelay's one-click sign-in")
+        self.toggle.toggled.connect(self.set_expanded)
+        self.body = QWidget()
+        self.body_layout = QVBoxLayout(self.body)
+        self.body_layout.setContentsMargins(0, 0, 0, 0)
+        self.body_layout.setSpacing(8)
+        self.body.setVisible(False)
+        lay.addWidget(self.toggle)
+        lay.addWidget(self.body)
+
+    def add(self, widget: QWidget) -> QWidget:
+        self.body_layout.addWidget(widget)
+        return widget
+
+    def set_expanded(self, on: bool) -> None:
+        if self.toggle.isChecked() != on:
+            self.toggle.setChecked(on)
+            return
+        self.toggle.setArrowType(Qt.DownArrow if on else Qt.RightArrow)
+        self.body.setVisible(on)
+
+
+class IntegrationCard(QFrame):
+    """One platform: logo, name, status, what Reelay can do there; then accounts, actions and Advanced Setup."""
+
+    def __init__(self, platform: str, capability: str, description: str, parent=None):
+        super().__init__(parent)
+        self.setObjectName("IntegrationCard")
+        self.platform = platform
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(18, 16, 18, 16)
+        lay.setSpacing(8)
+        head = QHBoxLayout()
+        head.setSpacing(12)
+        self.logo = QLabel()
+        self.logo.setPixmap(platform_pixmap(platform, 34))
+        self.logo.setFixedSize(36, 36)
+        head.addWidget(self.logo)
+        names = QVBoxLayout()
+        names.setSpacing(0)
+        names.addWidget(QLabel(Platform.LABELS.get(platform, platform), objectName="DetailTitle"))
+        self.capability = _label(capability, "faint")
+        names.addWidget(self.capability)
+        head.addLayout(names, 1)
+        self.pill = StatusPill()
+        head.addWidget(self.pill, 0, Qt.AlignTop)
+        lay.addLayout(head)
+        self.description = _label(description, "muted")
+        lay.addWidget(self.description)
+        self.body = QVBoxLayout()
+        self.body.setSpacing(8)
+        lay.addLayout(self.body)
+        self.advanced = AdvancedSection()
+        self.advanced.setVisible(False)
+        lay.addWidget(self.advanced)
+
+    def set_status(self, accounts: list, problems: int = 0, hand: bool = False) -> None:
+        if accounts and problems:
+            self.pill.set_state("warning", "Needs attention")
+        elif accounts:
+            self.pill.set_state("connected", "Connected" if len(accounts) == 1 else f"{len(accounts)} connected")
+        elif hand:
+            self.pill.set_state("hand", "Posted by hand")
+        else:
+            self.pill.set_state("off", "Not connected")
+
+
+def account_row(acc, problem: str = "", actions: list[QPushButton] = ()) -> QFrame:
+    row = QFrame(objectName="AccountRow")
+    rl = QHBoxLayout(row)
+    rl.setContentsMargins(10, 6, 6, 6)
+    rl.setSpacing(8)
+    name = QLabel(f"<b>{html.escape(acc.display_name)}</b>  "
+                  f"<span style='color:{theme.P.text_muted}'>{html.escape(acc.handle or '')}</span>")
+    rl.addWidget(name, 1)
+    if problem:
+        rl.addWidget(_label(problem, "danger"))
+    for b in actions:
+        set_prop(b, "flat")
+        rl.addWidget(b)
+    return row
+
+
 class AccountsPage(QWidget):
     accountsChanged = Signal()
 
@@ -55,6 +175,7 @@ class AccountsPage(QWidget):
         self.store, self.service = store, accounts
         self.profile: Profile | None = None
         self.schedule_worker: CallWorker | None = None
+        self._columns = 0
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -69,28 +190,56 @@ class AccountsPage(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.addWidget(scroll)
 
-        self.body.addWidget(QLabel("Accounts", objectName="PageTitle"))
+        head = QHBoxLayout()
+        head.setSpacing(10)
+        head.addWidget(QLabel("Accounts", objectName="PageTitle"), 0, Qt.AlignBottom)
+        self.count = QLabel(objectName="PageCount")
+        head.addWidget(self.count, 0, Qt.AlignBottom)
+        head.addStretch()
+        self.body.addLayout(head)
         self.subtitle = _label("", "muted")
         self.body.addWidget(self.subtitle)
 
         # ---- YouTube
-        yt, yl = _card()
-        head = QHBoxLayout()
-        head.addWidget(QLabel("YouTube", objectName="DetailTitle"))
-        head.addStretch()
-        self.auto_label = _label("Automatic posting and scheduling", "faint")
-        head.addWidget(self.auto_label)
+        self.youtube_card = IntegrationCard(
+            YOUTUBE, "Posts and schedules automatically",
+            "Connect a channel with one click: Reelay uploads, schedules and checks when videos go live.")
+        yl = self.youtube_card.body
+        self.auto_label = self.youtube_card.capability
         self.creds_label = _label("", "faint")
-        head.addWidget(self.creds_label)
-        yl.addLayout(head)
+        yl.addWidget(self.creds_label)
 
+        self.connected_box = QWidget()
+        cl = QVBoxLayout(self.connected_box)
+        cl.setContentsMargins(0, 0, 0, 0)
+        cl.setSpacing(6)
+        self.accounts_list = QVBoxLayout()
+        self.accounts_list.setSpacing(6)
+        cl.addLayout(self.accounts_list)
+        crow = QHBoxLayout()
+        self.connect_btn = QPushButton("Sign in with Google")
+        set_prop(self.connect_btn, "primary")
+        tip(self.connect_btn, "Connect a YouTube channel to this profile by signing in with its Google account")
+        self.connect_btn.clicked.connect(self._connect)
+        crow.addWidget(self.connect_btn)
+        crow.addStretch()
+        cl.addLayout(crow)
+        self.connect_status = _label("", "muted")
+        cl.addWidget(self.connect_status)
+        yl.addWidget(self.connected_box)
+        self.pending_note = _label("", "faint")
+        yl.addWidget(self.pending_note)
+
+        # Advanced: your own Google project (the guided wizard, a client ID, or switching back)
+        adv = self.youtube_card.advanced
+        adv.setVisible(True)
         self.setup_box = QWidget()
         sl = QVBoxLayout(self.setup_box)
         sl.setContentsMargins(0, 0, 0, 0)
         sl.setSpacing(10)
-        sl.addWidget(_label("Google requires apps like Reelay to connect through a free Google Cloud project that "
-                            "you own. Reelay walks you through it, once (about five minutes). After that, "
-                            "connecting a channel is a single “Sign in with Google”.", "muted"))
+        sl.addWidget(_label("Connect through a free Google Cloud project that you own. Reelay walks you through "
+                            "it, once (about five minutes). After that, connecting a channel is a single "
+                            "“Sign in with Google”.", "muted"))
         srow = QHBoxLayout()
         self.setup_btn = QPushButton("Set Up YouTube…")
         set_prop(self.setup_btn, "primary")
@@ -104,39 +253,45 @@ class AccountsPage(QWidget):
         srow.addWidget(self.have_id_btn)
         srow.addStretch()
         sl.addLayout(srow)
-        yl.addWidget(self.setup_box)
+        adv.add(self.setup_box)
+        own_row = QWidget()
+        orl = QHBoxLayout(own_row)
+        orl.setContentsMargins(0, 0, 0, 0)
+        self.replace_creds = QPushButton("Change Google Setup…")
+        set_prop(self.replace_creds, "flat")
+        tip(self.replace_creds, "Use a different Google client ID and secret")
+        self.replace_creds.clicked.connect(lambda: self._setup_youtube(paste=True))
+        self.forget_creds = tip(QPushButton("Stop Using My Own Project"),
+                                "Go back to Reelay's one-click Google sign-in. Channels connected through your project "
+                                "will need to sign in again.")
+        set_prop(self.forget_creds, "flat")
+        self.forget_creds.clicked.connect(self._forget_client)
+        orl.addWidget(self.replace_creds)
+        orl.addWidget(self.forget_creds)
+        orl.addStretch()
+        self.own_row = adv.add(own_row)
+        adv.add(_label("While your own Google project is in <b>Testing</b>, Google signs you out every 7 days "
+                       "(just sign in again), and uploads stay <b>private</b> until the project passes YouTube's "
+                       "free <a href='https://support.google.com/youtube/contact/yt_api_form'>API compliance "
+                       "audit</a>.", "faint", rich=True))
 
-        self.connected_box = QWidget()
-        cl = QVBoxLayout(self.connected_box)
-        cl.setContentsMargins(0, 0, 0, 0)
-        self.accounts_list = QVBoxLayout()
-        self.accounts_list.setSpacing(6)
-        cl.addLayout(self.accounts_list)
-        crow = QHBoxLayout()
-        self.connect_btn = QPushButton("Sign in with Google")
-        set_prop(self.connect_btn, "primary")
-        tip(self.connect_btn, "Connect a YouTube channel to this profile by signing in with its Google account")
-        self.connect_btn.clicked.connect(self._connect)
-        replace_creds = QPushButton("Change Google Setup…")
-        set_prop(replace_creds, "flat")
-        tip(replace_creds, "Use a different Google client ID and secret")
-        replace_creds.clicked.connect(lambda: self._setup_youtube(paste=True))
-        self.replace_creds = replace_creds
-        crow.addWidget(self.connect_btn)
-        crow.addStretch()
-        crow.addWidget(replace_creds)
-        cl.addLayout(crow)
-        self.connect_status = _label("", "muted")
-        cl.addWidget(self.connect_status)
-        yl.addWidget(self.connected_box)
-        yl.addWidget(_label("While your Google project is in <b>Testing</b>, Google signs you out every 7 days "
-                            "(just sign in again). Uploads stay <b>private</b> until the project passes YouTube's "
-                            "free <a href='https://support.google.com/youtube/contact/yt_api_form'>API compliance "
-                            "audit</a>, so scheduled videos won't go public before then.", "faint", rich=True))
-        self.body.addWidget(yt)
+        # ---- Bluesky / Threads / Facebook, TikTok / Instagram / Snapchat
+        self.platform_cards: dict[str, PlatformCard | SignInOnlyCard] = {}
+        for spec in PLATFORM_SPECS:
+            self.platform_cards[spec.platform] = PlatformCard(spec, self)
+        for platform, text in HAND_OFF_TEXT.items():
+            self.platform_cards[platform] = SignInOnlyCard(platform, text, self)
 
-        # ---- channel schedule
+        self.grid_host = QWidget()
+        self.grid = QGridLayout(self.grid_host)
+        self.grid.setContentsMargins(0, 0, 0, 0)
+        self.grid.setHorizontalSpacing(14)
+        self.grid.setVerticalSpacing(14)
+        self.body.addWidget(self.grid_host)
+
+        # ---- channel schedule (full width, once a channel is connected)
         sc, scl = _card()
+        self.schedule_card = sc
         shead = QHBoxLayout()
         shead.addWidget(QLabel("Channel Schedule", objectName="DetailTitle"))
         shead.addStretch()
@@ -161,87 +316,85 @@ class AccountsPage(QWidget):
             lambda it, _c: QDesktopServices.openUrl(QUrl(watch_url(it.data(0, Qt.UserRole)))))
         scl.addWidget(self.schedule)
         self.body.addWidget(sc)
-
-        # ---- Bluesky / Threads / Facebook
-        self.platform_cards: dict[str, PlatformCard] = {}
-        for spec in PLATFORM_SPECS:
-            card = PlatformCard(spec, self)
-            self.platform_cards[spec.platform] = card
-            self.body.addWidget(card)
-
-        # ---- TikTok / Instagram: sign in to attach the account (analytics); posting stays by hand
-        for platform, text in (
-            ("tiktok",
-             "Reelay can't post to TikTok for you. TikTok only allows automatic posting from developer apps "
-             "it has reviewed and approved; without that approval, an app can only send private (“Only me”) "
-             "posts or drafts. Copy the TikTok caption from a ticket and post in the TikTok app. Signing in "
-             "attaches your account for analytics. Downloading your TikTok videos works on the Download page."),
-            ("instagram",
-             "Reelay can't post to Instagram for you yet. Instagram needs a Professional (Creator or Business) "
-             "account and a Meta app that passes App Review. Copy the Instagram caption from a ticket and post in "
-             "the Instagram app. Signing in attaches your account for analytics."),
-            ("snapchat",
-             "Reelay doesn't post to Snapchat for you: Spotlight is posted by hand. Spotlight is made for vertical "
-             "(9:16) videos. Copy the caption from the video's ticket and post it from the Snapchat app. You can "
-             "also download your own Spotlight videos by pasting their links in the Library."),
-        ):
-            card = SignInOnlyCard(platform, text, self)
-            self.platform_cards[platform] = card
-            self.body.addWidget(card)
         self.body.addStretch()
+        self._place_cards()
+
+    def _cards(self) -> list[QWidget]:
+        order = ["tiktok", "instagram", "bluesky", "threads", "facebook", "snapchat"]
+        return [self.youtube_card] + [self.platform_cards[p] for p in order if p in self.platform_cards]
+
+    def _place_cards(self) -> None:
+        width = self.width() - 48
+        columns = 3 if width >= 1180 else 2 if width >= 720 else 1
+        if columns == self._columns:
+            return
+        self._columns = columns
+        for card in self._cards():
+            self.grid.removeWidget(card)
+        for n, card in enumerate(self._cards()):
+            self.grid.addWidget(card, n // columns, n % columns, Qt.AlignTop)
+        for c in range(3):
+            self.grid.setColumnStretch(c, 1 if c < columns else 0)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._place_cards()
 
     # ---------------------------------------------------------------- state
     def set_profile(self, profile: Profile) -> None:
         self.profile = profile
-        self.subtitle.setText(f"Where {profile.name}'s videos go out. (Videos come in on the Download page.) "
-                              "Each profile has its own accounts, so creators stay separate.")
+        self.subtitle.setText(f"Where {profile.name}'s videos go out. Each profile has its own accounts, so "
+                              "creators stay separate. (Videos come in through the Library.)")
         self.schedule.clear()
         self.refresh()
 
     def refresh(self) -> None:
         client = self.service.oauth_client()
         source = self.service.google_client_source()
+        central = self.service.central_oauth_client() is not None
         self.setup_box.setVisible(client is None)
         self.connected_box.setVisible(client is not None)
+        self.own_row.setVisible(source == "own")
+        self.forget_creds.setVisible(source == "own" and central)
         self.creds_label.setText({"own": "Using your Google project",
                                   "reelay": "Using Reelay's Google sign-in"}.get(source, ""))
-        self.replace_creds.setText("Use My Own Google Project…" if source == "reelay" else "Change Google Setup…")
-        tip(self.replace_creds, "Advanced: sign in through your own Google Cloud project instead of Reelay's"
-            if source == "reelay" else "Use a different Google client ID and secret")
+        self.creds_label.setVisible(bool(source))
+        if client is None:
+            self.pending_note.setText("Reelay's one-click Google sign-in isn't finished being set up yet. Until it "
+                                      "is, connect with your own Google project below."
+                                      if self.service.central_pending() else
+                                      "Set up your own Google project below to connect a channel.")
+        self.pending_note.setVisible(client is None)
+        self.youtube_card.advanced.set_expanded(client is None or source == "own")   # the only way in: open
 
         while self.accounts_list.count():
             w = self.accounts_list.takeAt(0).widget()
             if w:
                 w.deleteLater()
         accounts = self.store.list_accounts(self.profile.id, YOUTUBE) if self.profile else []
-        if not accounts:
-            self.accounts_list.addWidget(_label("No channels connected to this profile yet. Click "
-                                                "“Sign in with Google” to add one.", "faint"))
+        problems = 0
+        if not accounts and client is not None:
+            self.accounts_list.addWidget(_label("No channel connected to this profile yet.", "faint"))
         for acc in accounts:
-            row = QFrame()
-            rl = QHBoxLayout(row)
-            rl.setContentsMargins(0, 2, 0, 2)
-            dot = QLabel("●")
-            dot.setProperty("muted", True)
-            rl.addWidget(dot)
-            rl.addWidget(QLabel(f"<b>{acc.display_name}</b>  <span style='opacity:.6'>{acc.handle}</span>"))
-            rl.addStretch()
-            if self.service.load_tokens(acc) is None:
-                warn = _label("Signed out: click Sign in with Google again", "danger")
-                rl.addWidget(warn)
+            problem = self.service.needs_reconnect(acc)
+            problems += bool(problem)
             remove = tip(QPushButton("Disconnect"), "Remove this channel from the profile. Videos on YouTube stay.")
-            set_prop(remove, "flat")
             remove.clicked.connect(lambda _=False, a=acc: self._disconnect(a))
-            rl.addWidget(remove)
-            self.accounts_list.addWidget(row)
+            self.accounts_list.addWidget(account_row(acc, problem, [remove]))
+        self.youtube_card.set_status(accounts, problems)
 
+        connected = len(accounts) > 0
         for card in getattr(self, "platform_cards", {}).values():
             card.refresh()
+            connected += card.connected
+        total = 1 + len(self.platform_cards)
+        self.count.setText(f"{connected} of {total} connected")
 
         self.schedule_account.clear()
         for acc in accounts:
             self.schedule_account.addItem(acc.label, acc.id)
         self.load_schedule_btn.setEnabled(bool(accounts))
+        self.schedule_card.setVisible(bool(accounts))
 
     # ---------------------------------------------------------------- actions
     def _setup_youtube(self, paste: bool = False) -> None:
@@ -255,6 +408,15 @@ class AccountsPage(QWidget):
     def _save_client(self, client: OAuthClient) -> None:
         self.service.set_oauth_client(client)
         self.connect_status.setText("Google setup saved. Now click “Sign in with Google” to connect a channel.")
+        self.refresh()
+
+    def _forget_client(self) -> None:
+        if QMessageBox.question(self, "Stop Using My Own Project",
+                                "Go back to Reelay's one-click Google sign-in?\n\nChannels connected through your own "
+                                "Google project will need to sign in again.") != QMessageBox.Yes:
+            return
+        self.service.set_oauth_client(None)
+        self.connect_status.setText("Using Reelay's Google sign-in. Sign in again for any channel marked below.")
         self.refresh()
 
     def _import_client(self) -> None:
@@ -356,26 +518,18 @@ PLATFORM_SPECS = (
 )
 
 
-class PlatformCard(QFrame):
-    """Connect / verify / disconnect accounts for one platform."""
+class PlatformCard(IntegrationCard):
+    """Bluesky, Threads, Facebook: connect (one click with Reelay's app where there is one), verify, disconnect."""
 
     def __init__(self, spec: PlatformSpec, page: "AccountsPage"):
-        super().__init__(objectName="Card")
+        super().__init__(spec.platform, "", spec.help)
         self.spec, self.page = spec, page
         self.worker: CallWorker | None = None
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(18, 16, 18, 16)
-        lay.setSpacing(8)
-        head = QHBoxLayout()
-        head.addWidget(QLabel(Platform.LABELS[spec.platform], objectName="DetailTitle"))
-        head.addStretch()
-        self.flag_label = _label("", "faint")
-        head.addWidget(self.flag_label)
-        lay.addLayout(head)
-        lay.addWidget(_label(spec.help, "muted"))
+        self.connected = 0
+        self.flag_label = self.capability
         self.list = QVBoxLayout()
-        self.list.setSpacing(4)
-        lay.addLayout(self.list)
+        self.list.setSpacing(6)
+        self.body.addLayout(self.list)
         row = QHBoxLayout()
         self.signin = SignInButton(spec.platform, self)
         self.signin.connected.connect(self._signed_in)
@@ -387,10 +541,19 @@ class PlatformCard(QFrame):
         self.connect_btn.clicked.connect(self._open_setup)
         row.addWidget(self.connect_btn)
         row.addStretch()
-        lay.addLayout(row)
-        lay.addWidget(self.signin.note)
+        self.body.addLayout(row)
+        self.body.addWidget(self.signin.note)
         self.status = _label("", "muted")
-        lay.addWidget(self.status)
+        self.body.addWidget(self.status)
+        if self.signin.available:
+            # One click with Reelay's app; your own app or token stays available under Advanced Setup.
+            label = Platform.LABELS[spec.platform]
+            self.description.setText(f"Sign in with your {label} account: one click, in your browser. Reelay never "
+                                     "sees your password.")
+            row.removeWidget(self.connect_btn)
+            self.advanced.setVisible(True)
+            self.advanced.add(_label(spec.help, "faint"))
+            self.advanced.add(self.connect_btn)
 
     def _signed_in(self, account) -> None:
         self.status.setText(f"Connected {account.display_name}.")
@@ -401,9 +564,8 @@ class PlatformCard(QFrame):
         if self.signin.available:   # Reelay's own app: one click; your own app/token stays as a fallback
             self.connect_btn.setText("Use Your Own App Instead…")
             set_prop(self.connect_btn, "primary", False)
-            set_prop(self.connect_btn, "flat", True)
         on = publishing_enabled(self.spec.platform, self.page.store)
-        self.flag_label.setText("Automatic posting on" if on else "Copy and paste (automatic posting is off)")
+        self.flag_label.setText("Posts automatically" if on else "Copy and paste (automatic posting is off)")
         tip(self.flag_label, "Automatic posting is on: Reelay posts scheduled videos here for you." if on else
             "Reelay won't post here on its own. Turn on automatic posting in Settings "
             f"(or set {env_var(self.spec.platform)}=1).")
@@ -413,28 +575,27 @@ class PlatformCard(QFrame):
                 w.deleteLater()
         profile = self.page.profile
         accounts = self.page.store.list_accounts(profile.id, self.spec.platform) if profile else []
-        if not accounts:
-            self.list.addWidget(_label("No account connected to this profile yet.", "faint"))
+        problems = 0
         for acc in accounts:
-            row = QFrame()
-            rl = QHBoxLayout(row)
-            rl.setContentsMargins(0, 2, 0, 2)
-            rl.addWidget(QLabel(f"<b>{acc.display_name}</b>  <span style='opacity:.6'>{acc.handle}</span>"))
-            rl.addStretch()
+            buttons = []
+            problem = ""
             if not self.page.service.has_credentials(acc):
-                rl.addWidget(_label("Sign-in details missing: connect again", "danger"))
+                problem = "Sign-in details missing: connect again"
+                problems += 1
             else:
-                checked = local_text(acc.last_verified_at) if acc.last_verified_at else "never"
-                rl.addWidget(_label(f"Last checked: {checked}", "faint"))
-                verify = tip(QPushButton("Check Connection"), "Make sure the saved details still work. Nothing is posted.")
-                set_prop(verify, "flat")
+                verify = tip(QPushButton("Check"), "Make sure the saved details still work. Nothing is posted.")
                 verify.clicked.connect(lambda _=False, a=acc: self._verify(a))
-                rl.addWidget(verify)
-            remove = QPushButton("Disconnect")
-            set_prop(remove, "flat")
+                buttons.append(verify)
+            remove = tip(QPushButton("Disconnect"), "Remove this account from the profile")
             remove.clicked.connect(lambda _=False, a=acc: self._disconnect(a))
-            rl.addWidget(remove)
+            buttons.append(remove)
+            row = account_row(acc, problem, buttons)
+            if not problem:
+                checked = local_text(acc.last_verified_at) if acc.last_verified_at else "never"
+                row.setToolTip(f"Last checked: {checked}")
             self.list.addWidget(row)
+        self.connected = int(bool(accounts))
+        self.set_status(accounts, problems)
 
     def _busy(self) -> bool:
         return bool(self.worker and self.worker.isRunning())
@@ -528,35 +689,41 @@ class SignInButton(QPushButton):
         page.accountsChanged.emit()
 
 
-class SignInOnlyCard(QFrame):
-    """TikTok / Instagram: attach the account with Reelay's sign-in (for
-    analytics); posting stays copy-and-paste."""
+HAND_OFF_TEXT = {
+    "tiktok": ("Reelay can't post to TikTok for you. TikTok only allows automatic posting from developer apps it has "
+               "reviewed and approved; without that approval, an app can only send private (“Only me”) posts or "
+               "drafts. Copy the TikTok caption from a ticket and post in the TikTok app. Signing in attaches your "
+               "account for analytics. Downloading your TikTok videos works in the Library."),
+    "instagram": ("Reelay can't post to Instagram for you yet. Instagram needs a Professional (Creator or Business) "
+                  "account and a Meta app that passes App Review. Copy the Instagram caption from a ticket and post in "
+                  "the Instagram app. Signing in attaches your account for analytics."),
+    "snapchat": ("Reelay doesn't post to Snapchat for you: Spotlight is posted by hand. Spotlight is made for vertical "
+                 "(9:16) videos. Copy the caption from the video's ticket and post it from the Snapchat app. You can "
+                 "also download your own Spotlight videos by pasting their links in the Library."),
+}
+
+
+class SignInOnlyCard(IntegrationCard):
+    """TikTok / Instagram / Snapchat: posted by hand. Signing in (where Reelay has an app) attaches the account
+    for analytics."""
 
     def __init__(self, platform: str, text: str, page: "AccountsPage"):
-        super().__init__(objectName="Card")
-        self.platform, self.page = platform, page
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(18, 16, 18, 16)
-        lay.setSpacing(8)
-        head = QHBoxLayout()
-        head.addWidget(QLabel(Platform.LABELS[platform], objectName="DetailTitle"))
-        head.addStretch()
-        head.addWidget(_label("Copy and paste", "faint"))
-        lay.addLayout(head)
-        lay.addWidget(_label(text, "muted"))
+        super().__init__(platform, "Copy and paste", text)
+        self.page = page
+        self.connected = 0
         self.list = QVBoxLayout()
-        self.list.setSpacing(4)
-        lay.addLayout(self.list)
+        self.list.setSpacing(6)
+        self.body.addLayout(self.list)
         row = QHBoxLayout()
         self.signin = SignInButton(platform, self)
         self.signin.connected.connect(lambda account: (self.status.setText(f"Connected {account.display_name}."),
                                                        self.refresh()))
         row.addWidget(self.signin)
         row.addStretch()
-        lay.addLayout(row)
-        lay.addWidget(self.signin.note)
+        self.body.addLayout(row)
+        self.body.addWidget(self.signin.note)
         self.status = _label("", "muted")
-        lay.addWidget(self.status)
+        self.body.addWidget(self.status)
 
     def refresh(self) -> None:
         while self.list.count():
@@ -564,17 +731,13 @@ class SignInOnlyCard(QFrame):
             if w:
                 w.deleteLater()
         profile = self.page.profile
-        for acc in self.page.store.list_accounts(profile.id, self.platform) if profile else []:
-            row = QFrame()
-            rl = QHBoxLayout(row)
-            rl.setContentsMargins(0, 2, 0, 2)
-            rl.addWidget(QLabel(f"<b>{acc.display_name}</b>  <span style='opacity:.6'>{acc.handle}</span>"))
-            rl.addStretch()
+        accounts = self.page.store.list_accounts(profile.id, self.platform) if profile else []
+        for acc in accounts:
             remove = tip(QPushButton("Disconnect"), "Remove this account from the profile")
-            set_prop(remove, "flat")
             remove.clicked.connect(lambda _=False, a=acc: self._disconnect(a))
-            rl.addWidget(remove)
-            self.list.addWidget(row)
+            self.list.addWidget(account_row(acc, "", [remove]))
+        self.connected = int(bool(accounts))
+        self.set_status(accounts, hand=True)
 
     def _disconnect(self, account) -> None:
         if QMessageBox.question(self, "Disconnect", f"Disconnect {account.display_name}?") == QMessageBox.Yes:

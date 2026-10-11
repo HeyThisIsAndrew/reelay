@@ -189,16 +189,15 @@ Rules are careful:
 
 ## Connecting accounts (Accounts)
 
-Each platform has different rules for apps like Reelay:
+Every platform has a card: its status (*Connected*, *Not connected*, *Needs attention*, *Posted by hand*), what Reelay can do there, and the button to connect. The count at the top says how many are connected.
 
-- **Sign in with…** buttons appear for platforms where Reelay's own sign-in is set up: you just sign in with your account, and Reelay is allowed to post and read your analytics. Where they don't appear, use the steps below.
-- **YouTube:** without Reelay's sign-in, Google requires a free Google Cloud project that you own. Click **Set Up YouTube…** for a five-step guide (about five minutes, once). After that, connecting a channel is just **Sign in with Google**.
-  - While your project is in *Testing*, Google signs you out every 7 days.
-  - Uploads stay private until the project passes YouTube's free API compliance audit.
-- **Bluesky:** connect with an **App Password**, a separate password just for Reelay. Bluesky doesn't offer a sign-in page for apps.
-- **Threads** and **Facebook:** these need a Meta developer app that you own, and a token from it. **Connect…** walks you through it.
-- **TikTok:** Reelay can't post for you. TikTok only allows automatic posting from developer apps it has approved; without approval, apps can only send private posts or drafts. Copy the caption and post in the TikTok app.
-- **Instagram:** Reelay can't post for you yet. Copy the caption and post in the Instagram app.
+- **Sign in with…** is the one-click way: you sign in with your account in your browser, and Reelay never sees your password. It's shown wherever Reelay's own sign-in is set up.
+- **Advanced Setup: use my own developer keys** (under each card) connects through a developer app you own instead: your own Google Cloud project for YouTube, or a token from your own Meta app for Threads and Facebook. It opens by itself when it's the only way in.
+- **YouTube:** **Sign in with Google**. Until Reelay's Google sign-in is finished being set up, the card says so and offers **Set Up YouTube…** (your own Google project; a five-step guide, about five minutes, once). While your own project is in *Testing*, Google signs you out every 7 days, and uploads stay private until it passes YouTube's free API compliance audit. A channel always keeps using the Google app it was connected with; if that app is removed, the card asks you to sign in again.
+- **Bluesky:** connect with an **App Password**, a separate password just for Reelay. Bluesky doesn't offer a sign-in page for apps yet.
+- **Threads** and **Facebook:** **Sign in with Threads / Facebook** when available, or your own Meta app's token under Advanced Setup.
+- **TikTok, Instagram and Snapchat** are posted by hand: copy the caption from the ticket and post in their app. TikTok only allows automatic posting from developer apps it has approved; Instagram needs an approved Meta app. Signing in (where available) attaches your account for analytics.
+- **Disconnect** removes the account from the profile and, where the platform allows it (Google, TikTok, Facebook), also tells the platform to drop Reelay's access.
 
 Automatic posting to Bluesky, Threads and Facebook is off until you turn it on in **Settings**.
 

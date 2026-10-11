@@ -200,3 +200,16 @@ QSlider#TileSlider::sub-page:horizontal { background: {accent_color}; border-rad
 QSlider#TileSlider::handle:horizontal { background: {text_primary}; width: 12px; height: 12px; margin: -4px 0;
                                         border-radius: 6px; }
 QSlider#TileSlider::handle:horizontal:hover { background: {accent_color}; }
+
+/* ---- Accounts: integration cards ---- */
+QFrame#IntegrationCard { background: {bg_surface}; border: 1px solid {divider}; border-radius: {radius_lg}px; }
+QFrame#IntegrationCard:hover { border-color: {accent_ring}; }
+QFrame#AccountRow { background: {bg_raised}; border: 1px solid {divider}; border-radius: {radius}px; }
+QLabel#StatusPill { border-radius: 9px; padding: 2px 10px; font-size: {font_xs}pt; font-weight: 600;
+                    background: {bg_raised}; color: {text_secondary}; border: 1px solid {border}; }
+QLabel#StatusPill[state="connected"] { background: {success}; color: {on_badge}; border-color: {success}; }
+QLabel#StatusPill[state="warning"] { background: {danger}; color: {on_badge}; border-color: {danger}; }
+QLabel#StatusPill[state="hand"] { background: transparent; color: {text_muted}; border-color: {divider}; }
+QToolButton#AdvancedToggle { background: transparent; border: none; padding: 2px 0; color: {text_secondary};
+                             font-size: {font_sm}pt; }
+QToolButton#AdvancedToggle:hover { color: {text_primary}; }

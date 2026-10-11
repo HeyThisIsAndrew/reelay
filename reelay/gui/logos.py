@@ -1,5 +1,5 @@
 """Small platform marks (YouTube, TikTok, Instagram, Bluesky, Threads,
-Facebook), drawn with QPainter so they're crisp at any size and need no image
+Facebook, Snapchat), drawn with QPainter so they're crisp at any size and need no image
 files. They're simplified badges in each platform's colours, used only to say
 which platform something is about."""
 
@@ -96,8 +96,28 @@ def _facebook(p: QPainter, s: float) -> None:
     _text(p, QRectF(s * 0.06, s * 0.1, s, s), "f", "#FFFFFF", 0.85)
 
 
+def _snapchat(p: QPainter, s: float) -> None:
+    p.setPen(Qt.NoPen)
+    p.setBrush(QColor("#FFFC00"))
+    p.drawRoundedRect(QRectF(0, 0, s, s), s * 0.24, s * 0.24)
+    ghost = QPainterPath()                      # the ghost: round head, little arms, scalloped hem
+    ghost.moveTo(s * 0.30, s * 0.58)
+    ghost.lineTo(s * 0.31, s * 0.42)
+    ghost.cubicTo(s * 0.31, s * 0.15, s * 0.69, s * 0.15, s * 0.69, s * 0.42)
+    ghost.lineTo(s * 0.70, s * 0.58)
+    ghost.quadTo(s * 0.84, s * 0.60, s * 0.76, s * 0.68)
+    ghost.quadTo(s * 0.68, s * 0.70, s * 0.63, s * 0.79)
+    ghost.quadTo(s * 0.57, s * 0.73, s * 0.50, s * 0.79)
+    ghost.quadTo(s * 0.43, s * 0.73, s * 0.37, s * 0.79)
+    ghost.quadTo(s * 0.32, s * 0.70, s * 0.24, s * 0.68)
+    ghost.quadTo(s * 0.16, s * 0.60, s * 0.30, s * 0.58)
+    p.setBrush(QColor("#FFFFFF"))
+    p.setPen(QPen(QColor("#111111"), max(1.0, s * 0.05)))
+    p.drawPath(ghost)
+
+
 DRAW = {"youtube": _youtube, "tiktok": _tiktok, "instagram": _instagram, "bluesky": _bluesky,
-        "threads": _threads, "facebook": _facebook}
+        "threads": _threads, "facebook": _facebook, "snapchat": _snapchat}
 
 
 @lru_cache(maxsize=64)
