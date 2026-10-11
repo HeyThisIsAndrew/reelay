@@ -239,6 +239,9 @@ class DownloadPage(QWidget):
         self._dl_total = self._dl_index = 0
         self._loading_profile = False
         self._save_timer = QTimer(self, singleShot=True, interval=700, timeout=self._persist_names)
+        self._file_cache: dict[str, tuple[float | None, bool]] = {}
+        self._library_cache: tuple | None = None
+        self._dir_mtimes: dict[Path, float | None] = {}
 
         self._build_ui()
         self._connect()
@@ -839,6 +842,7 @@ class DownloadPage(QWidget):
         except OSError as exc:
             QMessageBox.warning(self, APP_NAME, f"Can't use the folder {folder}:\n{exc}")
         self.library = Library(folder)
+        self._library_cache = None
         self.thumbs.folder = folder
         self.detail.folder = folder
         self.folder_btn.setText(self.folder_btn.fontMetrics().elidedText(
@@ -859,6 +863,7 @@ class DownloadPage(QWidget):
         if not self.profile or not self.library:
             return
         pid = self.profile.id
+        self._dir_mtimes: dict[Path, float | None] = {}             # one stat per folder per reload
         previous = {i.key: i.checked for i in self.model.items()}   # what the person selected so far
         by_key: dict[str, VideoItem] = {}
         archived: set[str] = set()
@@ -866,12 +871,12 @@ class DownloadPage(QWidget):
             if row.archived_at:
                 archived.add(row.item.key)   # hidden, and never re-imported from the folder
                 continue
-            row.item.refresh_download_status(self.folder)
+            self._refresh_status(row.item)
             by_key[row.item.key] = row.item
 
         imported = []
         names = self.library.load_custom_names()
-        for item in self.library.load():
+        for item in self._library_items():
             if item.key not in by_key and item.key not in archived:
                 item.folder = str(self.folder)
                 item.custom_name = item.custom_name or names.get(item.key, "")
@@ -897,6 +902,39 @@ class DownloadPage(QWidget):
         self._apply_sort()
         self._update_counts()
         self._refresh_detail()
+
+    # ---------------------------------------------------------------- cached file checks
+    def _dir_mtime(self, folder: Path) -> float | None:
+        """A folder's modification time changes whenever a file is added, removed or renamed in it."""
+        try:
+            return folder.stat().st_mtime
+        except OSError:
+            return None
+
+    def _refresh_status(self, item: VideoItem) -> None:
+        """item.refresh_download_status, but each file is only checked again when its folder changed
+        (synced and network folders make every check slow)."""
+        path = item.path(self.folder)
+        if path is None:
+            item.refresh_download_status(self.folder)
+            return
+        stamp = self._dir_mtimes.setdefault(path.parent, self._dir_mtime(path.parent))
+        cached = self._file_cache.get(str(path))
+        if cached is None or cached[0] != stamp or stamp is None:
+            cached = (stamp, path.is_file())
+            self._file_cache[str(path)] = cached
+        if cached[1]:
+            item.status, item.checked = Status.DOWNLOADED, False
+        elif item.status == Status.DOWNLOADED:
+            item.status = Status.NEW
+
+    def _library_items(self) -> list[VideoItem]:
+        """Videos found in the folder's metadata, re-read only when that folder or the manifest changes."""
+        stamp = (self._dir_mtime(self.library.metadata_dir), self._dir_mtime(self.library.manifest_path),
+                 self._dir_mtime(self.folder))
+        if self._library_cache is None or self._library_cache[0] != stamp or None in stamp[:1]:
+            self._library_cache = (stamp, self.library.load())
+        return [replace(i) for i in self._library_cache[1]]
 
     def open_output_folder(self) -> None:
         if self.profile:

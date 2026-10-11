@@ -154,10 +154,18 @@ class CardDelegate(QStyledItemDelegate):
     def __init__(self, thumbs: ThumbnailCache, parent=None):
         super().__init__(parent)
         self.thumbs = thumbs
-        self.fader = HoverFader(parent.viewport()) if parent is not None else None
+        self.fader = HoverFader(parent.viewport(), self._card_rect) if parent is not None else None
         if parent is not None:
             parent.viewport().installEventFilter(self)
             self._view = parent
+
+    def _card_rect(self, key: str):
+        """Where card ``key`` (its id) is on screen, so hover easing repaints just that card."""
+        model = self._view.model()
+        for row, card in enumerate(getattr(model, "cards", [])):
+            if str(card.id) == key:
+                return self._view.visualRect(model.index(row, 0))
+        return None
 
     # hover easing: follow the mouse over the list
     def eventFilter(self, obj, event) -> bool:  # noqa: N802

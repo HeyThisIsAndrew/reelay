@@ -30,6 +30,8 @@ CARD_TEXT_HEIGHT = 62
 RADIUS = theme.RADIUS_LG
 
 _blur_cache: dict[tuple[str, int, int], QPixmap] = {}
+_pillar_cache: dict[tuple[int, int], QPixmap] = {}     # (pixmap cacheKey, height) → scaled vertical frame
+CACHE_LIMIT = 800
 
 
 # ---------------------------------------------------------------- labels
@@ -76,9 +78,21 @@ def _blurred(key: str, cover: QPixmap, w: int, h: int) -> QPixmap:
         tiny = cover.scaled(14, 14, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
         big = tiny.scaled(w, h, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
         _blur_cache[ck] = big.copy((big.width() - w) // 2, (big.height() - h) // 2, w, h)
-        if len(_blur_cache) > 800:
+        if len(_blur_cache) > CACHE_LIMIT:
             _blur_cache.pop(next(iter(_blur_cache)))
     return _blur_cache[ck]
+
+
+def _pillar(image: QPixmap, h: int) -> QPixmap:
+    """A vertical cover scaled for a frame ``h`` tall (2x for sharpness), scaled once and reused."""
+    ck = (image.cacheKey(), h)
+    cached = _pillar_cache.get(ck)
+    if cached is None:
+        cached = image.scaledToHeight(h * 2, Qt.SmoothTransformation)
+        _pillar_cache[ck] = cached
+        if len(_pillar_cache) > CACHE_LIMIT:
+            _pillar_cache.pop(next(iter(_pillar_cache)))
+    return cached
 
 
 def draw_thumbnail(p: QPainter, rect: QRectF, item: VideoItem, cover: QPixmap | None, clip: QPainterPath,
@@ -102,7 +116,7 @@ def draw_thumbnail(p: QPainter, rect: QRectF, item: VideoItem, cover: QPixmap | 
         dim = QColor(pal.scrim)
         dim.setAlphaF(0.38)
         p.fillRect(rect, dim)
-        scaled = image.scaledToHeight(h * 2, Qt.SmoothTransformation)
+        scaled = _pillar(image, h)
         pw = scaled.width() / 2
         p.setRenderHint(QPainter.SmoothPixmapTransform)
         p.drawPixmap(QRectF(rect.center().x() - pw / 2, rect.top(), pw, h), scaled, QRectF(scaled.rect()))
@@ -167,12 +181,14 @@ def small_font(base: QFont, delta: int = -2, bold: bool = False) -> QFont:
 
 # ---------------------------------------------------------------- hover easing
 class HoverFader:
-    """Eases each card's hover highlight in and out; call ``value(key)`` while painting."""
+    """Eases each card's hover highlight in and out; call ``value(key)`` while painting.
+    Each tick repaints only the cards that are animating (``rect_for(key)``), never the whole view."""
 
     DURATION = 0.12
 
-    def __init__(self, viewport):
+    def __init__(self, viewport, rect_for=None):
         self.viewport = viewport
+        self.rect_for = rect_for
         self.target: str | None = None
         self._t: dict[str, float] = {}
         self._last = time.monotonic()
@@ -204,9 +220,16 @@ class HoverFader:
             else:
                 self._t[key] = cur
                 busy = busy or cur != goal
-        self.viewport.update()
+            self._repaint(key)
         if not busy:
             self._timer.stop()
+
+    def _repaint(self, key: str) -> None:
+        rect = self.rect_for(key) if self.rect_for is not None else None
+        if rect is not None and rect.isValid():
+            self.viewport.update(rect.adjusted(-2, -2, 2, 2))
+        elif self.rect_for is None:
+            self.viewport.update()
 
 
 # ---------------------------------------------------------------- the Library grid
@@ -233,7 +256,7 @@ class MediaGrid(QListView):
         self.setAttribute(Qt.WA_MacShowFocusRect, False)
         self.setSpacing(0)
         self.card_size = QSize(CARD_MIN_WIDTH, self._card_height(CARD_MIN_WIDTH))
-        self.fader = HoverFader(self.viewport())
+        self.fader = HoverFader(self.viewport(), self._card_rect)
         self.mouse = QPoint(-1, -1)
 
     @staticmethod
@@ -251,6 +274,12 @@ class MediaGrid(QListView):
         self.card_size = QSize(card_w, self._card_height(card_w))
         self.setGridSize(QSize(card_w + CARD_GAP, self.card_size.height() + CARD_GAP))
         self.setViewportMargins(CARD_GAP // 2, CARD_GAP // 2, 0, 0)
+
+    def _card_rect(self, key: str) -> QRect | None:
+        model = self.model()
+        if model is None or not key.isdigit() or int(key) >= model.rowCount():
+            return None
+        return QRect(self.visualRect(model.index(int(key), 0)).topLeft(), self.card_size)
 
     def thumb_rect(self, index) -> QRect:
         r = self.visualRect(index)

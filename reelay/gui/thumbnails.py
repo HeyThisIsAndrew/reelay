@@ -2,6 +2,10 @@
 
 Signed CDN cover URLs expire, so for videos already downloaded the cache
 falls back to grabbing a frame from the local file with ffmpeg.
+
+``cover()`` never touches the disk or decodes anything on the GUI thread: reading a cached file,
+downloading, grabbing a frame and scaling all happen on worker threads, which hand back a ready
+QImage. The GUI thread only turns it into a pixmap.
 """
 
 from __future__ import annotations
@@ -39,7 +43,17 @@ _SSL = _ssl_context()
 
 
 class _Signals(QObject):
-    done = Signal(str, str)  # key, cached file path ("" on failure)
+    done = Signal(str, object)  # key, scaled QImage (None on failure)
+
+
+def _read_scaled(path: Path) -> QImage | None:
+    """Decode a cover and scale it down (worker threads only)."""
+    image = QImage(str(path))
+    if image.isNull():
+        return None
+    if image.height() > MAX_COVER_HEIGHT:
+        image = image.scaledToHeight(MAX_COVER_HEIGHT, Qt.SmoothTransformation)
+    return image
 
 
 class _FetchCover(QRunnable):
@@ -48,6 +62,11 @@ class _FetchCover(QRunnable):
         self.key, self.url, self.video_path, self.dest, self.signals = key, url, video_path, dest, signals
 
     def run(self) -> None:
+        if self.dest.is_file():                      # cached already: just decode it here, off the GUI thread
+            image = _read_scaled(self.dest)
+            if image is not None:
+                self.signals.done.emit(self.key, image)
+                return
         ok = False
         if self.url:
             try:
@@ -59,9 +78,9 @@ class _FetchCover(QRunnable):
                     ok = True
             except Exception as exc:  # noqa: BLE001 — a missing cover is cosmetic
                 log.debug("cover download failed for %s: %s", self.key, exc)
-        if not ok and self.video_path:
+        if not ok and self.video_path and Path(self.video_path).is_file():
             ok = self._frame_from_video()
-        self.signals.done.emit(self.key, str(self.dest) if ok else "")
+        self.signals.done.emit(self.key, _read_scaled(self.dest) if ok else None)
 
     def _frame_from_video(self) -> bool:
         ffmpeg = find_ffmpeg()
@@ -103,22 +122,16 @@ class ThumbnailCache(QObject):
         return self.cache_dir / (re.sub(r"[^\w.-]", "_", key) + ".img")
 
     def cover(self, item: VideoItem) -> QPixmap | None:
-        """Full-size cover, or None while it's loading (loaded fires later)."""
+        """The cover, or None while it loads (``loaded`` fires later). Never blocks: no disk reads here."""
         pix = self._covers.get(item.key)
         if pix is not None:
             return pix
         if item.key in self._pending or item.key in self._failed:
             return None
-        path = self._path(item.key)
-        if path.is_file() and self._load(item.key, path):
-            return self._covers[item.key]
-        local = item.path(self.folder)
-        video = str(local) if local and local.is_file() else ""
-        if not item.thumbnail_url and not video:
-            self._failed.add(item.key)
-            return None
+        local = item.path(self.folder) if item.filename else None
         self._pending.add(item.key)
-        self._pool.start(_FetchCover(item.key, item.thumbnail_url, video, path, self._signals))
+        self._pool.start(_FetchCover(item.key, item.thumbnail_url, str(local) if local else "",
+                                     self._path(item.key), self._signals))
         return None
 
     def thumb(self, item: VideoItem, w: int, h: int, ratio: float = 1.0) -> QPixmap | None:
@@ -137,18 +150,10 @@ class ThumbnailCache(QObject):
         self._small[key] = small
         return small
 
-    def _load(self, key: str, path: Path) -> bool:
-        image = QImage(str(path))
-        if image.isNull():
-            return False
-        if image.height() > MAX_COVER_HEIGHT:
-            image = image.scaledToHeight(MAX_COVER_HEIGHT, Qt.SmoothTransformation)
-        self._covers[key] = QPixmap.fromImage(image)
-        return True
-
-    def _on_done(self, key: str, path: str) -> None:
+    def _on_done(self, key: str, image) -> None:
         self._pending.discard(key)
-        if path and self._load(key, Path(path)):
+        if image is not None and not image.isNull():
+            self._covers[key] = QPixmap.fromImage(image)
             self.loaded.emit(key)
         else:
             self._failed.add(key)
