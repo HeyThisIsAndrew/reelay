@@ -511,7 +511,8 @@ class DownloadPage(QWidget):
         tip(self.status, "What Reelay is doing, and what to do next")
         brow.addWidget(self.status, 1)
         self.manifest_btn = QPushButton("Open Video List")
-        tip(self.manifest_btn, "Open manifest.md: a table of every downloaded video with its date, caption and file")
+        tip(self.manifest_btn, "Every downloaded video in a table: search it, show files in Finder, copy links, "
+                               "play them, or export the list as CSV or Markdown")
         brow.addWidget(self.manifest_btn)
         brow.addSpacing(8)
         self.count_label = muted("")
@@ -1025,11 +1026,14 @@ class DownloadPage(QWidget):
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.folder)))
 
     def open_manifest(self) -> None:
+        """Downloaded Videos: the list inside Reelay (manifest.md is still kept up to date in the folder)."""
         if not self.library:
             return
-        if not self.library.manifest_path.is_file():
-            self._write_manifest()
-        QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.library.manifest_path)))
+        from .video_list_dialog import VideoListDialog
+        items = [i for i in self.model.items() if i.is_downloaded and self._in_folder(i)]
+        self.video_list = VideoListDialog(items, self.folder, self.thumbs, self.library.manifest_path,
+                                          self.sources, self.failures, self)
+        self.video_list.show()
 
     def _write_manifest(self) -> None:
         try:

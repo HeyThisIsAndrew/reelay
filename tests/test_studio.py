@@ -284,3 +284,50 @@ def test_tile_size_presets_slider_and_narrow_views(app_window, qtbot, monkeypatc
     assert page.grid.card_size.width() <= page.grid.viewport().width()
     page.view_toggle.set_mode("list", emit=True)
     assert not page.tile_controls.isVisibleTo(page)               # tile size only applies to the grid
+
+
+# ------------------------------------------------------------------ Downloaded Videos (in-app list)
+def _downloaded(tmp_path, n=3):
+    items = []
+    for i in range(n):
+        item = VideoItem(platform="TikTok", video_id=str(800 + i), url=f"https://www.tiktok.com/@x/video/{800 + i}",
+                         title=f"sunnies {i}" if i else "desert road trip", duration=30 + i, view_count=100 * (i + 1),
+                         upload_date=f"2026090{i + 1}", filename=f"clip{i}.mp4", folder=str(tmp_path))
+        (tmp_path / item.filename).write_bytes(b"v" * (1000 * (i + 1)))
+        item.status = "downloaded"
+        items.append(item)
+    return items
+
+
+def test_video_list_dialog_search_copy_and_export(app_window, qtbot, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QApplication
+    from reelay.gui import video_list_dialog as vld
+    dialog = vld.VideoListDialog(_downloaded(tmp_path), tmp_path)
+    qtbot.addWidget(dialog)
+    assert dialog.table.rowCount() == 3 and dialog.item_at(0).upload_date == "20260903"   # newest first
+    dialog.search.setText("sunnies")
+    assert len(dialog.visible_items()) == 2 and "2 shown" in dialog.count.text()
+    dialog.search.setText("")
+    dialog.table.selectRow(0)
+    dialog.copy_links()
+    assert QApplication.clipboard().text() == dialog.item_at(0).url
+    revealed = []
+    monkeypatch.setattr(vld, "reveal_in_file_manager", lambda path: revealed.append(Path(path)) or True)
+    dialog.reveal()
+    assert revealed == [tmp_path / dialog.item_at(0).filename]
+    out = dialog.export_csv(str(tmp_path / "list.csv"))
+    rows = out.read_text().splitlines()
+    assert rows[0].startswith("Date,Title") and len(rows) == 4 and "https://www.tiktok.com/@x/video/802" in out.read_text()
+    md = dialog.export_markdown(str(tmp_path / "manifest.md"))
+    assert "clip0.mp4" in md.read_text()
+
+
+def test_open_video_list_stays_in_the_app(app_window, qtbot, monkeypatch):
+    window, store, _ = app_window
+    page = fetch_fake(window, qtbot, monkeypatch, make_items(2))
+    from PySide6.QtGui import QDesktopServices
+    opened = []
+    monkeypatch.setattr(QDesktopServices, "openUrl", lambda url: opened.append(url))
+    page.manifest_btn.click()
+    assert page.video_list.isVisible() and opened == []
+    page.video_list.close()

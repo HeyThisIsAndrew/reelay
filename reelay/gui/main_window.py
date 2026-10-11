@@ -214,7 +214,7 @@ class MainWindow(QMainWindow):
         f.addSeparator()
         self._action(f, "Choose Output Folder…", self.download.choose_folder, QKeySequence.StandardKey.Open)
         self._action(f, "Open Output Folder", self.download.open_output_folder)
-        self._action(f, "Open Video List (manifest.md)", self.download.open_manifest)
+        self._action(f, "Downloaded Videos…", self.download.open_manifest, "Ctrl+Shift+L")
         f.addSeparator()
         self._action(f, "Import from Spreadsheet…", lambda: (self.go("board"), self.board.open_import()),
                      "Ctrl+Shift+I")
