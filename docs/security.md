@@ -69,6 +69,22 @@ Rules run with the person's authority, which could make them a way around approv
 - The server binds to `127.0.0.1` by default, with no CORS.
 - Secrets never appear in responses, logs or error messages, or in the database. Platform credentials live in the keychain.
 
+## Signing in to platforms
+
+- **Loopback receiver** (`reelay/loopback.py`), used by Google and TikTok sign-in and by the Meta bounce:
+  127.0.0.1 only, on a random free port; only the registered path with the exact `state` (constant-time
+  compare) and a local `Host` header count, so another program or a web page (DNS rebinding) can't end or
+  spoof a sign-in; it stops listening right after the real redirect; responses are `no-store` /
+  `no-referrer` and never echo the code; URLs are never logged.
+- **Meta (Instagram, Threads, Facebook):** the app secret stays on the sign-in server (broker). The state is
+  `<port>.<random>`; the broker exchanges the code, sends the browser back to `127.0.0.1:<port>/callback` with
+  a one-time key, and the app claims the tokens once with state + key (`POST /v1/oauth/session/claim`).
+- **Google:** PKCE on the device; the client ID ships as a placeholder until Reelay's Google app is approved,
+  and sign-in says so instead of failing at Google. Tokens record which Google app issued them and only
+  refresh with that app.
+- **Disconnect** revokes Reelay-app access where the platform allows (Google, TikTok through the broker,
+  Facebook) and deletes the keychain entry.
+
 ## What code can't enforce
 
 - **Processes on the same Mac with file access.** Anything that can read or write `~/Library/Application Support/Reelay/reelay.db` can bypass every check, including editing `approval_requests`. Agents must not be given shell or file access to Reelay's data folder. The boundary is the API surface, not the operating system.
