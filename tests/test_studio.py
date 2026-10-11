@@ -331,3 +331,23 @@ def test_open_video_list_stays_in_the_app(app_window, qtbot, monkeypatch):
     page.manifest_btn.click()
     assert page.video_list.isVisible() and opened == []
     page.video_list.close()
+
+
+# ------------------------------------------------------------------ splitter bounds
+def test_inspector_can_neither_crush_the_library_nor_cover_it(qtbot):
+    from PySide6.QtWidgets import QLabel, QWidget
+    from reelay.gui.inspector import ContextualSplitter, Inspector
+    main = QWidget()
+    split = ContextualSplitter(main, Inspector(QLabel("details")), default_width=900)
+    qtbot.addWidget(split)
+    split.resize(1300, 700)
+    split.show()
+    split.reveal()
+    assert split.sizes()[1] == 600                                  # wanted 900: capped at 600
+    split.moveSplitter(50, 1)                                        # drag the edge all the way left
+    assert split.sizes()[0] >= 320 and split.sizes()[1] <= 600
+    split.resize(900, 700)                                           # a narrower window: 55% at most
+    split.moveSplitter(100, 1)
+    assert split.sizes()[1] <= int(900 * 0.55) and split.sizes()[0] >= 320
+    split.dismiss()
+    assert split.slide.isHidden()

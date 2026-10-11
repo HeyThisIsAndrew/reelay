@@ -72,11 +72,15 @@ class ContextualSplitter(QSplitter):
     ``reveal()`` slides it in at the width the person last chose (remembered per page), ``dismiss()``
     slides it out and hides it. Dragging the gap resizes it while it's open."""
 
+    MAIN_MIN_WIDTH = 320          # the library / board never gets narrower than one readable column
+    MAX_WIDTH, MAX_SHARE = 600, 0.55   # the inspector never covers more than this
+
     def __init__(self, main: QWidget, inspector: Inspector, store=None, key: str = "", default_width: int = 400,
                  min_width: int = 320, parent=None):
         super().__init__(Qt.Horizontal, parent)
         self.store, self.key = store, key
         self.min_width = min_width
+        main.setMinimumWidth(self.MAIN_MIN_WIDTH)
         self.inspector = inspector
         self.slide = _Slide(inspector)
         self.addWidget(main)
@@ -109,6 +113,7 @@ class ContextualSplitter(QSplitter):
             return
         self.is_open = True
         self.slide.setMinimumWidth(0)
+        self.slide.setMaximumWidth(16777215)
         self.slide.show()
         self._run(self._current(), self._target())
 
@@ -119,9 +124,17 @@ class ContextualSplitter(QSplitter):
         self.slide.setMinimumWidth(0)
         self._run(self._current(), 0)
 
-    def _target(self) -> int:
+    def max_width(self) -> int:
         total = sum(self.sizes()) or self.width()
-        return max(self.min_width, min(self.width_wanted, max(total - 360, self.min_width)))
+        return max(self.min_width, min(self.MAX_WIDTH, int(total * self.MAX_SHARE), total - self.MAIN_MIN_WIDTH))
+
+    def _target(self) -> int:
+        return max(self.min_width, min(self.width_wanted, self.max_width()))
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        if self.is_open and self._anim.state() != QVariantAnimation.Running:
+            self.slide.setMaximumWidth(self.max_width())
 
     def _current(self) -> int:
         return self.sizes()[1] if self.slide.isVisible() else 0
@@ -143,7 +156,8 @@ class ContextualSplitter(QSplitter):
 
     def _settle(self) -> None:
         if self.is_open:
-            self.slide.setMinimumWidth(self.min_width)   # dragging can't squash it once it's open
+            self.slide.setMinimumWidth(self.min_width)   # dragging can't squash it once it's open…
+            self.slide.setMaximumWidth(self.max_width())  # …or stretch it across the library
             self._step(self._target())
         else:
             self.slide.hide()
