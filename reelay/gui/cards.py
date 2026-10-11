@@ -26,7 +26,7 @@ from .table_model import fmt_count, fmt_duration, short_date
 from ..readiness import SHORT_FORM_MAX_SECONDS as SHORT_MAX_SECONDS   # Shorts top out at 3 minutes
 CARD_MIN_WIDTH = 240             # the default tile size (Medium)
 TILE_SIZES = {"Small": 180, "Medium": 240, "Large": 320, "XL": 400}
-TILE_MIN, TILE_MAX = 160, 480
+TILE_MIN, TILE_MAX = 180, 400
 CARD_GAP = 16
 CARD_TEXT_HEIGHT = 62
 RADIUS = theme.RADIUS_LG
@@ -287,13 +287,26 @@ class MediaGrid(QListView):
     def _relayout(self) -> None:
         """As many columns of at least ``card_min_width`` as fit, stretched to fill the row. A view
         narrower than one tile gets one card exactly as wide as the view (never wider)."""
-        width = max(self.viewport().width() - CARD_GAP, 1)
+        sb = 0 if self.verticalScrollBar().isVisible() else (self.verticalScrollBar().sizeHint().width() or 14) + 4
+        margin = CARD_GAP // 2 + sb
+        vw = max(self.viewport().width(), 1)
         min_w = self.card_min_width
-        columns = max(1, (width + CARD_GAP) // (min_w + CARD_GAP))
-        card_w = (width - CARD_GAP * (columns - 1)) // columns - 1
-        card_w = max(1, min(card_w, width)) if columns == 1 else max(min_w, card_w)
+        avail = max(1, vw - margin)
+        columns = max(1, avail // (min_w + CARD_GAP))
+        grid_w = avail // columns
+        if columns == 1:
+            card_w = max(1, min(vw - CARD_GAP, grid_w - CARD_GAP))
+            if card_w < min_w and vw > CARD_GAP:
+                card_w = max(1, vw - CARD_GAP)
+        else:
+            card_w = max(min_w, grid_w - CARD_GAP)
+            grid_w = card_w + CARD_GAP
+            if columns * grid_w > avail:
+                grid_w = avail // columns
+                card_w = max(1, grid_w - CARD_GAP)
+
         self.card_size = QSize(card_w, self._card_height(card_w))
-        self.setGridSize(QSize(card_w + CARD_GAP, self.card_size.height() + CARD_GAP))
+        self.setGridSize(QSize(grid_w, self.card_size.height() + CARD_GAP))
 
     def _card_rect(self, key: str) -> QRect | None:
         model = self.model()

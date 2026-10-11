@@ -297,13 +297,51 @@ def test_tile_size_presets_slider_and_narrow_views(app_window, qtbot, monkeypatc
     assert page.grid.card_min_width == 190
     page.step_tile_size(-1)
     assert page.grid.card_min_width == 180
-    page.grid.set_card_min_width(10_000)                           # clamped
-    assert page.grid.card_min_width == 480
+    page.grid.set_card_min_width(10_000)                           # clamped to TILE_MAX
+    assert page.grid.card_min_width == 400
+    page.grid.set_card_min_width(-10_000)                          # clamped to TILE_MIN
+    assert page.grid.card_min_width == 180
+    assert page.tile_slider.minimum() == 180 and page.tile_slider.maximum() == 400
+    # max zoom in windowed and fullscreen does not leave an empty column on the far right
+    page.grid.set_card_min_width(400)
+    window.resize(1400, 900)
+    page.grid._relayout()
+    r0_y = page.grid.visualRect(page.pager.index(0, 0)).y()
+    first_row_cols = sum(1 for i in range(4) if page.grid.visualRect(page.pager.index(i, 0)).y() == r0_y)
+    assert first_row_cols >= 2                                     # fits multiple columns without dropping to 1
     page.grid.resize(260, 400)                                     # narrower than one tile
     page.grid._relayout()
     assert page.grid.card_size.width() <= page.grid.viewport().width()
     page.view_toggle.set_mode("list", emit=True)
     assert not page.tile_controls.isVisibleTo(page)               # tile size only applies to the grid
+
+
+def test_tile_slider_depletion_and_max_zoom_no_empty_columns(app_window, qtbot, monkeypatch):
+    window, store, _ = app_window
+    items = make_items(8)
+    page = fetch_fake(window, qtbot, monkeypatch, items)
+
+    # 1. Zoom in and out fills / depletes the slider
+    for _ in range(5):
+        page.step_tile_size(-1)
+    assert page.grid.card_min_width == 180
+    assert page.tile_slider.value() == page.tile_slider.minimum() == 180
+
+    for _ in range(5):
+        page.step_tile_size(1)
+    assert page.grid.card_min_width == 400
+    assert page.tile_slider.value() == page.tile_slider.maximum() == 400
+
+    # 2. At max zoom in windowed and fullscreen, rows fit expected columns with no empty column
+    for win_w in (1200, 1400, 1600, 1920):
+        window.resize(win_w, 900)
+        page.grid.set_card_min_width(400)
+        page.grid._relayout()
+        avail = max(1, page.grid.viewport().width() - 8)
+        expected_cols = max(1, avail // (400 + 16))
+        r0_y = page.grid.visualRect(page.pager.index(0, 0)).y()
+        actual_cols = sum(1 for i in range(len(items)) if page.grid.visualRect(page.pager.index(i, 0)).y() == r0_y)
+        assert actual_cols == expected_cols, f"Width {win_w}: expected {expected_cols} cols, got {actual_cols}"
 
 
 # ------------------------------------------------------------------ Downloaded Videos (in-app list)
