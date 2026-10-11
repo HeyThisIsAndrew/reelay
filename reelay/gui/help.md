@@ -30,6 +30,10 @@ Only import media you own or have permission to manage.
   - **Hover-scrub:** move the mouse across a downloaded video's thumbnail to flip through it. The frames are made in the background the first time (about a second) and kept.
 - **Filter** (top right) holds what to show (all, not downloaded yet, downloaded), the hashtag and brand or product filters, and the sort order. The button shows how many filters are on.
 - **Download settings** (the gear) hold where videos are saved, the quality, browser sign-in, and how files are named.
+- **Tile size:** the slider at the top (or ⌘+ and ⌘−) makes the thumbnails smaller or bigger: Small, Medium, Large or XL.
+- **Pages:** big libraries show a page at a time. At the bottom, choose 24, 48, 96 or All per page and step through with the arrows. A new search or filter starts at page 1; **Select All** still selects every matching video, on every page.
+- **Open Video List** (bottom, or **File → Downloaded Videos…**) shows every downloaded video in a table you can search and sort, with **Show in Finder**, **Copy Video Link** and **Play Preview**, and export it as a CSV spreadsheet or as the Markdown manifest.
+- **Snapchat:** paste a Snapchat Spotlight link to download it like any other video.
 
 - **Saved sources** are buttons for links you use often. Click **List Videos** on one to see its videos. To add one, paste a link and click **Save This Link…**. Use the **⋯** menu on a source to rename it, mark it as one of your own accounts, or remove it.
 - **Connected YouTube channels** (from Accounts) appear as sources automatically and don't need a link. Private and scheduled videos are shown but left unticked.
@@ -176,6 +180,10 @@ Rules are careful:
 - Templates only fill empty fields.
 - Scheduling only happens if the ticket is ready.
 - **Activity** lists everything rules did.
+
+**Quick-start recipes** (on the empty Automations page, or **Recipes ▾**) add ready-made rules in one click: *Cross-post short-form* (TikTok and Instagram videos get YouTube Shorts and Threads captions with a link-in-bio line), *Auto-hashtag by topic* (fitness, tech and recipe hashtag bundles; change the words to suit you), and *Ready queue* (tickets moved to Staging are scheduled for the next Tuesday at 9:00 if they're ready).
+
+**Test this rule:** at the bottom of a rule, pick any video on the board to see whether the rule would run for it, which conditions it meets, and exactly what each action would write. Nothing changes until you save the rule and it runs.
 
 ---
 
