@@ -56,6 +56,10 @@ PATHS: dict[str, str] = {
     "folder": '<path d="M3.5 7.5A1.5 1.5 0 0 1 5 6h4.5l2 2.5H19a1.5 1.5 0 0 1 1.5 1.5v7.5A1.5 1.5 0 0 1 19 19H5'
               'a1.5 1.5 0 0 1-1.5-1.5z"/>',
     "plus": '<path d="M12 5v14M5 12h14"/>',
+    "chevron_left": '<path d="M14.5 6l-6 6 6 6"/>',
+    "chevron_right": '<path d="M9.5 6l6 6-6 6"/>',
+    "zoom_in": '<circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5M8.5 11h5M11 8.5v5"/>',
+    "zoom_out": '<circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5M8.5 11h5"/>',
     "sidebar": '<rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M9.5 4.5v15"/>',
     "calendar": '<rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M3.5 10h17M8 3v4M16 3v4"/>',
     "link": '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3'

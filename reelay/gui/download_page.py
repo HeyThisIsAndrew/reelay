@@ -37,7 +37,7 @@ from .player import PlayerWidget
 from .scrub import ScrubCache
 from .dialogs import RenamePreviewDialog, tokens_help_html
 from .cards import LibraryCardDelegate, MediaGrid
-from .table_model import ROW_HEIGHT, Col, CoverDelegate, VideoFilterProxy, VideoTableModel
+from .table_model import ROW_HEIGHT, Col, CoverDelegate, PageProxy, VideoFilterProxy, VideoTableModel
 from .theme import set_prop
 from .tips import tip
 from .widgets import GrowingSearch, NamingPicker, ProductFilter
@@ -46,6 +46,8 @@ from .workers import CallWorker, DetailsWorker, DownloadWorker, FetchWorker, Pro
 
 log = logging.getLogger("reelay")
 OWN_CONTENT = "Own content"
+PAGE_SIZES = (24, 48, 96, 0)        # 0 = all on one page
+DEFAULT_PAGE_SIZE = 48
 SORTS = (("newest", "Newest first"), ("oldest", "Oldest first"), ("views", "Most viewed"),
          ("longest", "Longest first"), ("shortest", "Shortest first"), ("title", "Caption A to Z"))
 
@@ -226,8 +228,10 @@ class DownloadPage(QWidget):
         self.profile: Profile | None = None
         self.library: Library | None = None
         self.model = VideoTableModel(thumbs, self)
-        self.proxy = VideoFilterProxy(self)
+        self.proxy = VideoFilterProxy(self)          # filtering, sorting and counts
         self.proxy.setSourceModel(self.model)
+        self.pager = PageProxy(self)                  # the page the grid and list show
+        self.pager.setSourceModel(self.proxy)
 
         self.fetched: list[VideoItem] = []
         self.sources: list[str] = []
@@ -245,6 +249,12 @@ class DownloadPage(QWidget):
 
         self._build_ui()
         self._connect()
+        saved = self.store.get_setting("ui.library.page_size", str(DEFAULT_PAGE_SIZE))
+        index = self.page_size.findData(int(saved) if saved.isdigit() else DEFAULT_PAGE_SIZE)
+        self.page_size.blockSignals(True)
+        self.page_size.setCurrentIndex(index if index >= 0 else self.page_size.findData(DEFAULT_PAGE_SIZE))
+        self.page_size.blockSignals(False)
+        self.pager.set_size(self.page_size.currentData())
         self._bridge = change_bridge(store)
         self._bridge.changed.connect(self._on_store_change)
 
@@ -392,8 +402,8 @@ class DownloadPage(QWidget):
         ll.addWidget(strip)
 
         self.table = VideoTable(self._toggle_selected)
-        self.table.setModel(self.proxy)
-        self.table.setItemDelegateForColumn(Col.COVER, CoverDelegate(self.model, self.proxy, self.table))
+        self.table.setModel(self.pager)
+        self.table.setItemDelegateForColumn(Col.COVER, CoverDelegate(self.model, self.pager, self.table))
         self.table.setSelectionBehavior(QTableView.SelectRows)
         self.table.setSelectionMode(QTableView.ExtendedSelection)
         self.table.setEditTriggers(QTableView.DoubleClicked | QTableView.EditKeyPressed)
@@ -461,6 +471,20 @@ class DownloadPage(QWidget):
         tip(self.progress, "Progress of the current list or download")
         bl.addWidget(self.progress)
         brow = QHBoxLayout()
+        # pages: how many videos per page, and which page
+        self.page_size = tip(QComboBox(), "How many videos to show per page")
+        for n in PAGE_SIZES:
+            self.page_size.addItem("All" if not n else f"{n} per page", n)
+        self.prev_btn = icon_button("chevron_left", "Previous page")
+        self.page_label = tip(muted(""), "Which page of videos you're looking at")
+        self.next_btn = icon_button("chevron_right", "Next page")
+        self.prev_btn.clicked.connect(lambda: self.pager.set_page(self.pager.page - 1))
+        self.next_btn.clicked.connect(lambda: self.pager.set_page(self.pager.page + 1))
+        self.page_size.currentIndexChanged.connect(self._on_page_size)
+        self.pager.pageChanged.connect(self._sync_pages)
+        for w in (self.page_size, self.prev_btn, self.page_label, self.next_btn):
+            brow.addWidget(w)
+        brow.addSpacing(10)
         self.status = muted("")
         tip(self.status, "What Reelay is doing, and what to do next")
         brow.addWidget(self.status, 1)
@@ -570,7 +594,7 @@ class DownloadPage(QWidget):
     # ================================================================ grid / list
     def _build_grid(self) -> MediaGrid:
         grid = MediaGrid()
-        grid.setModel(self.proxy)
+        grid.setModel(self.pager)
         grid.setSelectionModel(self.table.selectionModel())   # one selection, whichever view is showing
         self.card_delegate = LibraryCardDelegate(self, grid)
         self.scrub = ScrubCache(self)                 # hover a downloaded video's thumbnail to flip through it
@@ -596,12 +620,13 @@ class DownloadPage(QWidget):
             (self.grid if mode == "grid" else self.table).scrollTo(current)
 
     def _toggle_check_at(self, index) -> None:
-        item = self.model.item(self.proxy.mapToSource(index).row())
+        item = self.model.item(self.pager.to_model_row(index))
         if not item.is_downloaded:
             self.model.set_checked([item.key], not item.checked)
 
     def _on_show_filter(self) -> None:
         self.proxy.set_state(self.show_filter.currentData())
+        self.pager.set_page(0)
         self._update_counts()
 
     def _apply_sort(self) -> None:
@@ -611,6 +636,19 @@ class DownloadPage(QWidget):
                          "title": (Col.HOOK, Qt.AscendingOrder)}.get(self.sort_box.currentData(),
                                                                     (Col.DATE, Qt.DescendingOrder))
         self.table.sortByColumn(column, order)
+
+    def _on_page_size(self) -> None:
+        size = self.page_size.currentData()
+        self.pager.set_size(size)
+        self.store.set_setting("ui.library.page_size", str(size))
+
+    def _sync_pages(self) -> None:
+        pages = self.pager.pages
+        self.page_label.setText(f"Page {self.pager.page + 1} of {pages}")
+        for w in (self.prev_btn, self.page_label, self.next_btn):
+            w.setVisible(pages > 1)
+        self.prev_btn.setEnabled(self.pager.page > 0)
+        self.next_btn.setEnabled(self.pager.page < pages - 1)
 
     def _sync_filter_count(self) -> None:
         brand, product = self.products_filter.brand.currentData(), self.products_filter.product.currentData()
@@ -646,7 +684,8 @@ class DownloadPage(QWidget):
         self.unselect_all_btn.clicked.connect(self.unselect_all)
         self.cancel_btn.clicked.connect(self._cancel_download)
         self.apply_btn.clicked.connect(self._apply_names)
-        self.search.textChangedTo.connect(lambda text: (self.proxy.set_query(text), self._update_counts()))
+        self.search.textChangedTo.connect(lambda text: (self.proxy.set_query(text), self.pager.set_page(0),
+                                                        self._update_counts()))
         self.tag_filter.currentIndexChanged.connect(self._on_tag_filter)
         self.products_filter.changed.connect(self._on_product_filter)
         self.show_filter.currentIndexChanged.connect(self._on_show_filter)
@@ -733,7 +772,7 @@ class DownloadPage(QWidget):
         return base_options(self.cookies.currentData() or None)
 
     def _selected_items(self) -> list[VideoItem]:
-        rows = {self.proxy.mapToSource(i).row() for i in self.table.selectionModel().selectedIndexes()}
+        rows = {self.pager.to_model_row(i) for i in self.table.selectionModel().selectedIndexes()}
         return [self.model.item(r) for r in sorted(rows)]
 
     def _in_folder(self, item: VideoItem) -> bool:
@@ -1177,6 +1216,7 @@ class DownloadPage(QWidget):
 
     def _on_product_filter(self, ids=None) -> None:
         self.proxy.set_product_ids(self.products_filter.selection())
+        self.pager.set_page(0)
         self._update_counts()
 
     def filter_by_product(self, product_id: str) -> None:
@@ -1236,6 +1276,7 @@ class DownloadPage(QWidget):
 
     def _on_tag_filter(self) -> None:
         self.proxy.set_tag(self.tag_filter.currentData())
+        self.pager.set_page(0)
         self._update_counts()
 
     def filter_by_tag(self, tag: str) -> None:

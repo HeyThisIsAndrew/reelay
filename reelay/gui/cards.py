@@ -337,7 +337,7 @@ class LibraryCardDelegate(QStyledItemDelegate):
         return self.grid.card_size
 
     def item_at(self, index) -> VideoItem:
-        return self.page.model.item(self.page.proxy.mapToSource(index).row())
+        return self.page.model.item(self.page.pager.to_model_row(index))
 
     def _file_size(self, item: VideoItem) -> int:
         if not item.is_downloaded:

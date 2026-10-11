@@ -230,3 +230,33 @@ def test_player_without_a_file_says_so(app_window, qtbot):
     qtbot.addWidget(player)
     player.set_video(None, None)
     assert "Download this video" in player.notice_text.text() and not player.play_btn.isEnabled()
+
+
+# ------------------------------------------------------------------ pagination
+def _many(n):
+    from datetime import date
+    return [VideoItem(platform="TikTok", video_id=str(5000 + i), url=f"https://www.tiktok.com/@x/video/{5000 + i}",
+                      title=f"clip {i}", description=f"clip {i} #tag", duration=10 + i,
+                      upload_date=(date(2026, 9, 30) - timedelta(days=i)).strftime("%Y%m%d"))
+            for i in range(n)]
+
+
+def test_library_pages(app_window, qtbot, monkeypatch):
+    window, store, _ = app_window
+    page = fetch_fake(window, qtbot, monkeypatch, _many(60))
+    page.page_size.setCurrentIndex(page.page_size.findData(24))
+    assert store.get_setting("ui.library.page_size") == "24"
+    assert page.pager.rowCount() == 24 and page.pager.pages == 3 and page.page_label.text() == "Page 1 of 3"
+    assert not page.prev_btn.isEnabled() and page.next_btn.isEnabled()
+    page.next_btn.click()
+    page.next_btn.click()
+    assert page.pager.page == 2 and page.pager.rowCount() == 12 and not page.next_btn.isEnabled()
+    newest_on_last = page.model.item(page.pager.to_model_row(page.pager.index(0, 0)))
+    assert newest_on_last.video_id == "5048"                      # newest first, 49th video starts page 3
+    page.search.setPlainText("clip 1")                             # a new search starts at page 1
+    assert page.pager.page == 0
+    page.search.setPlainText("")
+    page.select_all_btn.click()                                    # Select All covers every page
+    assert len(page.model.checked_items()) == 60
+    page.page_size.setCurrentIndex(page.page_size.findData(0))     # All
+    assert page.pager.rowCount() == 60 and page.prev_btn.isHidden()

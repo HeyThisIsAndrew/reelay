@@ -402,7 +402,9 @@ class CoverDelegate(QStyledItemDelegate):
         if style:
             style.drawPrimitive(QStyle.PE_PanelItemViewItem, opt, painter, widget)
 
-        item = self.model.item(self.proxy.mapToSource(index).row())
+        row = self.proxy.to_model_row(index) if hasattr(self.proxy, "to_model_row") \
+            else self.proxy.mapToSource(index).row()
+        item = self.model.item(row)
         r = option.rect
         box = QRectF(r.x() + (r.width() - COVER_W) / 2, r.y() + (r.height() - COVER_H) / 2, COVER_W, COVER_H)
         path = QPainterPath()
@@ -419,3 +421,59 @@ class CoverDelegate(QStyledItemDelegate):
         if not item.checked and not item.is_downloaded:
             painter.fillPath(path, QColor(0, 0, 0, 120))  # dim skipped videos
         painter.restore()
+
+
+class PageProxy(QSortFilterProxyModel):
+    """One page of the (filtered, sorted) list, for the grid and the list view.
+
+    Sits on top of ``VideoFilterProxy``: filtering, sorting and counts stay there; this only keeps rows
+    ``page * size`` to ``(page + 1) * size``. Sorting asked of this proxy (clicking a column header) goes
+    down to the filter proxy, so it orders the whole list, not just the page.
+    """
+
+    pageChanged = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.page = 0
+        self.size = 0                  # 0 = everything on one page
+
+    def setSourceModel(self, model) -> None:  # noqa: N802
+        super().setSourceModel(model)
+        for signal in (model.modelReset, model.layoutChanged, model.rowsInserted, model.rowsRemoved):
+            signal.connect(self._clamp)
+
+    @property
+    def total(self) -> int:
+        return self.sourceModel().rowCount() if self.sourceModel() is not None else 0
+
+    @property
+    def pages(self) -> int:
+        return max(1, -(-self.total // self.size)) if self.size else 1
+
+    def set_size(self, size: int) -> None:
+        self.size = max(0, int(size))
+        self.set_page(0)
+
+    def set_page(self, page: int) -> None:
+        self.page = max(0, min(page, self.pages - 1))
+        self.invalidateRowsFilter()
+        self.pageChanged.emit()
+
+    def _clamp(self, *_args) -> None:
+        """The list changed under us (new videos, a filter): stay on this page if it still exists."""
+        self.set_page(self.page)
+
+    def filterAcceptsRow(self, source_row: int, source_parent) -> bool:  # noqa: N802
+        if not self.size:
+            return True
+        start = self.page * self.size
+        return start <= source_row < start + self.size
+
+    def sort(self, column: int, order=Qt.AscendingOrder) -> None:
+        self.sourceModel().sort(column, order)
+        self.set_page(0)
+
+    def to_model_row(self, index) -> int:
+        """Row in the VideoTableModel for an index of this proxy."""
+        return self.sourceModel().mapToSource(self.mapToSource(index)).row()
