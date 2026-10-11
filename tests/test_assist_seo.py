@@ -47,8 +47,9 @@ def test_ollama_rewrite_with_a_fake_server():
     assert r.status()[0]
     out = assist.rewrite(r, "sunnies that can keep up with all your adventures", "shorter", "TikTok", 4000)
     assert out == "Sunnies for every adventure 😎"
-    prompt = s.calls[-1]["json"]["prompt"]
-    assert "at most 4000 characters" in prompt and "TikTok" in prompt and s.calls[-1]["json"]["stream"] is False
+    sent = s.calls[-1]["json"]
+    assert "at most 4000 characters" in sent["system"] and "TikTok" in sent["system"] and sent["stream"] is False
+    assert sent["prompt"] == "<caption>\nsunnies that can keep up with all your adventures\n</caption>"
 
 
 def test_rewriter_explains_what_is_missing(tmp_path):

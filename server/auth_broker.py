@@ -8,12 +8,15 @@ nothing longer than the few minutes a sign-in takes.
 
 Endpoints (all JSON):
   POST /v1/oauth/{provider}/token     {code, code_verifier, redirect_uri}  -> tokens   (TikTok: loopback flow)
-  GET  /v1/oauth/{provider}/callback  ?code&state  (Meta redirects here). When the state starts with the app's
-                                      loopback port ("<port>.<random>"), the browser is sent straight back to
-                                      http://127.0.0.1:<port>/callback?state=…&key=<one-time key>; otherwise the
-                                      result is held for the older polling flow. Held for 10 minutes either way.
+  GET  /v1/oauth/{provider}/callback  ?code&state  (Meta redirects here). The state must start with the app's
+                                      loopback port ("<port>.<random>"): the code is exchanged and the browser is
+                                      sent straight back to http://127.0.0.1:<port>/callback?state=…&key=<one-time
+                                      key>. Any other state is refused BEFORE the code is exchanged, so no tokens
+                                      are ever made that only the state could claim. Held for 10 minutes.
   POST /v1/oauth/session/claim        {state, key} -> tokens once (both must match), then forgotten
-  GET  /v1/oauth/session/{state}      -> tokens once (older apps, no key), then forgotten; 202 while waiting
+
+  (There is no "poll by state" route: the state travels through the browser and the platform, so it must
+  never be enough on its own to collect tokens.)
   POST /v1/oauth/{provider}/refresh   {refresh_token | access_token} -> tokens
   POST /v1/oauth/tiktok/revoke        {access_token} -> revoked (needs the client secret, so it's done here)
 
@@ -29,7 +32,6 @@ check them again before going live. Secrets and tokens are never logged.
 
 from __future__ import annotations
 
-import html
 import os
 import re
 import secrets
@@ -68,7 +70,6 @@ def default_config() -> dict:
 def create_broker(config: dict | None = None, session=None, clock=time.time) -> FastAPI:
     config = config or default_config()
     http = session or requests
-    sessions: dict[str, tuple[float, dict]] = {}          # older polling flow: state → result
     claims: dict[str, tuple[float, str, dict]] = {}       # bounce flow: state → (expires, one-time key, result)
     lock = threading.Lock()
     app = FastAPI(title="Reelay sign-in server", docs_url=None, redoc_url=None, openapi_url=None)
@@ -134,6 +135,13 @@ def create_broker(config: dict | None = None, session=None, clock=time.time) -> 
     def callback(provider: str, state: str = "", code: str = "", error: str = "", error_description: str = ""):
         if not state:
             raise HTTPException(400, "Missing state.")
+        bounce = LOOPBACK_STATE.match(state)
+        if not bounce or not 1024 <= int(bounce.group(1)) <= 65535:
+            # Not a sign-in started by a current Reelay: don't turn the code into tokens at all.
+            return HTMLResponse(_PAGE.format(title="Sign-in didn't finish",
+                                             body="This sign-in link isn't from a current version of Reelay. "
+                                                  "Update Reelay and start the sign-in again from Accounts."),
+                                status_code=400)
         try:
             if error or not code:
                 result = {"error": error_description or error or "No authorization code was returned."}
@@ -142,21 +150,14 @@ def create_broker(config: dict | None = None, session=None, clock=time.time) -> 
                 result = exchange(provider, code, redirect)
         except HTTPException as exc:
             result = {"error": exc.detail}
-        bounce = LOOPBACK_STATE.match(state)
-        if bounce and 1024 <= int(bounce.group(1)) <= 65535:
-            # Back to the app on this person's computer, with a one-time key to claim the result.
-            key = secrets.token_urlsafe(24)
-            with lock:
-                claims[state] = (clock() + SESSION_TTL, key, result)
-            query = {"state": state, "key": key} if "error" not in result else {"state": state, "error": "denied",
-                                                                                 "error_description": result["error"]}
-            return RedirectResponse(f"http://127.0.0.1:{bounce.group(1)}/callback?{urlencode(query)}", status_code=302)
+        # Back to the app on this person's computer, with a one-time key to claim the result.
+        key = secrets.token_urlsafe(32)
         with lock:
-            sessions[state] = (clock() + SESSION_TTL, result)
-        ok = "error" not in result
-        return HTMLResponse(_PAGE.format(title="You're connected" if ok else "Sign-in didn't finish",
-                                         body="You can close this tab and go back to Reelay." if ok
-                                         else html.escape(str(result["error"]))))
+            if "error" not in result:
+                claims[state] = (clock() + SESSION_TTL, key, result)
+        query = {"state": state, "key": key} if "error" not in result else {"state": state, "error": "denied",
+                                                                             "error_description": result["error"]}
+        return RedirectResponse(f"http://127.0.0.1:{bounce.group(1)}/callback?{urlencode(query)}", status_code=302)
 
     @app.post("/v1/oauth/session/claim")
     async def claim(request: Request):
@@ -181,17 +182,6 @@ def create_broker(config: dict | None = None, session=None, clock=time.time) -> 
         if resp.status_code != 200:
             raise HTTPException(502, "TikTok didn't confirm the revoke.")
         return JSONResponse({"revoked": True})
-
-    @app.get("/v1/oauth/session/{state}")
-    def session_result(state: str):
-        now = clock()
-        with lock:
-            for key in [k for k, (expires, _r) in sessions.items() if expires < now]:
-                sessions.pop(key, None)
-            entry = sessions.pop(state, None)     # handed out once, then forgotten
-        if entry is None:
-            return JSONResponse({"status": "waiting"}, status_code=202)
-        return JSONResponse(entry[1])
 
     @app.post("/v1/oauth/{provider}/refresh")
     async def refresh(provider: str, request: Request):

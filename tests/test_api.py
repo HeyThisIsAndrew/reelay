@@ -79,7 +79,53 @@ def test_binds_loopback_by_default(monkeypatch):
     assert configured_address() == ("127.0.0.1", 8471)
     monkeypatch.setenv("REELAY_HOST", "0.0.0.0")
     monkeypatch.setenv("REELAY_PORT", "9000")
+    monkeypatch.delenv("REELAY_ALLOW_NETWORK", raising=False)
+    assert configured_address() == ("127.0.0.1", 9000)       # the network needs an explicit opt-in
+    monkeypatch.setenv("REELAY_ALLOW_NETWORK", "1")
     assert configured_address() == ("0.0.0.0", 9000)
+    monkeypatch.setenv("REELAY_HOST", "::1")
+    monkeypatch.delenv("REELAY_ALLOW_NETWORK")
+    assert configured_address() == ("::1", 9000)             # any loopback address is fine
+
+
+def test_requests_must_be_addressed_to_reelay(api, monkeypatch):
+    """SEC-10: a web page that points its own domain at 127.0.0.1 (DNS rebinding) sends that domain as
+    Host; those requests are refused before any route runs, even with a valid token."""
+    ok = requests.get(f"{api.base}/v1/board", params={"profile": "Lydia Livingood"},
+                      headers={"Authorization": f"Bearer {TOKEN}"}, timeout=10)
+    assert ok.status_code == 200
+    for host in ("evil.example", "evil.example:8471", "127.0.0.1.evil.example", "", "192.168.1.5:8471"):
+        r = requests.get(f"{api.base}/v1/board", params={"profile": "Lydia Livingood"},
+                         headers={"Authorization": f"Bearer {TOKEN}", "Host": host}, timeout=10)
+        assert r.status_code == 400 and r.json()["code"] == "bad_host", host
+    for host in ("localhost", "localhost:8471", "127.0.0.1:1234", "[::1]:8471"):
+        r = requests.get(f"{api.base}/openapi.json", headers={"Host": host}, timeout=10)
+        assert r.status_code == 200, host
+    api.world.store.set_setting("public_url", "https://reelay-andrew.trycloudflare.com")   # the tunnel
+    r = requests.get(f"{api.base}/openapi.json", headers={"Host": "reelay-andrew.trycloudflare.com"}, timeout=10)
+    assert r.status_code == 200
+    monkeypatch.setenv("REELAY_ALLOWED_HOSTS", "studio-mac.local")
+    assert requests.get(f"{api.base}/openapi.json", headers={"Host": "studio-mac.local:8471"},
+                        timeout=10).status_code == 200
+
+
+def test_on_the_network_a_phone_can_use_this_macs_address(api):
+    api.server.app.state.bind_host = "0.0.0.0"           # as with REELAY_HOST=0.0.0.0 + REELAY_ALLOW_NETWORK=1
+    try:
+        assert requests.get(f"{api.base}/openapi.json", headers={"Host": "192.168.1.5:8471"},
+                            timeout=10).status_code == 200
+        assert requests.get(f"{api.base}/openapi.json", headers={"Host": "evil.example"},
+                            timeout=10).status_code == 400
+    finally:
+        api.server.app.state.bind_host = "127.0.0.1"
+
+
+def test_media_links_also_need_the_right_host(api):
+    path = api.world.folder / "video0.mp4"
+    token = api.media.issue(path)
+    assert requests.get(f"{api.base}/media/{token}", headers={"Host": "evil.example"}, timeout=10).status_code == 400
+    assert requests.get(f"{api.base}/media/{token}", timeout=10).status_code == 200
+    assert requests.post(f"{api.base}/media/{token}", timeout=10).status_code == 405        # GET/HEAD only
 
 
 # ------------------------------------------------------------------ GET /v1/board

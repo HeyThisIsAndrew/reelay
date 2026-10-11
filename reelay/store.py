@@ -398,7 +398,10 @@ class Store:
         conn.execute("PRAGMA foreign_keys = ON")
         if self.path != ":memory:" and not self.read_only:
             from .dblocation import journal_mode
+            from .paths import make_private
             conn.execute(f"PRAGMA journal_mode = {journal_mode(self.path)}")   # one file in synced folders
+            for suffix in ("", "-wal", "-shm", "-journal"):                     # only this user can read it
+                make_private(self.path + suffix)
         return conn
 
     def reopen(self) -> None:
@@ -1000,6 +1003,12 @@ class Store:
             "SELECT field, origin FROM revisions WHERE id IN "
             "(SELECT MAX(id) FROM revisions WHERE video_row = ? GROUP BY field)", (video_row,)).fetchall()
         return {r["field"]: r["origin"] for r in rows}
+
+    def move_to(self, folder) -> Path:
+        """Copy this database into `folder` (dblocation.move_database), holding the store's lock so no
+        background write lands halfway through the copy. Returns the new file."""
+        from .dblocation import move_database
+        return move_database(self.conn, folder)
 
     def current_origin(self) -> str:
         """The origin writes on this thread are tagged with right now ("local", "api", "automation"…)."""

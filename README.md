@@ -193,7 +193,9 @@ A local HTTP API for AI agents and automations: read the board, apply approved m
 
 | Setting | Default | Purpose |
 |---|---|---|
-| `REELAY_HOST` | `127.0.0.1` | Address to bind. Only set `0.0.0.0` for phone apps on your LAN. It's never needed for agents or the tunnel. |
+| `REELAY_HOST` | `127.0.0.1` | Address to bind. Only set `0.0.0.0` for phone apps on your LAN, and then also `REELAY_ALLOW_NETWORK=1` (without it, Reelay stays on `127.0.0.1`). It's never needed for agents or the tunnel. |
+| `REELAY_ALLOW_NETWORK` | unset | `1` lets `REELAY_HOST` be a network address. |
+| `REELAY_ALLOWED_HOSTS` | unset | Extra host names (comma-separated) the agent API answers to, besides `127.0.0.1`, `localhost` and the tunnel's public URL. |
 | `REELAY_PORT` | `8471` | Port. |
 | `REELAY_API_TOKEN` | *(keychain)* | Use this token instead of the keychain one (tests, headless servers). |
 | `REELAY_PUBLIC_URL` | *(Settings → Public URL)* | Your Cloudflare Tunnel address. Threads downloads videos from expiring links under it. |

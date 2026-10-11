@@ -6,11 +6,44 @@ handy for a portable install).
 
 from __future__ import annotations
 
+import logging
 import os
+import stat
 import sys
 from pathlib import Path
 
 from . import APP_ID, APP_NAME
+
+
+log = logging.getLogger("reelay")
+_secured: set[str] = set()
+_POSIX = os.name == "posix"
+
+
+def make_private(path: Path | str, directory: bool = False) -> bool:
+    """Owner-only permissions (folder 0700, file 0600) for Reelay's own data, on macOS and Linux.
+
+    Left alone (returns False): Windows (its per-user folders are already private, and it has no such
+    modes), anything inside a synced folder (Google Drive, Dropbox… manage sharing themselves), files
+    owned by someone else, and anything that doesn't exist. Never raises: a failure is only logged."""
+    if not _POSIX:
+        return False
+    path = Path(path)
+    try:
+        from .dblocation import synced_service
+        if synced_service(path):
+            return False
+        st = os.stat(path)
+        if hasattr(os, "getuid") and st.st_uid != os.getuid():
+            return False
+        if stat.S_IMODE(st.st_mode) & 0o077:
+            os.chmod(path, 0o700 if directory else 0o600)
+        return True
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        log.warning("Couldn't make %s private: %s", path, exc)
+        return False
 
 
 def _home_override() -> Path | None:
@@ -29,6 +62,9 @@ def data_dir() -> Path:
     else:
         path = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")) / APP_ID.lower()
     path.mkdir(parents=True, exist_ok=True)
+    if str(path) not in _secured:             # database, caches, logs and backups: only this user
+        make_private(path, directory=True)
+        _secured.add(str(path))
     return path
 
 

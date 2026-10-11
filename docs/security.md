@@ -75,7 +75,9 @@ At the boundary, `Pipeline.schedule` refuses (`needs_approval`) any scheduling d
 ## Authentication
 
 - Bearer token, compared with `secrets.compare_digest`. It's stored in the system keychain (service "Reelay", account `agent_api_token`) or set with `REELAY_API_TOKEN`.
-- The server binds to `127.0.0.1` by default, with no CORS.
+- The server binds to `127.0.0.1` by default, with no CORS. `REELAY_HOST` is only honoured for a loopback address unless `REELAY_ALLOW_NETWORK=1` is also set (a warning is logged); otherwise it falls back to `127.0.0.1` (`api.safe_bind_host`).
+- **Host check** (`create_app` middleware): every request, `/media` included, must be addressed to `127.0.0.1`, `localhost` or `::1`, to the public URL from Settings (the tunnel), or to a name in `REELAY_ALLOWED_HOSTS`; when listening on the network (opted in) a bare IP address is accepted too, for phones. Anything else gets `400 bad_host` before any route runs. This defeats DNS rebinding (a web page pointing its own domain at 127.0.0.1 sends that domain as Host). The token is still required on every `/v1` route; `/media/{token}` is GET/HEAD only.
+- **Private files** (`paths.make_private`): on macOS and Linux the data folder (database, caches, logs, backups) is `0700` and the database and its WAL files `0600`, applied at every start, so existing installs are fixed in place. Synced folders (Google Drive, Dropbox…) and Windows are left alone; failures are logged, never fatal.
 - Secrets never appear in responses, logs or error messages, or in the database. Platform credentials live in the keychain.
 
 ## Signing in to platforms
@@ -88,6 +90,10 @@ At the boundary, `Pipeline.schedule` refuses (`needs_approval`) any scheduling d
 - **Meta (Instagram, Threads, Facebook):** the app secret stays on the sign-in server (broker). The state is
   `<port>.<random>`; the broker exchanges the code, sends the browser back to `127.0.0.1:<port>/callback` with
   a one-time key, and the app claims the tokens once with state + key (`POST /v1/oauth/session/claim`).
+  There is no "poll by state" route: the state travels through the browser and the platform, so it's never
+  enough on its own. A callback whose state doesn't lead back to an app on this computer is refused before
+  the code is exchanged, so no tokens are made that nobody can safely claim; a refused or failed sign-in
+  leaves nothing to claim.
 - **Google:** PKCE on the device; the client ID ships as a placeholder until Reelay's Google app is approved,
   and sign-in says so instead of failing at Google. Tokens record which Google app issued them and only
   refresh with that app.
@@ -101,7 +107,10 @@ At the boundary, `Pipeline.schedule` refuses (`needs_approval`) any scheduling d
 - **The database chooses the folders.** Files are only posted or served from inside the profile's folder or the folder the video was downloaded to, but both come from the database. A malicious or restored database can name another folder, so any real video file (by extension and header) there could be posted or served. This is the same trust as everything else in the database (see below).
 - **A file swapped after it was checked.** `video_path` and media links check the file, then the upload or `/media` response opens it by path a moment later. Someone who can write to the video folder in that window could swap it. Media links also record the file's identity and 404 when it changes.
 - **Any person's edit counts as review.** After an agent writes a field, any edit to that field in the app (even one character) makes it the person's again, and an approved change counts as the person's.
-- **Settings → Move Database** copies the open connection on the app's main thread without the store's lock (`dblocation.move_database`).
+
+## Untrusted text and AI (SEC-08)
+
+Captions, transcripts, product titles and creator names come from the internet. In the API they're labelled (`x-reelay-untrusted: true`, and "Untrusted: …" in the description) so agents treat them as data. The local writing helper (`assist.py`) puts every instruction in the system prompt (the person's brand voice and Reelay's fixed editing rules) and the caption alone in the user message between `<caption>` markers it can't close early. Neither of those is the security boundary: the model's reply is only ever a suggestion string, shown to a person, who clicks Use This to put it in the editor; the helper imports nothing that can save, schedule or approve (static test). Automations and approvals don't read model output at all.
 
 ## What code can't enforce
 
@@ -116,4 +125,5 @@ At the boundary, `Pipeline.schedule` refuses (`needs_approval`) any scheduling d
   - a static check that `create_app` only uses the wrapper's public methods and the read-only store view (verified to catch an injected `pipeline._pipeline` call);
   - strict ids, profile scope, duplicates, the pending cap, rate limits, expiry, stale, the started marker, the dispatcher executing approved requests, the Automations guard, link and path rules, and the downloader confinement.
 - `tests/test_security_remediation.py` (with the network disabled: name lookups and connections fail the test): revision restores (archive state needs approval; fields restore with `PATCH`'s checks; the REST status codes), agent provenance through rule templates and across separate rule runs, the scheduling boundary, link rules at every fetch entry point (refused before yt-dlp starts, with the network disabled), the installed yt-dlp's behaviour, media file confinement (custom folders, `..`, symlinks, non-videos, swapped files), atomic migrations from every older schema (including a failure inside the real search-index migration, recovery, and a backup that includes changes still in the WAL), the unmark-posted locking fix, numeric and looked-up hosts for covers and captions, platform redirector links, which link formats get the generic extractor, agent writes tagged even when the caller forgets, a static check that every API write runs as the agent, and publishing refusing a file outside the folders.
+- `tests/test_security_phase2.py`: private files and folders (and what's left alone), untrusted text kept out of the instructions, model output only a suggestion, the AI helper's imports, the API's untrusted labels, and no raw database connection outside the store. `tests/test_api.py` covers the bind and Host rules; `tests/test_oauth.py` covers the sign-in server (no polling route, nothing exchanged for a foreign state, nothing to claim after a refusal).
 - `tests/test_api*.py`, `tests/test_workflow.py` and others follow requests through `approve_and_run`, as a person would.

@@ -30,14 +30,14 @@ def test_synced_folders_are_recognised(tmp_path):
 def test_move_and_point_to_a_shared_folder(drive):
     store = Store(db_path())
     store.create_profile("Lydia", drive)
-    dest = dblocation.move_database(store.conn, drive)
+    dest = store.move_to(drive)
     assert dest == drive / "reelay.db" and db_path() == dest
     copy = Store(dest)
     assert [p.name for p in copy.list_profiles()] == ["Lydia"]
     assert copy.conn.execute("PRAGMA journal_mode").fetchone()[0] == "delete"   # one file: safe to sync
     copy.close()
     with pytest.raises(dblocation.LocationError, match="already a Reelay database"):
-        dblocation.move_database(store.conn, drive)
+        store.move_to(drive)
     store.close()
     dblocation.set_location(None)
     assert db_path() == dblocation.default_path()

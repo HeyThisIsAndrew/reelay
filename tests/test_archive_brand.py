@@ -130,8 +130,12 @@ def test_rewrite_sends_the_voice_and_retries_banned_words():
     r = assist.OllamaRewriter(session=s)
     assert assist.rewrite(r, "sunnies for summer", "voice", "TikTok", 4000, brand=BRAND) == "Made for every sunny day"
     first, second = s.calls[-2]["json"], s.calls[-1]["json"]
-    assert first["system"] == second["system"] == assist.system_prompt(BRAND)
-    assert "brand's own voice" in first["prompt"] and "game-changer" in second["prompt"]
+    # Trusted text (the brand voice, the editing rules, the retry note) is all in the system prompt;
+    # the user message is only the caption, as data.
+    assert first["system"].startswith(assist.system_prompt(BRAND)) and "brand's own voice" in first["system"]
+    assert "Your last try used words this brand never uses (game-changer)" in second["system"]
+    assert "Your last try" not in first["system"]
+    assert first["prompt"] == second["prompt"] == "<caption>\nsunnies for summer\n</caption>"
     with pytest.raises(assist.AssistError, match="brand voice"):
         assist.rewrite(r, "x", "voice")
 

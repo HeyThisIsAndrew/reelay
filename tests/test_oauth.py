@@ -177,18 +177,16 @@ def test_broker_exchanges_tiktok_codes_with_the_secret(broker):
     assert sent["client_secret"] == "tt-secret" and sent["code_verifier"] == "v"
 
 
-def test_broker_holds_meta_results_once(broker):
+def test_broker_never_hands_tokens_to_a_bare_state(broker):
+    """SEC-11: the state travels through the browser and the platform, so on its own it must never be
+    enough to collect tokens. There's no polling route, and a state that doesn't lead back to an app on
+    this computer is refused before the code is exchanged (no tokens are made at all)."""
     up = FakeSession()
-    up.on("POST", "api.instagram.com/oauth/access_token", FakeResponse(200, {"access_token": "short", "user_id": 5}))
-    up.on("GET", "graph.instagram.com/access_token", FakeResponse(200, {"access_token": "long", "expires_in": 9}))
     client = broker(up)
-    assert client.get("/v1/oauth/session/abc").status_code == 202      # still waiting
     page = client.get("/v1/oauth/instagram/callback", params={"code": "c#_", "state": "abc"})
-    assert page.status_code == 200 and "connected" in page.text
-    assert up.calls[0]["data"]["code"] == "c"                           # Instagram's trailing #_ is stripped
-    first = client.get("/v1/oauth/session/abc")
-    assert first.json() == {"access_token": "long", "expires_in": 9, "user_id": 5}
-    assert client.get("/v1/oauth/session/abc").status_code == 202      # handed out once, then forgotten
+    assert page.status_code == 400 and "current version of Reelay" in page.text
+    assert up.calls == []                                               # the code was never exchanged
+    assert client.get("/v1/oauth/session/abc").status_code in (404, 405)
     assert client.post("/v1/oauth/threads/token", json={"code": "c", "redirect_uri": "x"}).status_code == 404
 
 
@@ -292,7 +290,7 @@ def test_broker_bounces_to_the_loopback_port_and_hands_out_once(broker):
           repeat=True)
     client = broker(up)
     state = "51234." + "x" * 24
-    r = client.get("/v1/oauth/instagram/callback", params={"code": "c", "state": state}, allow_redirects=False)
+    r = client.get("/v1/oauth/instagram/callback", params={"code": "c#_", "state": state}, allow_redirects=False)
     assert r.status_code == 302
     target = urllib.parse.urlparse(r.headers["location"])
     q = dict(urllib.parse.parse_qsl(target.query))
@@ -301,9 +299,15 @@ def test_broker_bounces_to_the_loopback_port_and_hands_out_once(broker):
     first = client.post("/v1/oauth/session/claim", json={"state": state, "key": q["key"]})
     assert first.status_code == 200 and first.json()["access_token"] == "long"
     assert client.post("/v1/oauth/session/claim", json={"state": state, "key": q["key"]}).status_code == 404
+    assert up.calls[0]["data"]["code"] == "c"                           # Instagram's trailing #_ is stripped
+    calls = len(up.calls)
     bad_port = client.get("/v1/oauth/instagram/callback", params={"code": "c", "state": "80." + "y" * 24},
                           allow_redirects=False)
-    assert bad_port.status_code == 200                                  # not a loopback state: held for polling
+    assert bad_port.status_code == 400 and len(up.calls) == calls          # refused before any exchange
+    denied = client.get("/v1/oauth/instagram/callback", params={"error": "access_denied", "state": "51235." + "z" * 24},
+                        allow_redirects=False)
+    q = dict(urllib.parse.parse_qsl(urllib.parse.urlparse(denied.headers["location"]).query))
+    assert q["error"] == "denied" and "key" not in q                      # nothing to claim after a refusal
 
 
 # ------------------------------------------------------------------ the loopback receiver

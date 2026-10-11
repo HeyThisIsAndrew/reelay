@@ -372,7 +372,7 @@ class SettingsPage(QWidget):
                 != QMessageBox.Yes:
             return
         try:
-            dest = dblocation.move_database(self.store.conn, folder)
+            dest = self.store.move_to(folder)          # under the store's lock
         except dblocation.LocationError as exc:
             QMessageBox.warning(self, "Move Database", str(exc))
             return
