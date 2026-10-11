@@ -343,7 +343,8 @@ def _apply(pipeline, rule: Rule, row_id: int, now: datetime | None = None) -> li
                                 "edited by an AI agent")
                     continue
                 pipeline.schedule(row_id, scheduled_at=when, platforms=targets, now=now)
-                done.append(f"scheduled for {when.astimezone().strftime('%a %b %-d, %-I:%M %p')}")
+                local = when.astimezone()      # %-d / %-I aren't supported on Windows
+                done.append(f"scheduled for {local:%a %b} {local.day}, {local.hour % 12 or 12}:{local:%M %p}")
         except PipelineError as exc:
             reason = "; ".join(exc.problems[:2]) if exc.problems else str(exc)
             done.append(f"couldn't {describe_action(a).split(' (')[0]}: {reason}")

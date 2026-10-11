@@ -102,6 +102,7 @@ def test_download_page_looks_up_and_filters_by_product(ui, qtbot, monkeypatch):
     page._fetch()
     qtbot.waitUntil(lambda: sorted(looked_up) == ["1", "2", "3", "4"] and not page.products_worker.isRunning(),
                     timeout=5000)
+    qtbot.waitUntil(lambda: "Found tagged products" in page.status.text(), timeout=5000)   # results delivered
     page._refresh_products()
     labels = [page.product_filter.itemText(i) for i in range(page.product_filter.count())]
     assert labels[0] == "All products" and labels[1].startswith("Blenders Eyewear Candy Cove") and \
