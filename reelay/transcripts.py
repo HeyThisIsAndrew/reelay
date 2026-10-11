@@ -70,16 +70,24 @@ def pick_track(info: dict) -> dict | None:
 def fetch_transcript(url: str, ydl_opts: dict, ydl_factory=None) -> tuple[str, dict]:
     """(transcript text, the track used) for the post at `url`. Raises
     TranscriptError. Network: one metadata request and one captions request."""
+    from .urlsafety import app_ydl, asset_url_problem, fetch_url_problem
+    from .ytdl import guarded_ydl
+    problem = fetch_url_problem(url)                   # before any network activity
+    if problem:
+        raise TranscriptError(f"Can't get a transcript from this link: {problem}")
     if ydl_factory is None:
         import yt_dlp
         ydl_factory = yt_dlp.YoutubeDL
     opts = {**ydl_opts, "skip_download": True, "noplaylist": True, "quiet": True, "no_warnings": True}
     try:
-        with ydl_factory(opts) as ydl:
+        with guarded_ydl(app_ydl(opts, url), ydl_factory) as ydl:
             info = ydl.extract_info(url, download=False)
             track = pick_track(info or {})
             if track is None:
                 raise TranscriptError("This post has no captions to make a transcript from.")
+            problem = asset_url_problem(track["url"])
+            if problem:
+                raise TranscriptError(f"The captions link can't be used: {problem}")
             data = ydl.urlopen(track["url"]).read().decode("utf-8", "replace")
     except TranscriptError:
         raise

@@ -97,3 +97,37 @@ def friendly_error(exc: BaseException, url: str = "") -> str:
     if "could not copy" in low and "cookie" in low:
         return "Couldn't read browser cookies. Quit that browser completely and try again."
     return msg[:300]
+
+
+# ---------------------------------------------------------------------- the network boundary
+_PLATFORM_IE_KEYS = ("youtube", "tiktok", "vmtiktok", "instagram", "snapchat")
+_BARE_ID = re.compile(r"[\w-]{1,64}")
+def guarded_ydl(opts: dict, factory=None, hosts=None):
+    """A yt-dlp instance that refuses, before any network activity, every link that isn't on a platform
+    Reelay downloads from: the first one AND each link an extractor hands on to another (yt-dlp resolves
+    those through ``extract_info`` too). ``file://`` stays off.
+
+    ``factory`` defaults to ``yt_dlp.YoutubeDL`` (looked up now, so tests can swap it)."""
+    from .urlsafety import DOWNLOAD_HOSTS, UnsafeURLError, fetch_url_problem
+    if factory is None:
+        import yt_dlp
+        factory = yt_dlp.YoutubeDL
+    hosts = tuple(hosts or DOWNLOAD_HOSTS)
+    ydl = factory({**opts, "enable_file_urls": False})
+    unguarded = ydl.extract_info
+
+    def extract_info(url, *args, **kwargs):
+        ie_key = kwargs.get("ie_key", args[1] if len(args) > 1 else None)
+        generic = kwargs.get("force_generic_extractor", args[4] if len(args) > 4 else False)
+        # An extractor may hand on a bare video id for a named platform extractor (which builds the
+        # link itself); never for the generic one, which would try it as a web address.
+        bare_ok = (isinstance(url, str) and ie_key and not generic and _BARE_ID.fullmatch(url)
+                   and str(ie_key).lower().startswith(_PLATFORM_IE_KEYS))
+        if not bare_ok:
+            problem = fetch_url_problem(url, hosts)
+            if problem:
+                raise UnsafeURLError(problem)
+        return unguarded(url, *args, **kwargs)
+
+    ydl.extract_info = extract_info      # yt-dlp's own nested calls go through self.extract_info too
+    return ydl

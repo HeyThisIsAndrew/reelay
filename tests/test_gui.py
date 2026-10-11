@@ -13,6 +13,7 @@ from reelay.paths import db_path
 from reelay.store import Store
 from reelay.tokens import MemoryTokenStore
 from reelay.youtube import Tokens
+from tests.fakes import FAKE_MP4
 
 pytestmark = pytest.mark.gui
 
@@ -164,7 +165,7 @@ def seed_board(store, profile, tmp_path, n=3):
     items = make_items(n)
     for i in items:
         i.filename, i.folder = f"{i.video_id}.mp4", str(folder)
-        (folder / i.filename).write_bytes(b"v")
+        (folder / i.filename).write_bytes(FAKE_MP4)
     ids = store.save_videos(profile.id, items)
     return items, ids
 

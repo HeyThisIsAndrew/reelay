@@ -12,6 +12,9 @@ Safety first:
 * Copy templates only fill **empty** fields; nothing typed by a person is replaced.
 * Scheduling goes through the Ready gate like any other scheduling: a ticket
   that isn't ready isn't scheduled, and the activity log says why.
+* A rule never schedules copy that came from an AI agent, whether the agent
+  wrote it or a rule filled it from text the agent supplied (a topic, a
+  creator): that waits for a person's approval instead.
 * Everything a rule does is logged (Automations → Activity).
 
 Rules and their memory live in the profile's settings (no schema change), so
@@ -315,19 +318,22 @@ def _apply(pipeline, rule: Rule, row_id: int, now: datetime | None = None) -> li
                 if (getattr(post, a.field) or "").strip():
                     done.append(f"{COPY_FIELDS[a.field]} already written: left alone")
                     continue
-                pipeline.update_metadata(row_id, {a.field: _fill(a.value, row, post)})
+                _write(pipeline, row_id, {a.field: _fill(a.value, row, post)},
+                       template_sources(a.value, row, post) & agent_fields(pipeline.store, row_id))
                 done.append(f"filled {COPY_FIELDS[a.field]}")
             elif a.kind == "add_hashtags":
                 have = (post.hashtags or "").split()
                 new = [h for h in re.findall(r"#\w+", a.value) if h.lower() not in {x.lower() for x in have}]
                 if new:
-                    pipeline.update_metadata(row_id, {"hashtags": " ".join(have + new)})
+                    _write(pipeline, row_id, {"hashtags": " ".join(have + new)},
+                           {"hashtags"} & agent_fields(pipeline.store, row_id))
                     done.append("added " + " ".join(new))
             elif a.kind == "set_platforms":
                 pipeline.update_metadata(row_id, {"target_platforms": parse_platforms(a.value)})
                 done.append("platforms: " + ", ".join(Platform.LABELS[p] for p in parse_platforms(a.value)))
             elif a.kind == "set_ticket":
-                pipeline.update_metadata(row_id, {a.field: _fill(a.value, row, post)})
+                _write(pipeline, row_id, {a.field: _fill(a.value, row, post)},
+                       template_sources(a.value, row, post) & agent_fields(pipeline.store, row_id))
                 done.append(f"set {TICKET_FIELDS_SETTABLE[a.field]}")
             elif a.kind == "move":
                 if a.field == Stage.SCHEDULED:
@@ -342,7 +348,7 @@ def _apply(pipeline, rule: Rule, row_id: int, now: datetime | None = None) -> li
                 if not targets:
                     done.append("not scheduled: none of its platforms post automatically")
                     continue
-                if last_copy_edit_by_agent(pipeline.store, row_id):
+                if agent_written_copy(pipeline.store, row_id):
                     # An agent wrote this copy: a rule mustn't become a way around approval.
                     from .scoped_pipeline import ScopedPipeline
                     pending = ScopedPipeline(pipeline, requested_by=f"automation: {rule.name}").schedule(
@@ -360,17 +366,52 @@ def _apply(pipeline, rule: Rule, row_id: int, now: datetime | None = None) -> li
 
 
 AGENT_ORIGINS = ("api", "mcp")
+# A rule wrote this from text an AI agent supplied (e.g. "{topic}" after an agent set the topic). Stored
+# as the revision's origin, so the agent's part is remembered across later rule runs and restarts.
+AGENT_INPUT_ORIGIN = "automation:agent-input"
 COPY_REVISION_FIELDS = ("title", "description", "tags", "target_platforms", "tiktok_text", "instagram_text",
                         "bluesky_text", "threads_text", "facebook_text", "hashtags")
 
 
-def last_copy_edit_by_agent(store, row_id: int) -> bool:
-    """Was the newest change to this ticket's copy (ignoring rules' own edits) made by an AI agent?"""
-    for rev in store.revisions(row_id, limit=1000):
-        if rev.field not in COPY_REVISION_FIELDS or rev.origin == "automation":
-            continue
-        return rev.origin.split(":")[0] in AGENT_ORIGINS
-    return False
+def is_agent_origin(origin: str | None) -> bool:
+    return (origin or "").split(":")[0] in AGENT_ORIGINS or origin == AGENT_INPUT_ORIGIN
+
+
+def agent_fields(store, row_id: int) -> set[str]:
+    """Ticket and copy fields whose current value came from an AI agent: last written by one, or by a
+    rule from an agent's text. (A person's later edit to a field clears it; an approved change counts
+    as the person's.)"""
+    return {f for f, origin in store.latest_field_origins(row_id).items() if is_agent_origin(origin)}
+
+
+def agent_written_copy(store, row_id: int) -> list[str]:
+    """The copy fields (what gets posted) that came from an AI agent, directly or through a rule."""
+    return sorted(agent_fields(store, row_id) & set(COPY_REVISION_FIELDS))
+
+
+def template_sources(template: str, row, post) -> set[str]:
+    """The editable fields a template's placeholders actually take their text from for this video.
+    ({caption} and {hook} come from the original post, which no one edits here.)"""
+    t = row.ticket
+    used = set()
+    if "{title}" in template and post and post.title:
+        used.add("title")
+    if "{hashtags}" in template and post and post.hashtags:
+        used.add("hashtags")
+    if "{topic}" in template and t.topic:
+        used.add("topic")
+    if "{creator}" in template and t.creator:
+        used.add("creator")
+    return used
+
+
+def _write(pipeline, row_id: int, changes: dict, from_agent: set[str]) -> None:
+    """A rule's edit; marked as carrying an agent's text when any of its inputs did."""
+    if from_agent:
+        with pipeline.store.origin(AGENT_INPUT_ORIGIN):
+            pipeline.update_metadata(row_id, changes)
+    else:
+        pipeline.update_metadata(row_id, changes)
 
 
 def run(pipeline, profile_id: int, trigger: str | None = None, now: datetime | None = None) -> list[dict]:

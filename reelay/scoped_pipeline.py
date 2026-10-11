@@ -5,10 +5,11 @@ Anything coming from outside goes through `ScopedPipeline`, which sorts every
 operation into one of three classes:
 
 * **Read** (board, card, readiness, history…): passed straight through.
-* **Draft edit** (ticket copy and fields, restoring a revision, filling from
+* **Draft edit** (ticket copy and fields, restoring a field's revision, filling from
   the original post, fetching a transcript, saving or renaming a source):
   allowed, but rate limited per profile and capped per call.
-* **Needs approval** (schedule, start an upload, archive or unarchive, bulk
+* **Needs approval** (schedule, start an upload, archive or unarchive (also by
+  restoring an "archived" revision), bulk
   edits, applying a sheet import, marking a platform posted or scheduled,
   recording a manual post, resolving an interrupted send, deleting a source):
   **never executed here.** The arguments are validated, a hash of the target
@@ -34,6 +35,8 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable
+
+from contextlib import contextmanager
 
 from .models import MANUAL_PLATFORMS, ApprovalRequest, DispatchStatus, Platform, Post
 from .pipeline import Pipeline, PipelineError, _parse_aware, utc_iso
@@ -274,8 +277,10 @@ class ScopedPipeline:
     """See the module docstring. `profile_ids=None` allows every profile; a set limits the client."""
 
     def __init__(self, pipeline: Pipeline, profile_ids: set[int] | None = None, requested_by: str = "api",
-                 limiter: RateLimiter | None = None, clock: Callable[[], datetime] | None = None):
+                 limiter: RateLimiter | None = None, clock: Callable[[], datetime] | None = None,
+                 origin: str = "api"):
         self._pipeline = pipeline
+        self.origin = origin            # how this client's edits are logged ("api", "mcp"): always an agent
         self._store = pipeline.store
         self.store = ReadOnlyStore(pipeline.store)
         self.profile_ids = set(profile_ids) if profile_ids is not None else None
@@ -323,6 +328,19 @@ class ScopedPipeline:
             problem = image_path_problem(str(changes["thumbnail_path"]), profile.output_folder)
             if problem:
                 raise PipelineError(problem, "invalid_field", [problem])
+
+    @contextmanager
+    def _as_agent(self):
+        """Log the writes inside as this agent's, whatever the caller set: provenance (what Automations
+        and approvals rely on) must never depend on every caller remembering ``store.origin``. A more
+        specific agent origin already in place ("mcp:…") is kept."""
+        from .rules import is_agent_origin
+        current = self._store.current_origin()
+        if is_agent_origin(current) and current != "automation:agent-input":
+            yield
+            return
+        with self._store.origin(self.origin):
+            yield
 
     def _approval(self, profile_id: int, operation: str, payload: dict, target_ids: list[int],
                   expires: datetime | None = None) -> ApprovalPending:
@@ -382,25 +400,40 @@ class ScopedPipeline:
     def save_draft(self, post: Post) -> Post:
         row = self.video(post.video_row)
         self.limiter.take(row.profile_id)
-        return self._pipeline.save_draft(post)
+        with self._as_agent():
+            return self._pipeline.save_draft(post)
 
     def update_metadata(self, video_id: int, changes: dict) -> Post:
         row = self.video(video_id)
         self._check_ticket_values(row, changes)
         self.limiter.take(row.profile_id)
-        return self._pipeline.update_metadata(video_id, changes)
+        with self._as_agent():
+            return self._pipeline.update_metadata(video_id, changes)
 
-    def restore_revision(self, video_id: int, revision_id: int) -> None:
+    def restore_revision(self, video_id: int, revision_id: int) -> ApprovalPending | None:
+        """Undo one logged change. A ticket field is restored straight away, with the same checks as an
+        edit; undoing an archive or unarchive changes the archived state, so it needs approval like
+        ``archive`` (returns ApprovalPending; nothing changes until a person approves)."""
         row = self.video(video_id)
         if type(revision_id) is not int or revision_id <= 0:
             raise PipelineError("Revision ids are positive whole numbers.", "invalid_id")
+        revision = next((r for r in self._store.revisions(video_id, limit=100_000) if r.id == revision_id), None)
+        if revision is None:
+            raise PipelineError("That change isn't in this ticket's history.", "not_found")
+        if revision.field == "archived":
+            # old_value is the archived_at timestamp before the change (None = it was on the board)
+            return self.archive([video_id], archived=revision.old_value is not None)
+        self._check_ticket_values(row, {revision.field: revision.old_value})
         self.limiter.take(row.profile_id)
-        self._pipeline.restore_revision(video_id, revision_id)
+        with self._as_agent():
+            self._pipeline.restore_revision(video_id, revision_id)
+        return None
 
     def fill_from_original(self, video_ids: list[int]) -> dict:
         rows = self.videos(video_ids)
         self.limiter.take(rows[0].profile_id, len(rows))
-        return self._pipeline.fill_from_original([r.id for r in rows])
+        with self._as_agent():
+            return self._pipeline.fill_from_original([r.id for r in rows])
 
     def fetch_transcript(self, video_id: int, ydl_opts: dict, replace_existing: bool = False) -> str:
         row = self.video(video_id)
@@ -409,7 +442,9 @@ class ScopedPipeline:
         if problem:
             raise PipelineError(f"Can't fetch this video's transcript: {problem}", "invalid_request")
         self.limiter.take(row.profile_id, 5)                              # it goes over the network
-        return self._pipeline.fetch_transcript(video_id, restrict_ydl(ydl_opts), replace_existing=replace_existing)
+        with self._as_agent():
+            return self._pipeline.fetch_transcript(video_id, restrict_ydl(ydl_opts),
+                                                   replace_existing=replace_existing)
 
     def add_source(self, profile_id: int, url: str, name: str | None = None, mine: bool = False):
         from .sources import SourceError, SourceService
@@ -419,7 +454,8 @@ class ScopedPipeline:
             raise PipelineError(problem, "invalid_source")
         self.limiter.take(profile_id)
         try:
-            return SourceService(self._store, self._pipeline.accounts).add(profile_id, url, name, mine)
+            with self._as_agent():
+                return SourceService(self._store, self._pipeline.accounts).add(profile_id, url, name, mine)
         except SourceError as exc:
             raise PipelineError(str(exc), "invalid_source") from None
 
@@ -429,10 +465,11 @@ class ScopedPipeline:
         self.limiter.take(src.profile_id)
         service = SourceService(self._store, self._pipeline.accounts)
         try:
-            if name is not None:
-                service.rename(source_id, name)
-            if mine is not None:
-                service.set_mine(source_id, mine)
+            with self._as_agent():
+                if name is not None:
+                    service.rename(source_id, name)
+                if mine is not None:
+                    service.set_mine(source_id, mine)
         except SourceError as exc:
             raise PipelineError(str(exc), "invalid_source") from None
 

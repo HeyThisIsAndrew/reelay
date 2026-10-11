@@ -9,7 +9,7 @@ import pytest
 
 from reelay import rules as R
 from reelay.models import Stage, VideoItem
-from tests.fakes import disable_publishing, make_world
+from tests.fakes import FAKE_MP4, disable_publishing, make_world
 
 
 @pytest.fixture
@@ -24,7 +24,7 @@ def add_video(w, vid, description, duration=30):
     item = VideoItem(platform="TikTok", video_id=vid, url=f"https://www.tiktok.com/@x/video/{vid}",
                      description=description, title=description, duration=duration, uploader="livingood")
     item.filename, item.folder = f"{vid}.mp4", str(w.folder)
-    (w.folder / item.filename).write_bytes(b"\0" * 2048)
+    (w.folder / item.filename).write_bytes(FAKE_MP4)
     return w.store.save_video(w.profile.id, item)
 
 

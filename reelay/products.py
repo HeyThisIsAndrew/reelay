@@ -93,10 +93,13 @@ def products_from_page(html: str) -> list[Product]:
 def tiktok_products(url: str, ydl_opts: dict, ydl_factory=None) -> list[Product]:
     """Read a TikTok video's public page and return its tagged products.
     Raises on network trouble (so the caller can try again later)."""
+    from .urlsafety import check_fetch_url
+    from .ytdl import guarded_ydl
+    url = check_fetch_url(url, ("tiktok.com",))      # a TikTok page, checked before any network activity
     if ydl_factory is None:
         import yt_dlp
         ydl_factory = yt_dlp.YoutubeDL
-    with ydl_factory({**ydl_opts, "quiet": True, "no_warnings": True}) as ydl:
+    with guarded_ydl({**ydl_opts, "quiet": True, "no_warnings": True}, ydl_factory, ("tiktok.com",)) as ydl:
         ie = ydl.get_info_extractor("TikTok")
         ie.set_downloader(ydl)
         html = ie._download_webpage(url, "products", note=False, impersonate=True)

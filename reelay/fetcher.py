@@ -6,6 +6,8 @@ import yt_dlp
 
 from .models import VideoItem
 from .platforms import detect_platform
+from .urlsafety import app_ydl, check_fetch_url, fetch_url_problem
+from .ytdl import guarded_ydl
 
 
 def _flatten(info: dict, default_platform: str) -> list[VideoItem]:
@@ -22,8 +24,8 @@ def _flatten(info: dict, default_platform: str) -> list[VideoItem]:
             items.extend(_flatten(entry, default_platform))
             continue
         url = entry.get("webpage_url") or entry.get("url")
-        if not url or not entry.get("id"):
-            continue
+        if not url or not entry.get("id") or fetch_url_problem(url):
+            continue                    # no link, or one Reelay wouldn't fetch later (not a platform link)
         platform = detect_platform(url, entry.get("ie_key") or entry.get("extractor_key"))
         if platform == "Unknown":
             platform = default_platform
@@ -37,10 +39,11 @@ def list_videos(source_url: str, ydl_opts: dict, limit: int | None = None) -> tu
     Returns (display name of the source, videos newest-first). Uses flat
     extraction, so listing a 500-video profile is a handful of requests.
     """
+    source_url = check_fetch_url(source_url)          # before any network activity
     opts = {**ydl_opts, "extract_flat": "in_playlist"}
     if limit:
         opts["playlistend"] = limit
-    with yt_dlp.YoutubeDL(opts) as ydl:
+    with guarded_ydl(app_ydl(opts, source_url), yt_dlp.YoutubeDL) as ydl:
         info = ydl.extract_info(source_url, download=False)
     if not info:
         return source_url, []
@@ -59,7 +62,8 @@ def list_videos(source_url: str, ydl_opts: dict, limit: int | None = None) -> tu
 
 def load_details(item: VideoItem, ydl_opts: dict) -> VideoItem:
     """Fetch full metadata for one video (date, caption…). Returns a new item."""
-    with yt_dlp.YoutubeDL({**ydl_opts, "noplaylist": True}) as ydl:
+    check_fetch_url(item.url)
+    with guarded_ydl(app_ydl({**ydl_opts, "noplaylist": True}, item.url), yt_dlp.YoutubeDL) as ydl:
         info = ydl.extract_info(item.url, download=False, process=False)
     fresh = VideoItem(platform=item.platform, video_id=item.video_id, url=item.url)
     if info:

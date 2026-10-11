@@ -22,6 +22,9 @@ SECRETS = {
     "facebook": "fb-page-token-SECRET-555",
 }
 
+# The first bytes of a real MP4 (an "ftyp" box), so Reelay treats the file as a video it may post.
+FAKE_MP4 = b"\x00\x00\x00\x18ftypmp42" + b"\0" * 2036
+
 
 class FakeUploads:
     """Stands in for UploadManager: records jobs; tests finish them by hand."""
@@ -94,7 +97,7 @@ def make_world(tmp_path: Path, monkeypatch, downloaded: int = 3, fetched_only: i
                          uploader="livingood.lifestyle", width=1080, height=1920)
         if n < downloaded:
             item.filename, item.folder = f"video{n}.mp4", str(folder)
-            (folder / item.filename).write_bytes(b"\0" * 2048)
+            (folder / item.filename).write_bytes(FAKE_MP4)
         items.append(item)
     ids = store.save_videos(profile.id, items)
     accounts.set_oauth_client(OAuthClient("123-abc.apps.googleusercontent.com", "client-secret"))

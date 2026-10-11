@@ -15,7 +15,7 @@ import requests
 from reelay.models import DispatchStatus, Platform, Post, Stage, VideoItem
 from reelay.pipeline import PipelineError
 from reelay.readiness import NOT_CHECKED, NOT_READY, READY, evaluate
-from tests.fakes import approve_and_run, SECRETS, connect_platform, disable_publishing, enable_publishing, make_world
+from tests.fakes import FAKE_MP4, approve_and_run, SECRETS, connect_platform, disable_publishing, enable_publishing, make_world
 
 
 def future(days=2):
@@ -125,7 +125,7 @@ def _post(**kw):
 
 def test_readiness_ready_case(tmp_path):
     video = tmp_path / "v.mp4"
-    video.write_bytes(b"v")
+    video.write_bytes(FAKE_MP4)
     post = _post(target_platforms=["youtube", "bluesky"], bluesky_text="Letting go 🦋")
     r = evaluate(post, {"youtube", "bluesky"}, video, duration=30)
     assert r.ready and r.blocking == [] and r.problems() == []

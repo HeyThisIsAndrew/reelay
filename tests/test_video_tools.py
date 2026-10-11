@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from reelay import video_tools as vt
-from tests.fakes import disable_publishing, make_world
+from tests.fakes import FAKE_MP4, disable_publishing, make_world
 
 FF = vt._bundled_ffmpeg() or vt.find_ffmpeg()
 needs_ffmpeg = pytest.mark.skipif(not FF, reason="no ffmpeg on this machine")
@@ -104,7 +104,7 @@ def test_pipeline_posts_the_edited_copy(tmp_path, monkeypatch):
     row = w.store.get_video(w.rows[0])
     original = w.pipeline.video_path(row)
     edited = vt.output_path(original)
-    edited.write_bytes(b"edited")
+    edited.write_bytes(FAKE_MP4)
     vt.set_edit(w.store, row.id, edited, ["strip", "replace"])
     assert w.pipeline.video_path(row) == edited and w.pipeline.original_path(row) == original
     assert vt.describe(vt.get_edit(w.store, row.id)) == "sound removed, new sound"
@@ -149,7 +149,7 @@ def test_video_section_makes_and_forgets_an_edit(ticket, qtbot, monkeypatch):
     assert tools.strip_btn.isEnabled() and not tools.original_btn.isVisible()
 
     def fake_strip(src, dst=None, **kw):
-        dst.write_bytes(b"silent copy")
+        dst.write_bytes(FAKE_MP4)
         return dst
     monkeypatch.setattr(vt, "strip_audio", fake_strip)
     tools._strip()
@@ -161,4 +161,4 @@ def test_video_section_makes_and_forgets_an_edit(ticket, qtbot, monkeypatch):
 
     tools._use_original()
     assert vt.edited_path(store, row) is None and tools.summary() == "Original"
-    assert tools.original.read_bytes() == b"v"
+    assert tools.original.read_bytes() == FAKE_MP4                 # the original is never changed

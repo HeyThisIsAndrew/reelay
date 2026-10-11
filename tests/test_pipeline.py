@@ -9,6 +9,7 @@ from reelay.models import Account, Post, PostStatus, Stage, Status, VideoItem
 from reelay.pipeline import Pipeline, PipelineError
 from reelay.store import Change, Store
 from reelay.youtube import YouTubeError
+from tests.fakes import FAKE_MP4
 
 FUTURE = (datetime.now(timezone.utc) + timedelta(days=3)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -71,7 +72,7 @@ def env(tmp_path):
                          description=f"caption {n} #tag", title=f"caption {n}...")
         if n < 3:  # three downloaded, one only fetched
             item.filename, item.folder = f"{n}.mp4", str(folder)
-            (folder / item.filename).write_bytes(b"v")
+            (folder / item.filename).write_bytes(FAKE_MP4)
         items.append(item)
     ids = store.save_videos(profile.id, items)
     account = store.save_account(Account(profile_id=profile.id, platform="youtube", external_id="UC1",
@@ -334,7 +335,7 @@ def test_remote_edits_show_up_in_the_desktop_ui(qtbot, tmp_path, monkeypatch):
     folder.mkdir(parents=True)
     item = VideoItem(platform="TikTok", video_id="7", url="https://t/7", upload_date="20261001",
                      filename="7.mp4", folder=str(folder), status=Status.DOWNLOADED)
-    (folder / "7.mp4").write_bytes(b"v")
+    (folder / "7.mp4").write_bytes(FAKE_MP4)
     row = store.save_video(profile.id, item)
     window = create_window(QApplication.instance(), store, MemoryTokenStore())
     qtbot.addWidget(window)

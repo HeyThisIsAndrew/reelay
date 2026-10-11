@@ -38,7 +38,7 @@ FIELD_LABELS = {
     "archived": "Archived",
 }
 ORIGIN_LABELS = {"local": "You (Reelay app)", "api": "AI agent (API)", "remote": "Companion app",
-                 "import": "Sheet import"}
+                 "import": "Sheet import", "automation:agent-input": "Automation, from an AI agent's text"}
 
 
 def _section(text: str, hint: str) -> QLabel:

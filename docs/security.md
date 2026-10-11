@@ -20,8 +20,8 @@ Every operation an external client can reach falls into one class:
 | Class | Operations | What happens |
 |---|---|---|
 | **Read** | board, card, readiness, publishing history, platform states, archived list, sheet dry run, search, sources, approval status | Passed through |
-| **Draft edit** | ticket copy and fields (`PATCH`), restore a revision, fill from original post, fetch transcript, add or rename a source | Allowed. Token bucket per profile (120 burst, 2/s; cost = videos touched, a transcript costs 5); at most 200 videos per call; `429 rate_limited` |
-| **Needs approval** | schedule (incl. `force=true`), start an upload, archive, unarchive, bulk edit, apply a sheet import, mark a platform posted or scheduled, record a manual post, resolve an interrupted send, delete a source | **Never executed by the wrapper.** Returns `ApprovalPending` (REST: `202` with `approval_id`) |
+| **Draft edit** | ticket copy and fields (`PATCH`), restore a field's revision (same checks as `PATCH`), fill from original post, fetch transcript, add or rename a source | Allowed. Token bucket per profile (120 burst, 2/s; cost = videos touched, a transcript costs 5); at most 200 videos per call; `429 rate_limited` |
+| **Needs approval** | schedule (incl. `force=true`), start an upload, archive, unarchive (also by restoring an `archived` revision: `202`), bulk edit, apply a sheet import, mark a platform posted or scheduled, record a manual post, resolve an interrupted send, delete a source | **Never executed by the wrapper.** Returns `ApprovalPending` (REST: `202` with `approval_id`) |
 
 For approval-gated operations the wrapper:
 
@@ -49,7 +49,13 @@ pending → rejected | expired | stale
 
 ## Automations
 
-Rules run with the person's authority, which could make them a way around approval: an agent edits a ticket's copy so it matches a rule that schedules. So a rule's **Schedule** action checks the ticket's latest copy edit, ignoring rules' own edits (logged as `automation`). If that edit came from an agent (`api` or `mcp`), the rule files an approval request (`requested_by = "automation: <rule>"`) instead of scheduling.
+Rules run with the person's authority, which could make them a way around approval: an agent's text reaches the copy (directly, or through a field a rule's template uses) and a rule schedules it. Provenance is tracked **per field**, from the revision log, so it survives later rule runs and restarts:
+
+- A field "came from an agent" when its newest revision's origin is an agent (`api`, `mcp`) or `automation:agent-input`.
+- A rule's edit is logged as `automation:agent-input` when anything it used came from an agent: the template's placeholders that actually supplied text (`{title}`, `{hashtags}`, `{topic}`, `{creator}`; `{caption}` and `{hook}` are the original post), and the field's old value when it appends (Add hashtags). Otherwise it's plain `automation`.
+- A person's later edit to that field, or an approved change (`approval`), clears it. An edit to a different field doesn't.
+
+At the boundary, `Pipeline.schedule` refuses (`needs_approval`) any scheduling done under an `automation` origin while any copy field came from an agent; a rule's **Schedule** action files an approval request (`requested_by = "automation: <rule>"`) instead.
 
 ## Input handling (downloader and links)
 
@@ -57,11 +63,14 @@ Rules run with the person's authority, which could make them a way around approv
 |---|---|---|
 | Output file names | Path traversal or reserved names from captions or custom names | **OK.** `naming.sanitize_stem` strips `/ \ : * ? " < > \|` and control characters, trims dots and spaces, caps the length and prefixes Windows reserved names. The folder is fixed via yt-dlp `paths.home`, and yt-dlp validates extensions |
 | Final file path | yt-dlp reports `filepath` from its metadata; it was trusted | **Fixed.** `download_item` refuses a file outside the chosen folder (`urlsafety.inside`) |
+| Every fetch (listing, details, download, products, transcripts) | A link from the database (e.g. an agent-edited `source_url` fetched by the app's own Get Transcript) reaching the local network or `file://` through yt-dlp | **Fixed.** `urlsafety.fetch_url_problem` runs before any network activity: http(s) only, a TikTok, Instagram, YouTube or Snapchat host, no user name, default ports, no spaces, backslashes or control characters; unparseable links are refused. The platforms' own redirectors (`l.instagram.com`, `lm.instagram.com`, `youtube.com/redirect`, `youtube.com/attribution_link`, `tiktok.com/link/`) are refused too. `ytdl.guarded_ydl` applies the same check to every link an extractor hands on (yt-dlp resolves them through `self.extract_info`; a bare id is only accepted for a named platform extractor, never the generic one) and keeps `file://` off. Playlist entries with other links are dropped. Reelay's own fetches load only the platform extractors (`urlsafety.app_ydl`); yt-dlp's generic extractor is added only for Instagram `/share/` links, TikTok `/photo/` posts and non-Spotlight Snapchat links. Agent fetches never get it (`restrict_ydl`) |
+| Caption tracks and cover images | These live on CDNs with many names, so they can't be limited to the platform hosts | **Fixed, with a residual.** `urlsafety.asset_url_problem`: http(s), no user name, and the host read the way the system reads it: numeric forms (`127.1`, `2130706433`, `0x7f000001`, IPv4-mapped IPv6) count as the address they stand for, and a name is looked up and every address it points to must be public; a name that can't be looked up is refused |
 | Agent-triggered fetches (transcripts) | yt-dlp's generic extractor fetches any http(s) address (SSRF to the local network); `file://` | **Fixed for agents.** Only TikTok, Instagram and YouTube hosts over http(s), with no credentials in the URL; yt-dlp limited to those extractors and `enable_file_urls=False`. The check covers the URL actually fetched, including the agent-editable `source_url` |
 | Downloads | Not reachable from the API | **Keep it that way**, or approval-gate downloads in the MCP phase |
 | Cover image path (`thumbnail_path`) | Any local path settable by an agent; would exfiltrate a file if covers were ever uploaded | **Fixed for agents.** Must be a .jpg, .png or .webp inside the profile's video folder (resolved, so `..` and symlinks can't escape) |
 | Browser cookies | Transcript fetches use the profile's browser cookies (`cookiesfrombrowser`), so an agent-triggered fetch is an authenticated request to the platform | **Accepted, documented.** It's limited to the three platforms and rate-limited |
-| Expiring media links (`/media/{token}`) | Serve only files Reelay issued a token for | OK |
+| Files posted or served (`Pipeline.video_path`, `/media/{token}`) | The database (possibly a shared or synced copy) decides which file is uploaded or served publicly: the edited copy, `item.folder`, `item.filename` | **Fixed.** `urlsafety.media_file_problem`: after resolving links and `..`, the file must be inside the profile's folder or the folder the video was downloaded to, have a video extension and start like an MP4/QuickTime or WebM/Matroska file; otherwise it counts as missing. Media links are only issued for such files and stay bound to that exact file (resolved path plus device and inode): a swapped file or symlink makes the link 404 |
+| Database migrations | `executescript` committed each statement, so a failed migration left a half-made schema that blocked every later launch | **Fixed.** One `BEGIN IMMEDIATE` transaction per migration, with its `user_version`; statements split with `sqlite3.complete_statement` (trigger bodies intact); the version is re-read inside the lock; a failure rolls back and closes the connection. Before the first migration of an existing database, a consistent copy is made with SQLite's backup API next to it (`<name>-backup-v<N>-<time>.db`, never overwriting) |
 
 ## Authentication
 
@@ -85,6 +94,15 @@ Rules run with the person's authority, which could make them a way around approv
 - **Disconnect** revokes Reelay-app access where the platform allows (Google, TikTok through the broker,
   Facebook) and deletes the keychain entry.
 
+## Known residual risks (accepted, documented)
+
+- **Redirects inside a platform request.** yt-dlp's networking follows HTTP redirects itself, and there's no hook to re-check the target. The first link, every link handed between extractors and the known redirector links are checked, and the generic extractor (which fetches before it reports a redirect) only runs for a few platform link formats; a redirect that a platform's own server returns is still followed. Worst case: one blind request to an address chosen by the platform.
+- **A name that changes what it points to (DNS rebinding).** Cover and caption hosts are looked up and checked, but the download looks the name up again, so a name that switches to a private address in between isn't caught. Platform hosts (TikTok, Instagram, YouTube, Snapchat) aren't looked up at all: their names are controlled by the platforms.
+- **The database chooses the folders.** Files are only posted or served from inside the profile's folder or the folder the video was downloaded to, but both come from the database. A malicious or restored database can name another folder, so any real video file (by extension and header) there could be posted or served. This is the same trust as everything else in the database (see below).
+- **A file swapped after it was checked.** `video_path` and media links check the file, then the upload or `/media` response opens it by path a moment later. Someone who can write to the video folder in that window could swap it. Media links also record the file's identity and 404 when it changes.
+- **Any person's edit counts as review.** After an agent writes a field, any edit to that field in the app (even one character) makes it the person's again, and an approved change counts as the person's.
+- **Settings → Move Database** copies the open connection on the app's main thread without the store's lock (`dblocation.move_database`).
+
 ## What code can't enforce
 
 - **Processes on the same Mac with file access.** Anything that can read or write `~/Library/Application Support/Reelay/reelay.db` can bypass every check, including editing `approval_requests`. Agents must not be given shell or file access to Reelay's data folder. The boundary is the API surface, not the operating system.
@@ -97,4 +115,5 @@ Rules run with the person's authority, which could make them a way around approv
   - every route that changes state, over real HTTP with a spy pipeline: no mutating method runs, no table changes, every call answers 202;
   - a static check that `create_app` only uses the wrapper's public methods and the read-only store view (verified to catch an injected `pipeline._pipeline` call);
   - strict ids, profile scope, duplicates, the pending cap, rate limits, expiry, stale, the started marker, the dispatcher executing approved requests, the Automations guard, link and path rules, and the downloader confinement.
+- `tests/test_security_remediation.py` (with the network disabled: name lookups and connections fail the test): revision restores (archive state needs approval; fields restore with `PATCH`'s checks; the REST status codes), agent provenance through rule templates and across separate rule runs, the scheduling boundary, link rules at every fetch entry point (refused before yt-dlp starts, with the network disabled), the installed yt-dlp's behaviour, media file confinement (custom folders, `..`, symlinks, non-videos, swapped files), atomic migrations from every older schema (including a failure inside the real search-index migration, recovery, and a backup that includes changes still in the WAL), the unmark-posted locking fix, numeric and looked-up hosts for covers and captions, platform redirector links, which link formats get the generic extractor, agent writes tagged even when the caller forgets, a static check that every API write runs as the agent, and publishing refusing a file outside the folders.
 - `tests/test_api*.py`, `tests/test_workflow.py` and others follow requests through `approve_and_run`, as a person would.

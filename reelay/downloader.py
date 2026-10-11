@@ -12,7 +12,8 @@ import yt_dlp
 from yt_dlp.utils import DownloadCancelled, DownloadError
 
 from .models import Status, VideoItem
-from .urlsafety import inside
+from .urlsafety import app_ydl, fetch_url_problem, inside
+from .ytdl import guarded_ydl
 
 QUALITY_BEST = "best"
 QUALITY_720 = "720p"
@@ -120,7 +121,11 @@ def download_item(
     }
 
     # 1) Fresh metadata (signed media URLs expire, and the date may be unknown).
-    with yt_dlp.YoutubeDL(common) as ydl:
+    problem = fetch_url_problem(item.url)              # before any network activity
+    if problem:
+        raise DownloadError(problem)
+    common = app_ydl(common, item.url)
+    with guarded_ydl(common, yt_dlp.YoutubeDL) as ydl:
         info = ydl.extract_info(item.url, download=False)
     if not info:
         raise DownloadError("The platform returned no information for this video.")
@@ -140,7 +145,7 @@ def download_item(
         "postprocessors": [{"key": "FFmpegVideoRemuxer", "preferedformat": "mp4"}],
     }
     try:
-        with yt_dlp.YoutubeDL(dl_opts) as ydl:
+        with guarded_ydl(dl_opts, yt_dlp.YoutubeDL) as ydl:
             info = ydl.process_ie_result(info, download=True)
     finally:
         try:

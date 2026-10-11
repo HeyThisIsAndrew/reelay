@@ -981,15 +981,23 @@ def create_app(store: Store, pipeline: Pipeline, accounts: AccountService, token
 
     @app.post("/v1/videos/{video_id}/revisions/{revision_id}/restore", response_model=Video,
               operation_id="restoreRevision", summary="Undo one logged change",
-              responses={k: ERRORS[k] for k in (401, 404, 409, 422)}, **v1)
-    def restore_revision(video_id: int, revision_id: int) -> Video:
+              responses={**{k: ERRORS[k] for k in (401, 404, 409, 422)},
+                         202: {"model": ApprovalOut, "description": "The change was an archive or unarchive: "
+                               "undoing it waits for a person's approval."}}, **v1)
+    def restore_revision(video_id: int, revision_id: int):
         """Puts the field back to the value it had before that change. The restore is itself a new, logged
-        change. Same rules as PATCH (copy is locked once scheduled)."""
+        change. Same rules as PATCH (copy is locked once scheduled).
+
+        Undoing an **archive or unarchive** changes whether the video is archived, so like
+        POST /v1/videos/{video_id}/archive and /unarchive it **needs a person's approval**: answered with 202
+        and an approval_id; nothing changes until a person approves it in Reelay."""
         with store.origin("api"):
             try:
-                pipeline.restore_revision(video_id, revision_id)
+                pending = pipeline.restore_revision(video_id, revision_id)
             except PipelineError as exc:
                 raise pipeline_error(exc) from None
+        if pending is not None:
+            return accepted(pending)
         return video_by_id(video_id)
 
     @app.post("/v1/videos/{video_id}/transcript", response_model=Video, operation_id="fetchTranscript",
@@ -1191,8 +1199,9 @@ def create_app(store: Store, pipeline: Pipeline, accounts: AccountService, token
     # ---------------------------------------------------------------- media links (Threads)
     @app.api_route("/media/{token}", methods=["GET", "HEAD"], include_in_schema=False)
     def media_file(token: str):
-        path = media.resolve(token)
-        if path is None or not path.is_file():
+        from .urlsafety import looks_like_video
+        path = media.resolve(token)          # None unless it's still the very file the link was made for
+        if path is None or not path.is_file() or not looks_like_video(path):
             raise ApiError(404, "This link has expired or doesn't exist.", "not_found")
         return FileResponse(path, media_type="video/mp4")
 

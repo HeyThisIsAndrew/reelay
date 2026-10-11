@@ -20,6 +20,7 @@ a failure on one platform never changes another platform's status.
 from __future__ import annotations
 
 import logging
+import os
 import time
 from collections import defaultdict
 import uuid
@@ -236,9 +237,30 @@ class Pipeline:
         return self.add_shorts_default() and is_short_form(item.width, item.height, item.duration)
 
     def video_path(self, row: VideoRow) -> Path | None:
-        """The file to post: the edited version from the ticket's Video tools, else the download."""
+        """The file to post: the edited version from the ticket's Video tools, else the download.
+
+        Whatever the database says, only a real video inside this video's folders (the profile's folder,
+        or the folder it was downloaded into) is ever posted or served; anything else counts as missing."""
+        from .urlsafety import media_file_problem
         from .video_tools import edited_path
-        return edited_path(self.store, row.id) or self.original_path(row)
+        roots = self.media_roots(row)
+        edited = edited_path(self.store, row.id)
+        if edited is not None:
+            problem = media_file_problem(edited, roots)
+            if problem is None:
+                return edited
+            log.warning("Ignoring the edited version of video %s: %s", row.id, problem)
+        original = self.original_path(row)
+        if original is not None and os.path.lexists(original):
+            problem = media_file_problem(original, roots)
+            if problem:
+                log.warning("Not using the file recorded for video %s: %s", row.id, problem)
+                return None
+        return original
+
+    def media_roots(self, row: VideoRow) -> list[str]:
+        """The folders a video's files may live in: the profile's folder and the one it was downloaded to."""
+        return [f for f in (self._profile(row.profile_id).output_folder, row.item.folder) if f]
 
     def original_path(self, row: VideoRow) -> Path | None:
         return row.item.path(self._profile(row.profile_id).output_folder)
@@ -590,10 +612,9 @@ class Pipeline:
         return len(edits)
 
     def unmark_posted(self, manual_id: int) -> None:
-        row = self.store.conn.execute("SELECT video_row FROM manual_posts WHERE id=?", (manual_id,)).fetchone()
-        self.store.delete_manual_post(manual_id)
-        if row:
-            self.advance(row["video_row"], allow_back=True)
+        video_row = self.store.delete_manual_post(manual_id)     # under the store's lock
+        if video_row is not None:
+            self.advance(video_row, allow_back=True)
 
     # ================================================================ per-platform tags & automatic stages
     def platform_states(self, row_id: int, now: datetime | None = None) -> dict[str, PlatformState]:
@@ -869,6 +890,13 @@ class Pipeline:
         lists the problems, unless force=True. Cards that were already Scheduled
         or Published before the gate existed are exempt. Raises PipelineError."""
         now = now or datetime.now(timezone.utc)
+        if self.store.current_origin().split(":")[0] == "automation":
+            # The approval boundary for Automations: copy that came from an AI agent (directly, or
+            # through a rule's template) is only posted once a person approves it.
+            from .rules import agent_written_copy
+            if agent_written_copy(self.store, row_id):
+                raise PipelineError("This copy came from an AI agent, so an automation can't schedule it "
+                                    "without a person's approval.", "needs_approval")
         row, base, targets, manual = self.schedule_plan(row_id, scheduled_at, platforms, post, now, force)
         return self._schedule_write(row, base, targets, manual, add_shorts, now)
 

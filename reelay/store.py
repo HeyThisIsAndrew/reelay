@@ -19,6 +19,7 @@ from __future__ import annotations
 import functools
 import json
 import logging
+import os
 import sqlite3
 import threading
 from contextlib import contextmanager
@@ -347,6 +348,23 @@ def upload_date_iso(yyyymmdd: str) -> str | None:
     return None
 
 
+def sql_statements(script: str) -> list[str]:
+    """Split a migration script into single statements without breaking trigger bodies.
+
+    A statement ends at a semicolon only once ``sqlite3.complete_statement`` agrees (so the semicolons
+    inside ``CREATE TRIGGER … BEGIN …; END;`` and inside quoted text don't split it)."""
+    statements, current = [], ""
+    for part in script.split(";"):
+        current += part + ";"
+        if sqlite3.complete_statement(current):
+            if current.strip(" \t\r\n;"):
+                statements.append(current.strip())
+            current = ""
+    if current.strip(" \t\r\n;"):
+        raise ValueError("A migration ends with an incomplete SQL statement.")
+    return statements
+
+
 class ReadOnlyError(Exception):
     """A write was attempted on a database opened view only (someone else is editing it)."""
 
@@ -361,7 +379,11 @@ class Store:
         self._listeners: list[Callable[[Change], None]] = []
         self.conn = self._connect()
         if not read_only:
-            self._migrate()
+            try:
+                self._migrate()
+            except BaseException:
+                self.conn.close()        # rolled back already; don't leave the file open
+                raise
         elif self.conn.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_VERSION:
             self.conn.close()
             raise ReadOnlyError("This database was made by a different version of Reelay. Open it for editing "
@@ -445,11 +467,65 @@ class Store:
             yield self.conn
 
     def _migrate(self) -> None:
+        """Bring the schema up to SCHEMA_VERSION, one migration per transaction.
+
+        Each migration and its ``user_version`` bump commit together or not at all: a failure rolls back
+        to the previous version, so the next launch simply tries again. (``executescript`` can't be used:
+        it commits before running and then autocommits statement by statement.) The version is read
+        again inside the write lock, so two Reelays opening the same file can't apply a migration twice.
+        A consistent copy of an existing database is kept before its first migration."""
         version = self.conn.execute("PRAGMA user_version").fetchone()[0]
+        if 0 < version < SCHEMA_VERSION and self.path != ":memory:":
+            self._backup_before_migrating(version)
         for target in range(version + 1, SCHEMA_VERSION + 1):
-            with self.conn:
-                self.conn.executescript(_MIGRATIONS[target])
-                self.conn.execute(f"PRAGMA user_version = {target}")
+            self._apply_migration(target)
+
+    def _apply_migration(self, target: int) -> None:
+        conn = self.conn
+        if conn.in_transaction:
+            conn.commit()
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            if conn.execute("PRAGMA user_version").fetchone()[0] >= target:
+                conn.rollback()                  # another Reelay got there first
+                return
+            for statement in sql_statements(_MIGRATIONS[target]):
+                conn.execute(statement)
+            conn.execute(f"PRAGMA user_version = {int(target)}")
+            conn.commit()
+        except BaseException:
+            if conn.in_transaction:
+                conn.rollback()
+            raise
+
+    def _backup_before_migrating(self, version: int) -> Path | None:
+        """Copy the database with SQLite's online backup (consistent with WAL and journals) to a new file
+        next to it. Never overwrites: an existing name gets a number. Returns the copy, or None."""
+        src = Path(self.path)
+        stamp = datetime.now().strftime("%Y-%m-%d-%H%M%S")
+        for n in range(100):
+            dest = src.with_name(f"{src.stem}-backup-v{version}-{stamp}{f'-{n}' if n else ''}.db")
+            try:
+                fd = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)   # claim the name
+            except FileExistsError:
+                continue
+            except OSError as exc:
+                log.warning("Couldn't back up the database before updating it: %s", exc)
+                return None
+            os.close(fd)
+            try:
+                copy = sqlite3.connect(dest)
+                try:
+                    self.conn.backup(copy)
+                finally:
+                    copy.close()
+            except sqlite3.Error as exc:
+                log.warning("Couldn't back up the database before updating it: %s", exc)
+                dest.unlink(missing_ok=True)
+                return None
+            log.info("Backed up the database (version %d) to %s before updating it.", version, dest.name)
+            return dest
+        return None
 
     # ================================================================ archive search
     def search(self, profile_id: int, text: str, limit: int = 200, archived: bool | None = False) -> list[SearchHit]:
@@ -918,6 +994,17 @@ class Store:
         return [Revision(id=r["id"], video_row=r["video_row"], at=r["at"], origin=r["origin"], field=r["field"],
                          old_value=r["old_value"], new_value=r["new_value"]) for r in rows]
 
+    def latest_field_origins(self, video_row: int) -> dict[str, str]:
+        """For each field of one ticket that has a logged change: who made the newest change (``origin``)."""
+        rows = self.conn.execute(
+            "SELECT field, origin FROM revisions WHERE id IN "
+            "(SELECT MAX(id) FROM revisions WHERE video_row = ? GROUP BY field)", (video_row,)).fetchall()
+        return {r["field"]: r["origin"] for r in rows}
+
+    def current_origin(self) -> str:
+        """The origin writes on this thread are tagged with right now ("local", "api", "automation"…)."""
+        return self._state().origin
+
     def latest_copy_origins(self, profile_id: int, fields: Iterable[str]) -> dict[int, str]:
         """For every video in a profile: who made the newest edit to its copy (``origin``), ignoring
         Automations' own edits. One query, for the Board's "edited by an AI assistant" mark."""
@@ -926,7 +1013,7 @@ class Store:
             return {}
         rows = self.conn.execute(
             "SELECT r.video_row, r.origin FROM revisions r JOIN videos v ON v.id = r.video_row "
-            f"WHERE v.profile_id = ? AND r.origin != 'automation' AND r.field IN ({','.join('?' * len(fields))}) "
+            f"WHERE v.profile_id = ? AND r.origin NOT LIKE 'automation%' AND r.field IN ({','.join('?' * len(fields))}) "
             "ORDER BY r.id DESC", (profile_id, *fields)).fetchall()
         newest: dict[int, str] = {}
         for r in rows:
@@ -970,12 +1057,14 @@ class Store:
                 new.id = cur.lastrowid
         self._emit("video", (video_row,), self._profile_of_videos([video_row]))
 
-    def delete_manual_post(self, manual_id: int) -> None:
+    def delete_manual_post(self, manual_id: int) -> int | None:
+        """Delete a hand-made record. Returns the video it belonged to (None if there was no such record)."""
         row = self.conn.execute("SELECT video_row FROM manual_posts WHERE id=?", (manual_id,)).fetchone()
         with self.tx() as c:
             c.execute("DELETE FROM manual_posts WHERE id=?", (manual_id,))
         if row:
             self._emit("video", (row["video_row"],), self._profile_of_videos([row["video_row"]]))
+        return row["video_row"] if row else None
 
     @staticmethod
     def _ticket(row: sqlite3.Row) -> Ticket:
@@ -1370,6 +1459,7 @@ def _locked(fn):
 
 for _name, _attr in list(vars(Store).items()):
     if callable(_attr) and not _name.startswith("__") and _name not in (
-            "tx", "origin", "subscribe", "_state", "_emit", "_deliver", "_connect", "reopen") and \
+            "tx", "origin", "current_origin", "subscribe", "_state", "_emit", "_deliver", "_connect",
+            "reopen") and \
             not isinstance(_attr, staticmethod):
         setattr(Store, _name, _locked(_attr))

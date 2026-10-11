@@ -22,6 +22,7 @@ from PySide6.QtCore import QObject, QRunnable, QThreadPool, Qt, Signal
 from PySide6.QtGui import QImage, QPixmap
 
 from ..models import VideoItem
+from ..urlsafety import asset_url_problem
 from ..ytdl import find_ffmpeg
 
 log = logging.getLogger("reelay")
@@ -68,7 +69,7 @@ class _FetchCover(QRunnable):
                 self.signals.done.emit(self.key, image)
                 return
         ok = False
-        if self.url:
+        if self.url and not asset_url_problem(self.url):    # never file:// or a local address
             try:
                 req = urllib.request.Request(self.url, headers={"User-Agent": USER_AGENT})
                 with urllib.request.urlopen(req, timeout=15, context=_SSL) as resp:
