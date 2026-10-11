@@ -372,3 +372,20 @@ def test_automations_empty_state_recipes_and_rule_preview(app_window, monkeypatc
     text = dialog.preview_text.text()
     assert "Trigger matches" in text and "Conditions met" in text and "Platforms" in text
     dialog.close()
+
+
+# ------------------------------------------------------------------ Snapchat
+def test_snapchat_is_a_hand_off_platform_and_a_download_source(app_window):
+    from reelay.models import Platform
+    from reelay.platforms import detect_platform, is_supported_url
+    from reelay.rules import parse_platforms
+    assert Platform.SNAPCHAT in Platform.HAND_ONLY and Platform.LABELS[Platform.SNAPCHAT] == "Snapchat"
+    assert Platform.PINTEREST in Platform.PLANNED and Platform.LINKEDIN in Platform.PLANNED
+    assert detect_platform("https://www.snapchat.com/spotlight/W7_EDlXWTBiXAEEniNoMPwAAYYmtnbm9xbXZ3AYyH") == "Snapchat"
+    assert detect_platform("https://example.com/x", "SnapchatSpotlight") == "Snapchat"
+    assert is_supported_url("https://www.snapchat.com/spotlight/abc")
+    assert parse_platforms("TikTok, Snapchat") == ["tiktok"]          # not a ticket platform yet
+    window, *_ = app_window
+    window.go("accounts")
+    card = window.accounts_page.platform_cards["snapchat"]
+    assert card.isVisibleTo(window.accounts_page)

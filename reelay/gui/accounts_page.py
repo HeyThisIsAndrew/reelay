@@ -180,6 +180,10 @@ class AccountsPage(QWidget):
              "Reelay can't post to Instagram for you yet. Instagram needs a Professional (Creator or Business) "
              "account and a Meta app that passes App Review. Copy the Instagram caption from a ticket and post in "
              "the Instagram app. Signing in attaches your account for analytics."),
+            ("snapchat",
+             "Reelay doesn't post to Snapchat for you: Spotlight is posted by hand. Spotlight is made for vertical "
+             "(9:16) videos. Copy the caption from the video's ticket and post it from the Snapchat app. You can "
+             "also download your own Spotlight videos by pasting their links in the Library."),
         ):
             card = SignInOnlyCard(platform, text, self)
             self.platform_cards[platform] = card

@@ -10,17 +10,19 @@ PLATFORM_HOSTS = {
     "instagram.com": "Instagram",
     "youtube.com": "YouTube",
     "youtu.be": "YouTube",
+    "snapchat.com": "Snapchat",          # Spotlight and public story links (single videos)
 }
 
 PLATFORM_EXTRACTOR_PREFIXES = {
     "TikTok": "TikTok",
     "Instagram": "Instagram",
     "Youtube": "YouTube",
+    "Snapchat": "Snapchat",              # yt-dlp's SnapchatSpotlight
 }
 
 
 def detect_platform(url: str, extractor_key: str | None = None) -> str:
-    """Return 'TikTok' | 'Instagram' | 'YouTube' (or a sanitized extractor name)."""
+    """Return 'TikTok' | 'Instagram' | 'YouTube' | 'Snapchat' (or a sanitized extractor name)."""
     host = (urlparse(url).hostname or "").lower()
     for fragment, label in PLATFORM_HOSTS.items():
         if host == fragment or host.endswith("." + fragment):

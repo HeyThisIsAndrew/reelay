@@ -336,7 +336,7 @@ class DownloadPage(QWidget):
         self.url.setAttribute(Qt.WA_MacShowFocusRect, False)
         self.url.addAction(icons.icon("link", 16), QLineEdit.LeadingPosition)
         tip(self.url, "A TikTok, Instagram or YouTube profile link (yours, or an account you manage), or one or more "
-                      "video links separated by spaces.")
+                      "video links separated by spaces (Snapchat Spotlight links too).")
         il.addWidget(self.url, 2)
         self.save_source_btn = QPushButton("Save This Link…")
         tip(self.save_source_btn, "Keep this link as a one-click source for this profile, so next time you "
@@ -1059,7 +1059,7 @@ class DownloadPage(QWidget):
         urls = [u if u.startswith("http") else "https://" + u for u in urls]
         bad = [u for u in urls if not is_supported_url(u)]
         if bad:
-            QMessageBox.warning(self, APP_NAME, "These links aren't TikTok, Instagram or YouTube:\n\n" + "\n".join(bad))
+            QMessageBox.warning(self, APP_NAME, "These links aren't TikTok, Instagram, YouTube or Snapchat:\n\n" + "\n".join(bad))
             return
         self.profile.last_source = self.url.text().strip()
         self.store.update_profile(self.profile)

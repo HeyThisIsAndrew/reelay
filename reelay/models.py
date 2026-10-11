@@ -34,10 +34,14 @@ class Platform:
     FACEBOOK = "facebook"
     TIKTOK = "tiktok"
     INSTAGRAM = "instagram"
+    SNAPCHAT = "snapchat"
+    PINTEREST = "pinterest"
+    LINKEDIN = "linkedin"
     ALL = (YOUTUBE, BLUESKY, THREADS, FACEBOOK)       # can be posted automatically (when turned on)
-    HAND_ONLY = (TIKTOK, INSTAGRAM)                   # always posted by hand (copy and paste)
+    HAND_ONLY = (TIKTOK, INSTAGRAM, SNAPCHAT)         # always posted by hand (copy and paste)
+    PLANNED = (PINTEREST, LINKEDIN)                   # named so data can refer to them; no posting yet
     LABELS = {YOUTUBE: "YouTube", TIKTOK: "TikTok", INSTAGRAM: "Instagram", BLUESKY: "Bluesky", THREADS: "Threads",
-              FACEBOOK: "Facebook"}
+              FACEBOOK: "Facebook", SNAPCHAT: "Snapchat", PINTEREST: "Pinterest", LINKEDIN: "LinkedIn"}
     # Platforms that hold a scheduled post on their own servers (Reelay hands the
     # video over right away). The rest are posted by Reelay at the due time.
     NATIVE_SCHEDULING = (YOUTUBE, FACEBOOK)

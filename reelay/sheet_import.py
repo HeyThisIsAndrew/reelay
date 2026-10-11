@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .models import ContentType, Platform, Post, Ticket, VideoRow
+from .models import MANUAL_PLATFORMS, ContentType, Platform, Post, Ticket, VideoRow
 
 # Target fields and the column headers that mean them (lower-case, punctuation-free).
 FIELDS: dict[str, tuple[str, ...]] = {
@@ -190,7 +190,8 @@ def convert(target: str, value: str) -> tuple[object, str | None]:
     if target == "tags":
         return [t.strip().lstrip("#") for t in re.split(r"[,;\n]", value) if t.strip().lstrip("#")], None
     if target == "target_platforms":
-        names = {**{p: p for p in Platform.LABELS}, **{v.lower(): k for k, v in Platform.LABELS.items()},
+        ticket = {k: v for k, v in Platform.LABELS.items() if k in MANUAL_PLATFORMS}   # platforms a ticket can hold
+        names = {**{p: p for p in ticket}, **{v.lower(): k for k, v in ticket.items()},
                  "yt": "youtube", "fb": "facebook", "bsky": "bluesky"}
         parts = [p.strip().lower() for p in re.split(r"[,;/\n]", value) if p.strip()]
         unknown = [p for p in parts if p not in names]
