@@ -63,6 +63,38 @@ def normalize_url(url: str) -> str:
     return f"https://{host}{path}"
 
 
+# A username typed instead of a link, per platform (the @ is optional).
+HANDLES = {
+    "tiktok": (re.compile(r"^[A-Za-z0-9_.]{2,24}$"), "https://www.tiktok.com/@{}"),
+    "instagram": (re.compile(r"^[A-Za-z0-9_.]{1,30}$"), "https://www.instagram.com/{}/"),
+    "youtube": (re.compile(r"^[A-Za-z0-9_.\-]{3,30}$"), "https://www.youtube.com/@{}"),
+}
+YOUTUBE_CHANNEL_ID = re.compile(r"^UC[A-Za-z0-9_-]{22}$")
+_LOOKS_LIKE_LINK = re.compile(r"^(https?://|[\w-]+(\.[\w-]+)+/)", re.IGNORECASE)
+
+
+def resolve_source_input(platform: str, text: str) -> str:
+    """A username (``@khaby.lame``, ``khaby.lame``) or a profile link → the profile link.
+
+    Links are passed through (their own platform wins); a username becomes ``platform``'s profile link."""
+    text = (text or "").strip()
+    if not text:
+        raise SourceError("Type a username or paste a profile link.")
+    if _LOOKS_LIKE_LINK.match(text):
+        return text if "://" in text else "https://" + text
+    label = {"tiktok": "TikTok", "instagram": "Instagram", "youtube": "YouTube"}.get(platform)
+    if label is None:
+        raise SourceError("Snapchat doesn't let apps list a profile's videos: paste the Spotlight links instead.")
+    handle = text.lstrip("@").strip()
+    if platform == "youtube" and YOUTUBE_CHANNEL_ID.match(handle):
+        return f"https://www.youtube.com/channel/{handle}"
+    pattern, template = HANDLES[platform]
+    if not pattern.match(handle):
+        raise SourceError(f"“{text}” doesn't look like a {label} username. Check the spelling, or paste the "
+                          "profile link.")
+    return template.format(handle)
+
+
 def source_platform(url: str) -> str:
     label = detect_platform(url)
     platform = label.lower()
@@ -93,8 +125,12 @@ class SourceService:
         self.store, self.accounts = store, accounts
 
     # ---------------------------------------------------------------- saved sources
-    def add(self, profile_id: int, url: str, name: str | None = None, mine: bool = False) -> Source:
+    def add(self, profile_id: int, url: str, name: str | None = None, mine: bool = False,
+            platform: str | None = None) -> Source:
+        """Save a source. With ``platform``, ``url`` may also be a username on that platform."""
         url = (url or "").strip()
+        if platform:
+            url = resolve_source_input(platform, url)
         if not url:
             raise SourceError("Add a profile link.")
         if not url.lower().startswith(("http://", "https://")):

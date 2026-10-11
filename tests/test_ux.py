@@ -103,7 +103,7 @@ def test_tips_switch_turns_every_tooltip_off(ui):
 def test_download_page_says_in_and_out_plainly(ui):
     window, *_ = ui
     page = window.download
-    assert page.fetch_btn.text() == "List Videos" and page.save_source_btn.text() == "Save This Link…"
+    assert page.fetch_btn.text() == "List Videos" and page.source_btn.text().startswith("Download Sources")
     assert page.apply_btn.text() == "Rename Files…" and page.manifest_btn.text() == "Open Video List"
     assert "permission to manage" in page.doors_note.text()
     assert "{" not in page.naming.combo.currentText()                  # no raw tokens in labels

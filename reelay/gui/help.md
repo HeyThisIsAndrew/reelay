@@ -31,11 +31,13 @@ Only import media you own or have permission to manage.
 - **Filter** (top right) holds what to show (all, not downloaded yet, downloaded), the hashtag and brand or product filters, and the sort order. The button shows how many filters are on.
 - **Download settings** (the gear) hold where videos are saved, the quality, browser sign-in, and how files are named.
 - **Tile size:** the slider at the top (or ⌘+ and ⌘−) makes the thumbnails smaller or bigger: Small, Medium, Large or XL.
-- **Pages:** big libraries show a page at a time. At the bottom, choose 24, 48, 96 or All per page and step through with the arrows. A new search or filter starts at page 1; **Select All** still selects every matching video, on every page.
+- **Pages:** big libraries show a page at a time. At the bottom, choose 24, 48, 96 or All per page and step through with the arrows. A new search, filter or sort order starts at page 1; otherwise you stay on your page while videos load and the list refreshes. **Select All** still selects every matching video, on every page.
 - **Open Video List** (bottom, or **File → Downloaded Videos…**) shows every downloaded video in a table you can search and sort, with **Show in Finder**, **Copy Video Link** and **Play Preview**, and export it as a CSV spreadsheet or as the Markdown manifest.
 - **Snapchat:** paste a Snapchat Spotlight link to download it like any other video.
 
-- **Saved sources** are buttons for links you use often. Click **List Videos** on one to see its videos. To add one, paste a link and click **Save This Link…**. Use the **⋯** menu on a source to rename it, mark it as one of your own accounts, or remove it.
+- **Download Sources** (the button left of the link field) opens your saved sources, one section per platform: TikTok, Instagram, YouTube and Snapchat. Click **List Videos** on one to see its videos. To add one, type the username (with or without @) or paste the profile link, then click **Add**. Turn **Mine** on for this profile's own accounts. Use the **⋯** menu to rename or remove a source. The same sources are on the **Accounts** page, under **Download Sources**.
+  - The button shows which source the link field holds.
+  - **Snapchat** doesn't let apps list a profile's videos, so its section takes Spotlight links to list right away.
 - **Connected YouTube channels** (from Accounts) appear as sources automatically and don't need a link. Private and scheduled videos are shown but left unticked.
 - **Pasting a link:** paste a profile link, or several video links separated by spaces, then click **List Videos**. Nothing is downloaded until you click **Download**.
 - **Choosing videos:** newly listed videos start unselected, so nothing downloads by surprise. Your choices are kept when the list refreshes.

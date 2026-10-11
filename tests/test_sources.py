@@ -44,6 +44,30 @@ def test_save_rename_mine_remove(svc):
     assert [s.id for s in store.list_sources(profile.id)] == [saved.id]
 
 
+@pytest.mark.parametrize("platform,text,url", [
+    ("tiktok", "@khaby.lame", "https://www.tiktok.com/@khaby.lame"),
+    ("tiktok", "khaby.lame", "https://www.tiktok.com/@khaby.lame"),
+    ("instagram", "@nasa", "https://www.instagram.com/nasa/"),
+    ("youtube", "@MrBeast", "https://www.youtube.com/@MrBeast"),
+    ("youtube", "UCX6OQ3DkcsbYNE6H8uQQuVA", "https://www.youtube.com/channel/UCX6OQ3DkcsbYNE6H8uQQuVA"),
+    ("tiktok", "tiktok.com/@x", "https://tiktok.com/@x"),
+    ("instagram", "https://www.youtube.com/@a", "https://www.youtube.com/@a"),   # a link keeps its own platform
+])
+def test_username_or_link(platform, text, url):
+    from reelay.sources import resolve_source_input
+    assert resolve_source_input(platform, text) == url
+
+
+def test_username_errors_and_saving_by_username(svc):
+    from reelay.sources import resolve_source_input
+    for platform, text in (("tiktok", ""), ("tiktok", "two words"), ("snapchat", "someone"), ("youtube", "ab")):
+        with pytest.raises(SourceError):
+            resolve_source_input(platform, text)
+    service, _store, profile = svc
+    saved = service.add(profile.id, "@livingood.lifestyle", platform="tiktok")
+    assert (saved.url, saved.platform, saved.name) == (TIKTOK, "tiktok", "@livingood.lifestyle on TikTok")
+
+
 def test_validation(svc):
     service, _store, profile = svc
     for bad in ("", "https://vimeo.com/someone", "not a link"):
@@ -152,7 +176,7 @@ def page_env(qtbot, tmp_path, monkeypatch):
 
 
 def chips(page):
-    return page._chips()
+    return page.sources_dialog.panel.rows()
 
 
 def test_one_click_refetch_uses_the_saved_url(page_env, qtbot, monkeypatch):
@@ -197,22 +221,65 @@ def test_connected_channel_is_a_source_without_a_link(page_env, qtbot, monkeypat
     assert "Use browser sign-in" in page.status.text() and "Nothing is selected yet" in page.status.text()
 
 
-def test_save_pasted_link_and_remove_with_duplicates(page_env, qtbot, monkeypatch):
+def test_add_by_username_dedupe_and_remove(page_env, qtbot, monkeypatch):
     window, store, _tokens, profile = page_env
     page = window.download
-    from reelay.gui import download_page
-    monkeypatch.setattr(download_page.SourceDialog, "exec", lambda self: download_page.SourceDialog.Accepted)
-    monkeypatch.setattr(download_page.SourceDialog, "name", lambda self: "Lydia's TikTok")
-    monkeypatch.setattr(download_page.SourceDialog, "mine", lambda self: True)
     page.url.setText(TIKTOK)
-    page.save_source_btn.click()
-    SourceService(store, window.accounts).add(profile.id, TIKTOK + "/")  # same URL again
-    qtbot.waitUntil(lambda: len(store.list_sources(profile.id)) == 2, timeout=2000)
+    page.open_sources()                                               # the pasted profile link is offered
+    panel = page.sources_dialog.panel
+    tiktok = panel.sections["tiktok"]
+    assert tiktok.field.text() == TIKTOK
+    tiktok.field.setText("@Livingood.Lifestyle")                      # a username works as well as a link
+    tiktok.add_btn.click()
+    assert [s.url for s in store.list_sources(profile.id)] == [TIKTOK.replace("livingood", "Livingood")
+                                                                .replace(".lifestyle", ".Lifestyle")]
+    assert tiktok.field.text() == ""
+    qtbot.waitUntil(lambda: len(chips(page)) == 1, timeout=2000)
+    assert page.source_btn.text().startswith("@Livingood.Lifestyle on TikTok")   # the link field's source
+    tiktok.field.setText(TIKTOK + "/")                                 # the same account again
+    tiktok.add_btn.click()
+    assert "already saved" in tiktok.error.text() and len(store.list_sources(profile.id)) == 1
+    tiktok.field.setText("not a name!")
+    tiktok.add_btn.click()
+    assert "doesn't look like a TikTok username" in tiktok.error.text()
+    chips(page)[0].mine_btn.click()
+    assert store.list_sources(profile.id)[0].mine
+    SourceService(store, window.accounts).add(profile.id, TIKTOK + "/")  # a duplicate saved elsewhere (the API)
     qtbot.waitUntil(lambda: len(chips(page)) == 1 and chips(page)[0].view.duplicates == 1, timeout=2000)
-    assert chips(page)[0].view.name == "Lydia's TikTok" and chips(page)[0].view.mine
-    page._remove_source(chips(page)[0].view)
+    panel.remove(chips(page)[0].view)
     assert store.list_sources(profile.id) == []
     qtbot.waitUntil(lambda: len(chips(page)) == 0, timeout=2000)
+    assert page.source_btn.text().startswith("Download Sources")
+    page.sources_dialog.close()
+
+
+def test_snapchat_links_list_once(page_env, qtbot, monkeypatch):
+    window, store, _tokens, profile = page_env
+    page = window.download
+    listed = []
+    monkeypatch.setattr(page, "_fetch_urls", lambda urls, source_id=None: listed.append(urls))
+    page.open_sources()
+    snap = page.sources_dialog.panel.sections["snapchat"]
+    snap.field.setText("https://www.tiktok.com/@x")
+    snap.add_btn.click()
+    assert "Spotlight" in snap.error.text() and not listed
+    snap.field.setText("snapchat.com/spotlight/W7_EDlXWTBiXAEEniNoMPwAAYYWl")
+    snap.add_btn.click()
+    assert listed == [["https://snapchat.com/spotlight/W7_EDlXWTBiXAEEniNoMPwAAYYWl"]]
+    assert not page.sources_dialog.isVisible() and store.list_sources(profile.id) == []
+
+
+def test_accounts_page_lists_a_source_in_the_library(page_env, qtbot, monkeypatch):
+    window, store, _tokens, profile = page_env
+    window.go("accounts")
+    panel = window.accounts_page.sources_panel
+    panel.sections["instagram"].field.setText("@lydia.livingood")
+    panel.sections["instagram"].add_btn.click()
+    assert store.list_sources(profile.id)[0].url == "https://www.instagram.com/lydia.livingood/"
+    fetched = []
+    monkeypatch.setattr(window.download, "fetch_source", fetched.append)
+    panel.rows()[0].fetch_btn.click()
+    assert window.stack.currentWidget() is window.download and fetched[0].name == "@lydia.livingood on Instagram"
 
 
 def test_doors_are_explained(page_env):
@@ -220,3 +287,4 @@ def test_doors_are_explained(page_env):
     page = window.download
     assert "pulls videos in" in page.doors_note.toolTip() and "pushes videos out" in page.doors_note.toolTip()
     assert "account you manage" in page.url.toolTip() and "permission to manage" in page.doors_note.text()
+    assert "username" in page.source_btn.toolTip()

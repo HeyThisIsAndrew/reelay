@@ -95,6 +95,8 @@ class MainWindow(QMainWindow):
         self.download.busyChanged.connect(lambda _b: self._sync_switch_enabled())
         self.board.openAccounts.connect(lambda: self.go("accounts"))
         self.download.openAccounts.connect(lambda: self.go("accounts"))
+        self.accounts_page.listSource.connect(lambda view: (self.go("download"), self.download.fetch_source(view)))
+        self.accounts_page.listLinks.connect(lambda links: (self.go("download"), self.download.fetch_links(links)))
         self.settings_page.themeChosen.connect(self.set_theme)
         self.settings_page.editProfileRequested.connect(self.edit_profile)
 

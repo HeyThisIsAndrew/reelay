@@ -22,6 +22,7 @@ from dataclasses import dataclass
 
 from ..accounts import YOUTUBE, AccountService
 from ..models import Account, Platform, Profile
+from ..sources import SourceService
 from ..publishers import BlueskyPublisher, FacebookPublisher, ThreadsPublisher
 from ..publishing import parse_utc
 from ..store import Store
@@ -29,6 +30,7 @@ from ..youtube import OAuthClient, YouTubeError, watch_url
 from . import theme
 from .logos import platform_pixmap
 from .post_panel import local_text
+from .sources_panel import SourcesPanel
 from .setup_dialogs import GoogleSignInDialog, ProviderSignInDialog, TokenSetupDialog, YouTubeSetupWizard
 from .theme import set_prop
 from .tips import tip
@@ -168,6 +170,8 @@ def account_row(acc, problem: str = "", actions: list[QPushButton] = ()) -> QFra
 
 class AccountsPage(QWidget):
     accountsChanged = Signal()
+    listSource = Signal(object)        # a download source's List Videos: show it in the Library
+    listLinks = Signal(list)
 
     def __init__(self, store: Store, accounts: AccountService, parent=None):
         super().__init__(parent)
@@ -289,6 +293,19 @@ class AccountsPage(QWidget):
         self.grid.setVerticalSpacing(14)
         self.body.addWidget(self.grid_host)
 
+        # ---- download sources: where videos come in from (full width)
+        sc, scl = _card()
+        self.sources_card = sc
+        scl.addWidget(QLabel("Download Sources", objectName="DetailTitle"))
+        self.sources_note = _label("", "muted")
+        scl.addWidget(self.sources_note)
+        self.sources_panel = SourcesPanel(self.store, SourceService(self.store, self.service), show_manage=False)
+        self.sources_panel.fetchRequested.connect(self.listSource.emit)
+        self.sources_panel.linksRequested.connect(self.listLinks.emit)
+        scl.addSpacing(4)
+        scl.addWidget(self.sources_panel)
+        self.body.addWidget(sc)
+
         # ---- channel schedule (full width, once a channel is connected)
         sc, scl = _card()
         self.schedule_card = sc
@@ -335,6 +352,7 @@ class AccountsPage(QWidget):
             self.grid.addWidget(card, n // columns, n % columns, Qt.AlignTop)
         for c in range(3):
             self.grid.setColumnStretch(c, 1 if c < columns else 0)
+        self.sources_panel.set_columns(2 if columns > 1 else 1)
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
@@ -343,8 +361,12 @@ class AccountsPage(QWidget):
     # ---------------------------------------------------------------- state
     def set_profile(self, profile: Profile) -> None:
         self.profile = profile
-        self.subtitle.setText(f"Where {profile.name}'s videos go out. Each profile has its own accounts, so "
-                              "creators stay separate. (Videos come in through the Library.)")
+        self.subtitle.setText(f"Where {profile.name}'s videos go out, and below, where they come in from. Each "
+                              "profile has its own accounts, so creators stay separate.")
+        self.sources_note.setText(f"Where {profile.name}'s videos come in from. Type a username or paste a profile "
+                                  "link; List Videos shows its videos in the Library. Only import media you own or "
+                                  "have permission to manage.")
+        self.sources_panel.set_profile(profile)
         self.schedule.clear()
         self.refresh()
 

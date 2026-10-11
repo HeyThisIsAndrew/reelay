@@ -19,7 +19,7 @@ It's a native desktop app for macOS (Windows builds included) in a Light, Dark, 
 **Download: bring videos in** (import media you own or have permission to manage)
 - **Saved sources** are one-click buttons for profile links you use often. Click **List Videos** on one to see its videos; there's nothing to paste again.
   - **Connected YouTube channels** (from Accounts) appear automatically and list their videos through the YouTube Data API, with no link needed. Private and scheduled videos are shown but left unticked: downloading them needs **Use browser sign-in** set to a browser signed into that channel.
-  - To add one, paste a profile link and click **Save This Link…**. From a source's **⋯** menu you can rename it, mark it as one of the profile's own accounts, or remove it. Saving the same link twice is fine: it's shown once.
+  - They live in **Download Sources** (in the Library, and on the Accounts page), one section per platform. To add one, type the username (`@khaby.lame` or `khaby.lame`) or paste the profile link. **Mine** marks the profile's own accounts; the **⋯** menu renames or removes a source. Adding an account that's already saved is caught.
 - Or paste a profile link (or several video links) and click **List Videos** to see every video first: cover, date, caption, length and views.
 - Downloading pulls videos **in**. Posting pushes videos **out** to the accounts you connect under **Accounts**, from the Board.
 - **Tagged products (TikTok Shop):** each TikTok video's tagged products are read from its public page in the background.

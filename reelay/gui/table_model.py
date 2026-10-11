@@ -478,8 +478,10 @@ class PageProxy(QSortFilterProxyModel):
         return start <= source_row < start + self.size
 
     def sort(self, column: int, order=Qt.AscendingOrder) -> None:
-        self.sourceModel().sort(column, order)
-        self.set_page(0)
+        source = self.sourceModel()
+        reordered = (source.sortColumn(), source.sortOrder()) != (column, order)
+        source.sort(column, order)
+        self.set_page(0 if reordered else self.page)   # re-applying the same order (a reload) keeps your page
 
     def to_model_row(self, index) -> int:
         """Row in the VideoTableModel for an index of this proxy."""

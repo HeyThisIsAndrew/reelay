@@ -262,6 +262,26 @@ def test_library_pages(app_window, qtbot, monkeypatch):
     assert page.pager.rowCount() == 60 and page.prev_btn.isHidden()
 
 
+def test_library_page_survives_background_refreshes(app_window, qtbot, monkeypatch):
+    # Product and hashtag menus rebuild in the background (600 ms after details or tagged products
+    # arrive); that mustn't throw you back to page 1 when the filter didn't actually change.
+    window, _, _ = app_window
+    page = fetch_fake(window, qtbot, monkeypatch, _many(60))
+    page.page_size.setCurrentIndex(page.page_size.findData(24))
+    page.next_btn.click()
+    assert page.pager.page == 1
+    page._refresh_products()
+    page._products_timer.timeout.emit()
+    page._tags_timer.timeout.emit()
+    page.reload()
+    assert page.pager.page == 1 and page.page_label.text() == "Page 2 of 3"
+    window.go("board")
+    window.go("download")
+    assert page.pager.page == 1
+    page.sort_box.setCurrentIndex(page.sort_box.findData("oldest"))   # a new order does start at page 1
+    assert page.pager.page == 0
+
+
 # ------------------------------------------------------------------ tile size
 def test_tile_size_presets_slider_and_narrow_views(app_window, qtbot, monkeypatch):
     window, store, _ = app_window

@@ -363,7 +363,11 @@ class ProductFilter(QWidget):
         self._fill_products()
 
     def _emit(self) -> None:
-        self.changed.emit(self.selection())
+        selection = self.selection()
+        if selection == getattr(self, "_last", None):
+            return                     # rebuilt with the same choice: nothing to tell anyone
+        self._last = selection
+        self.changed.emit(selection)
 
     def selection(self):
         pid = self.product.currentData()

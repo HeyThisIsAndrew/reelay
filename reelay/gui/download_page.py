@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import html
 import logging
 import re
 from dataclasses import replace
@@ -10,9 +9,9 @@ from pathlib import Path
 
 from PySide6.QtCore import QSettings, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QKeySequence, QShortcut
-from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
+from PySide6.QtWidgets import (QApplication, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
                                QFrame, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QMenu,
-                               QMessageBox, QProgressBar, QPushButton, QScrollArea, QSlider, QStackedWidget,
+                               QMessageBox, QProgressBar, QPushButton, QSlider, QStackedWidget,
                                QTableView, QToolButton, QVBoxLayout, QWidget)
 
 from .. import APP_NAME
@@ -22,8 +21,8 @@ from ..models import Profile, Status, VideoItem
 from ..naming import DEFAULT_TEMPLATE, slugify
 from ..accounts import AccountService
 from ..platforms import is_supported_url
-from ..sources import (SourceError, SourceService, SourceView, channel_url, default_name, downloadable_by_default,
-                       normalize_url, youtube_items)
+from ..sources import (SourceService, SourceView, channel_url, downloadable_by_default, normalize_url,
+                       youtube_items)
 from ..store import Store
 from ..tokens import MemoryTokenStore
 from ..youtube import YouTubeError
@@ -35,6 +34,7 @@ from .detail_panel import DetailPanel
 from .inspector import ContextualSplitter, Inspector, MediaPane
 from .player import PlayerWidget
 from .scrub import ScrubCache
+from .sources_panel import SourcesDialog, apply_button_state
 from .dialogs import RenamePreviewDialog, tokens_help_html
 from .cards import CARD_MIN_WIDTH, TILE_MAX, TILE_MIN, TILE_SIZES, LibraryCardDelegate, MediaGrid
 from .table_model import ROW_HEIGHT, Col, CoverDelegate, PageProxy, VideoFilterProxy, VideoTableModel
@@ -86,77 +86,6 @@ class VideoTable(QTableView):
             self._on_space()
             return
         super().keyPressEvent(event)
-
-
-class SourceChip(QFrame):
-    """One source under "Bring videos in": name, platform, one-click List Videos, ⋯ menu."""
-    fetchRequested = Signal(object)
-    renameRequested = Signal(object)
-    mineToggled = Signal(object)
-    removeRequested = Signal(object)
-    manageRequested = Signal()
-
-    def __init__(self, view: SourceView, parent=None):
-        super().__init__(parent)
-        self.setObjectName("Card")
-        self.view = view
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(10, 4, 4, 4)
-        lay.setSpacing(6)
-        platform = {"tiktok": "TikTok", "instagram": "Instagram", "youtube": "YouTube"}.get(view.platform, view.platform)
-        tag = "connected" if view.account else ("mine" if view.mine else "")
-        text = QLabel(f"<b>{html.escape(view.name)}</b>&nbsp;&nbsp;<span style='opacity:.6'>{platform}"
-                      f"{' · ' + tag if tag else ''}</span>")
-        text.setToolTip((view.url or "") + (f"\nSaved {view.duplicates + 1} times" if view.duplicates else ""))
-        lay.addWidget(text)
-        self.fetch_btn = QPushButton("List Videos")
-        tip(self.fetch_btn, f"Show every video from {view.name} below, so you can choose which to download. "
-                            "Nothing is downloaded yet." + ("" if view.account else f"\nLink: {view.url}"))
-        self.fetch_btn.clicked.connect(lambda: self.fetchRequested.emit(self.view))
-        lay.addWidget(self.fetch_btn)
-        more = QToolButton(text="⋯")
-        more.setPopupMode(QToolButton.InstantPopup)
-        tip(more, "More for this source: rename it, mark it as yours, or remove it")
-        menu = QMenu(more)
-        if view.account:
-            menu.addAction("Manage This Channel in Accounts", self.manageRequested.emit)
-        else:
-            menu.addAction("Rename This Source…", lambda: self.renameRequested.emit(self.view))
-            menu.addAction("Not one of my accounts" if view.mine else "This is one of my accounts",
-                           lambda: self.mineToggled.emit(self.view))
-            menu.addSeparator()
-            menu.addAction("Remove This Source", lambda: self.removeRequested.emit(self.view))
-        more.setMenu(menu)
-        lay.addWidget(more)
-
-    def set_busy(self, busy: bool) -> None:
-        self.fetch_btn.setEnabled(not busy)
-
-
-class SourceDialog(QDialog):
-    """Name a pasted link and say whether it's one of the profile's own accounts."""
-
-    def __init__(self, default: str, profile_name: str, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Save This Link")
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(20, 18, 20, 14)
-        lay.addWidget(muted("Name it so you'll recognize it (it shows as a button on the Download page)"))
-        self.name_edit = QLineEdit(default)
-        self.name_edit.selectAll()
-        lay.addWidget(self.name_edit)
-        self.mine_box = QCheckBox(f"This is one of {profile_name}'s own accounts")
-        lay.addWidget(self.mine_box)
-        buttons = QDialogButtonBox(QDialogButtonBox.Cancel | QDialogButtonBox.Save)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        lay.addWidget(buttons)
-
-    def name(self) -> str:
-        return self.name_edit.text().strip()
-
-    def mine(self) -> bool:
-        return self.mine_box.isChecked()
 
 
 class DownloadSettingsDialog(QDialog):
@@ -317,31 +246,21 @@ class DownloadPage(QWidget):
         il = QHBoxLayout(intake)
         il.setContentsMargins(0, 0, 0, 0)
         il.setSpacing(8)
-        self.chip_area = QScrollArea()
-        self.chip_area.setWidgetResizable(True)
-        self.chip_area.setFrameShape(QFrame.NoFrame)
-        self.chip_area.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.chip_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.chip_area.setFixedHeight(46)
-        tip(self.chip_area, "Your saved sources. Click List Videos on one to see its videos below.")
-        chip_body = QWidget(objectName="CardBody")
-        self.chip_row = QHBoxLayout(chip_body)
-        self.chip_row.setContentsMargins(0, 0, 0, 0)
-        self.chip_row.setSpacing(8)
-        self.chip_area.setWidget(chip_body)
-        il.addWidget(self.chip_area, 3)
+        self.source_btn = QPushButton("Download Sources  ▾", objectName="SourcePicker")
+        self.source_btn.setIconSize(icons.size(18))
+        tip(self.source_btn, "Your saved sources, one section per platform: list a source's videos with one "
+                             "click, or add an account by typing its username or pasting its link")
+        il.addWidget(self.source_btn)
+        self.sources_dialog = SourcesDialog(self.store, self.source_service, self)
+        self._source_views: list[SourceView] = []
         self.url = QLineEdit(objectName="UrlField")
-        self.url.setPlaceholderText("Paste a profile or video link")
+        self.url.setPlaceholderText("Paste a profile or video link, or choose a source")
         self.url.setClearButtonEnabled(True)
         self.url.setAttribute(Qt.WA_MacShowFocusRect, False)
         self.url.addAction(icons.icon("link", 16), QLineEdit.LeadingPosition)
         tip(self.url, "A TikTok, Instagram or YouTube profile link (yours, or an account you manage), or one or more "
                       "video links separated by spaces (Snapchat Spotlight links too).")
-        il.addWidget(self.url, 2)
-        self.save_source_btn = QPushButton("Save This Link…")
-        tip(self.save_source_btn, "Keep this link as a one-click source for this profile, so next time you "
-                                  "don't have to paste it")
-        il.addWidget(self.save_source_btn)
+        il.addWidget(self.url, 1)
         self.fetch_btn = QPushButton("List Videos")
         set_prop(self.fetch_btn, "primary")
         tip(self.fetch_btn, "Show every video from this link below. Nothing is downloaded until you click Download.")
@@ -708,7 +627,8 @@ class DownloadPage(QWidget):
         lay.addStretch()
         t = QLabel("Pick a source, or paste a link", objectName="EmptyTitle")
         t.setAlignment(Qt.AlignCenter)
-        s = muted("Click List Videos on a source above, or paste a TikTok, Instagram or YouTube link.\n"
+        s = muted("Open Download Sources to list a saved account (or add one by its username), or paste a "
+                  "TikTok, Instagram, YouTube or Snapchat link.\n"
                   "You'll see every video here first, then choose which ones to download and how to name them.")
         s.setAlignment(Qt.AlignCenter)
         s.setWordWrap(True)
@@ -721,7 +641,12 @@ class DownloadPage(QWidget):
     def _connect(self) -> None:
         self.fetch_btn.clicked.connect(self._fetch)
         self.url.returnPressed.connect(self._fetch)
-        self.save_source_btn.clicked.connect(self._save_pasted_source)
+        self.source_btn.clicked.connect(self.open_sources)
+        self.url.textChanged.connect(self._sync_source_button)
+        panel = self.sources_dialog.panel
+        panel.fetchRequested.connect(self.fetch_source)
+        panel.linksRequested.connect(self.fetch_links)
+        panel.manageAccounts.connect(self.openAccounts.emit)
         self.folder_btn.clicked.connect(self.choose_folder)
         self.open_folder_btn.clicked.connect(self.open_output_folder)
         self.manifest_btn.clicked.connect(self.open_manifest)
@@ -794,6 +719,7 @@ class DownloadPage(QWidget):
         self.url.setText(profile.last_source)
         self._loading_profile = False
         self._open_folder(self.folder)
+        self.sources_dialog.panel.set_profile(profile)
         self.refresh_sources()
         self._set_status("")
         self._start_details()
@@ -1076,42 +1002,32 @@ class DownloadPage(QWidget):
         self._stop_details()
         self.fetch_btn.setEnabled(False)
         self.fetch_btn.setText("Listing…")
-        for chip in self._chips():
-            chip.set_busy(True)
+        self.sources_dialog.panel.set_busy(True)
         self.progress.setRange(0, 0)
         self.progress.setVisible(True)
         self._set_status(message)
 
     # ================================================================ sources
-    def _chips(self) -> list["SourceChip"]:
-        return [self.chip_row.itemAt(i).widget() for i in range(self.chip_row.count())
-                if isinstance(self.chip_row.itemAt(i).widget(), SourceChip)]
-
     def refresh_sources(self) -> None:
-        """Rebuild the "Download from" chips: own accounts first, then saved profiles."""
-        while self.chip_row.count():
-            item = self.chip_row.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-        if not self.profile:
-            return
-        views = self.source_service.display_sources(self.profile.id)
-        for view in views:
-            chip = SourceChip(view, self)
-            chip.fetchRequested.connect(self.fetch_source)
-            chip.renameRequested.connect(self._rename_source)
-            chip.mineToggled.connect(self._toggle_mine)
-            chip.removeRequested.connect(self._remove_source)
-            chip.manageRequested.connect(self.openAccounts.emit)
-            chip.set_busy(self.fetching)
-            self.chip_row.addWidget(chip)
-        if not views:
-            hint = muted("No sources yet: paste a link, then Save This Link…")
-            tip(hint, "Saved sources become one-click buttons here. You can also connect a YouTube channel under "
-                      "Accounts.")
-            hint.setProperty("faint", True)
-            self.chip_row.addWidget(hint)
-        self.chip_row.addStretch()
+        """Keep the source button in step with the saved sources (the panel refreshes itself)."""
+        self._source_views = self.source_service.display_sources(self.profile.id) if self.profile else []
+        self._sync_source_button()
+
+    def _sync_source_button(self) -> None:
+        """The source button shows the source whose link is in the link field."""
+        text = self.url.text().strip()
+        target = normalize_url(text) if text and len(text.split()) == 1 else None
+        view = next((v for v in self._source_views if v.url and normalize_url(v.url) == target), None)
+        apply_button_state(self.source_btn, view)
+
+    def open_sources(self) -> None:
+        if self.profile:
+            self.sources_dialog.open_for(self.profile, self.url.text())
+
+    def fetch_links(self, links: list[str]) -> None:
+        """List links once without saving them (Snapchat Spotlight links from the Sources window)."""
+        self.url.setText(" ".join(links))
+        self._fetch()
 
     def fetch_source(self, view: SourceView) -> None:
         """One click: fetch from a saved source's URL or a connected channel."""
@@ -1139,44 +1055,6 @@ class DownloadPage(QWidget):
         self.account_fetch.failed.connect(lambda message: self._on_fetched([url], [], [(view.name, message)]))
         self.account_fetch.start()
 
-    def _save_pasted_source(self) -> None:
-        if not self.profile:
-            return
-        url = self.url.text().strip()
-        if not url or len(re.split(r"[\s,]+", url)) > 1:
-            QMessageBox.information(self, APP_NAME, "Paste one profile link to save it as a source.")
-            return
-        dialog = SourceDialog(default_name(url), self.profile.name, self)
-        if dialog.exec() != SourceDialog.Accepted:
-            return
-        try:
-            self.source_service.add(self.profile.id, url, dialog.name(), dialog.mine())
-        except SourceError as exc:
-            QMessageBox.warning(self, APP_NAME, str(exc))
-            return
-        self._set_status(f"Saved “{dialog.name() or default_name(url)}”. Next time it's one click above.")
-
-    def _rename_source(self, view: SourceView) -> None:
-        name, ok = QInputDialog.getText(self, "Rename This Source", "New name for this source:", text=view.name)
-        if ok:
-            try:
-                self.source_service.rename(view.source_id, name)
-            except SourceError as exc:
-                QMessageBox.warning(self, APP_NAME, str(exc))
-
-    def _toggle_mine(self, view: SourceView) -> None:
-        self.source_service.set_mine(view.source_id, not view.mine)
-
-    def _remove_source(self, view: SourceView) -> None:
-        extra = f" (and {view.duplicates} duplicate{'s' if view.duplicates != 1 else ''})" if view.duplicates else ""
-        if QMessageBox.question(self, "Remove Source", f"Remove “{view.name}”{extra} from this profile's sources?\n\n"
-                                "Videos already fetched or downloaded stay.") != QMessageBox.Yes:
-            return
-        target = normalize_url(view.url)
-        for other in self.source_service.all_sources(self.profile.id):
-            if other.kind == "saved" and normalize_url(other.url) == target:
-                self.source_service.remove(other.source_id)
-
     def _authorization_for(self, urls: list[str]) -> str | None:
         """Provenance: links to this profile's own accounts (saved as "mine", or a
         connected channel) are recorded as own content. Anything else is left
@@ -1189,8 +1067,7 @@ class DownloadPage(QWidget):
                     source_id: int | None = None, authorization: str | None = None) -> None:
         self.fetch_btn.setEnabled(True)
         self.fetch_btn.setText("List Videos")
-        for chip in self._chips():
-            chip.set_busy(False)
+        self.sources_dialog.panel.set_busy(False)
         self.progress.setRange(0, 1000)
         self.progress.setVisible(False)
         if source_id is not None and items:
@@ -1264,7 +1141,10 @@ class DownloadPage(QWidget):
         self.products_filter.set_videos(video_products(i) for i in self.model.items())
 
     def _on_product_filter(self, ids=None) -> None:
-        self.proxy.set_product_ids(self.products_filter.selection())
+        ids = self.products_filter.selection()
+        if (set(ids) if ids else None) == self.proxy._product_ids:
+            return                     # the menus were rebuilt, the choice didn't change: stay on this page
+        self.proxy.set_product_ids(ids)
         self.pager.set_page(0)
         self._update_counts()
 
