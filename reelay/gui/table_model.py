@@ -333,6 +333,18 @@ class VideoTableModel(QAbstractTableModel):
         self.refresh(key, (Col.COVER,))
 
 
+def _refilter(proxy: QSortFilterProxyModel, change) -> None:
+    """Change a proxy's filter state and re-filter, with Qt 6.10's beginFilterChange/endFilterChange
+    (invalidateFilter is deprecated) and the older call as a fallback."""
+    if hasattr(proxy, "beginFilterChange"):
+        proxy.beginFilterChange()
+        change()
+        proxy.endFilterChange(QSortFilterProxyModel.Direction.Rows)
+    else:
+        change()
+        proxy.invalidateFilter()
+
+
 class VideoFilterProxy(QSortFilterProxyModel):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -344,13 +356,11 @@ class VideoFilterProxy(QSortFilterProxyModel):
         self.setDynamicSortFilter(False)  # don't reshuffle rows while downloading
 
     def set_query(self, text: str) -> None:
-        self._query = text.strip().lower()
-        self.invalidateFilter()
+        _refilter(self, lambda: setattr(self, "_query", text.strip().lower()))
 
     def set_tag(self, tag: str | None) -> None:
         """Only videos with this hashtag (no #); empty shows every video."""
-        self._tag = (tag or "").lstrip("#").lower()
-        self.invalidateFilter()
+        _refilter(self, lambda: setattr(self, "_tag", (tag or "").lstrip("#").lower()))
 
     def set_product(self, product_id: str | None) -> None:
         """Only videos tagged with this product; empty shows every video."""
@@ -358,13 +368,11 @@ class VideoFilterProxy(QSortFilterProxyModel):
 
     def set_product_ids(self, ids: set | None) -> None:
         """Only videos tagged with one of these products (a brand's, or one); None = all."""
-        self._product_ids = set(ids) if ids else None
-        self.invalidateFilter()
+        _refilter(self, lambda: setattr(self, "_product_ids", set(ids) if ids else None))
 
     def set_state(self, state: str) -> None:
         """"pending" (not downloaded yet), "downloaded", or "" for every video."""
-        self._state = state or ""
-        self.invalidateFilter()
+        _refilter(self, lambda: setattr(self, "_state", state or ""))
 
     @property
     def filtering(self) -> bool:
@@ -456,8 +464,7 @@ class PageProxy(QSortFilterProxyModel):
         self.set_page(0)
 
     def set_page(self, page: int) -> None:
-        self.page = max(0, min(page, self.pages - 1))
-        self.invalidateRowsFilter()
+        _refilter(self, lambda: setattr(self, "page", max(0, min(page, self.pages - 1))))
         self.pageChanged.emit()
 
     def _clamp(self, *_args) -> None:
