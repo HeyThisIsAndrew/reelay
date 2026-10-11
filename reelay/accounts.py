@@ -71,6 +71,32 @@ class AccountService:
         otherwise Reelay's."""
         return self.own_oauth_client() or self.central_oauth_client()
 
+    @staticmethod
+    def central_pending() -> bool:
+        """Reelay's Google sign-in is set up in this build but not finished (the client ID is a placeholder)."""
+        from . import oauth_config
+        return oauth_config.pending_setup("google")
+
+    def client_for_issuer(self, issuer: str) -> OAuthClient | None:
+        """The Google app that can refresh tokens it issued: Reelay's or your own (older sign-ins: either)."""
+        if issuer == "reelay":
+            return self.central_oauth_client()
+        if issuer == "own":
+            return self.own_oauth_client()
+        return self.oauth_client()
+
+    def needs_reconnect(self, account: Account) -> str:
+        """Why a YouTube channel must be signed in again, or "" if it's fine."""
+        if account.platform != YOUTUBE:
+            return ""
+        tokens = self.load_tokens(account)
+        if tokens is None:
+            return "Signed out: sign in again"
+        if self.client_for_issuer(tokens.issuer) is None:
+            return ("Connected with your own Google project, which was removed: sign in again"
+                    if tokens.issuer == "own" else "Reelay's Google sign-in isn't available: sign in again")
+        return ""
+
     def google_client_source(self) -> str | None:
         """"own" (your Google project), "reelay" (Reelay's app) or None (needs setup)."""
         if self.own_oauth_client():
@@ -92,12 +118,13 @@ class AccountService:
 
     def client_for(self, account: Account) -> YouTubeClient:
         """Thread-safe to *use*; build it on the GUI thread."""
-        oauth = self.oauth_client()
-        if oauth is None:
-            raise YouTubeError("Add your Google API credentials in Accounts first.")
         tokens = self.load_tokens(account)
         if tokens is None:
             raise YouTubeError(f"Reconnect {account.display_name}: its sign-in is missing from the keychain.")
+        oauth = self.client_for_issuer(tokens.issuer)     # tokens only refresh with the app that issued them
+        if oauth is None:
+            raise YouTubeError(f"Reconnect {account.display_name} in Accounts: the Google app it was connected "
+                               "with isn't set up any more.")
         key = account.token_key
         return YouTubeClient(oauth, tokens, on_tokens=lambda t: self.save_tokens(key, t))
 
@@ -112,6 +139,7 @@ class AccountService:
         scopes = list(PROVIDERS["google"].scopes + PROVIDERS["google"].analytics_scopes) \
             if central and oauth == central else None
         tokens = authorize(oauth, open_browser=open_browser, cancel=cancel, scopes=scopes)
+        tokens.issuer = "reelay" if central and oauth == central else "own"
         channel = YouTubeClient(oauth, tokens).my_channel()
         return channel, tokens
 
@@ -133,7 +161,19 @@ class AccountService:
             tokens = self.load_tokens(account)
             if tokens:
                 threading.Thread(target=revoke, args=(tokens,), daemon=True).start()
+        else:
+            secret = self._secret(account)
+            if secret.get("via") == "reelay" and secret.get("access_token"):   # signed in with Reelay's app
+                from .oauth import revoke_access
+                threading.Thread(target=revoke_access, args=(account.platform, secret), daemon=True).start()
         self.tokens.delete(account.token_key)
+
+    def _secret(self, account: Account) -> dict:
+        try:
+            data = json.loads(self.tokens.get(account.token_key) or "{}")
+        except Exception:  # noqa: BLE001 — an unreadable keychain entry just isn't revoked
+            return {}
+        return data if isinstance(data, dict) else {}
 
     # ---------------------------------------------------------------- other platforms
     def credentials(self, account: Account) -> dict | None:

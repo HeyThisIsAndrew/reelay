@@ -2,6 +2,7 @@ import base64
 import hashlib
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -44,7 +45,13 @@ def _browser(params_for):
     def open_browser(url):
         q = dict(urllib.parse.parse_qsl(urllib.parse.urlparse(url).query))
         target = q["redirect_uri"] + "?" + urllib.parse.urlencode(params_for(q))
-        threading.Thread(target=lambda: urllib.request.urlopen(target, timeout=5).read(), daemon=True).start()
+
+        def visit():
+            try:
+                urllib.request.urlopen(target, timeout=5).read()
+            except urllib.error.HTTPError:      # a forged redirect gets an error page, like in a real browser
+                pass
+        threading.Thread(target=visit, daemon=True).start()
     return open_browser
 
 
@@ -64,9 +71,11 @@ def test_authorize_full_loopback_flow(fake_session):
 
 
 def test_authorize_rejects_state_mismatch_and_denial(fake_session):
-    with pytest.raises(yt.YouTubeError, match="didn't match"):
+    # A forged redirect is turned away and the real sign-in keeps waiting (here: until it times out),
+    # so another program can't end or hijack it.
+    with pytest.raises(yt.YouTubeError, match="Timed out"):
         yt.authorize(CLIENT, open_browser=_browser(lambda q: {"code": "x", "state": "forged"}),
-                     timeout=10, session=fake_session)
+                     timeout=1.5, session=fake_session)
     with pytest.raises(yt.YouTubeError, match="cancelled"):
         yt.authorize(CLIENT, open_browser=_browser(lambda q: {"error": "access_denied", "state": q["state"]}),
                      timeout=10, session=fake_session)

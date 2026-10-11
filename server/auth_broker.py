@@ -8,9 +8,14 @@ nothing longer than the few minutes a sign-in takes.
 
 Endpoints (all JSON):
   POST /v1/oauth/{provider}/token     {code, code_verifier, redirect_uri}  -> tokens   (TikTok: loopback flow)
-  GET  /v1/oauth/{provider}/callback  ?code&state  (Meta redirects here; result held for 10 minutes)
-  GET  /v1/oauth/session/{state}      -> tokens once, then forgotten (202 while waiting)
+  GET  /v1/oauth/{provider}/callback  ?code&state  (Meta redirects here). When the state starts with the app's
+                                      loopback port ("<port>.<random>"), the browser is sent straight back to
+                                      http://127.0.0.1:<port>/callback?state=…&key=<one-time key>; otherwise the
+                                      result is held for the older polling flow. Held for 10 minutes either way.
+  POST /v1/oauth/session/claim        {state, key} -> tokens once (both must match), then forgotten
+  GET  /v1/oauth/session/{state}      -> tokens once (older apps, no key), then forgotten; 202 while waiting
   POST /v1/oauth/{provider}/refresh   {refresh_token | access_token} -> tokens
+  POST /v1/oauth/tiktok/revoke        {access_token} -> revoked (needs the client secret, so it's done here)
 
 Run:  REELAY_BROKER_PUBLIC_URL=https://auth.example.com \\
       TIKTOK_CLIENT_KEY=… TIKTOK_CLIENT_SECRET=… \\
@@ -26,14 +31,18 @@ from __future__ import annotations
 
 import html
 import os
+import re
+import secrets
 import threading
 import time
+from urllib.parse import urlencode
 
 import requests
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 SESSION_TTL = 600
+LOOPBACK_STATE = re.compile(r"^(\d{4,5})\.[A-Za-z0-9_-]{20,}$")    # "<port>.<random>" from the desktop app
 META_GRAPH = "v23.0"
 
 _PAGE = """<!doctype html><meta charset="utf-8"><title>Reelay</title>
@@ -59,7 +68,8 @@ def default_config() -> dict:
 def create_broker(config: dict | None = None, session=None, clock=time.time) -> FastAPI:
     config = config or default_config()
     http = session or requests
-    sessions: dict[str, tuple[float, dict]] = {}
+    sessions: dict[str, tuple[float, dict]] = {}          # older polling flow: state → result
+    claims: dict[str, tuple[float, str, dict]] = {}       # bounce flow: state → (expires, one-time key, result)
     lock = threading.Lock()
     app = FastAPI(title="Reelay sign-in server", docs_url=None, redoc_url=None, openapi_url=None)
 
@@ -132,12 +142,45 @@ def create_broker(config: dict | None = None, session=None, clock=time.time) -> 
                 result = exchange(provider, code, redirect)
         except HTTPException as exc:
             result = {"error": exc.detail}
+        bounce = LOOPBACK_STATE.match(state)
+        if bounce and 1024 <= int(bounce.group(1)) <= 65535:
+            # Back to the app on this person's computer, with a one-time key to claim the result.
+            key = secrets.token_urlsafe(24)
+            with lock:
+                claims[state] = (clock() + SESSION_TTL, key, result)
+            query = {"state": state, "key": key} if "error" not in result else {"state": state, "error": "denied",
+                                                                                 "error_description": result["error"]}
+            return RedirectResponse(f"http://127.0.0.1:{bounce.group(1)}/callback?{urlencode(query)}", status_code=302)
         with lock:
             sessions[state] = (clock() + SESSION_TTL, result)
         ok = "error" not in result
         return HTMLResponse(_PAGE.format(title="You're connected" if ok else "Sign-in didn't finish",
                                          body="You can close this tab and go back to Reelay." if ok
                                          else html.escape(str(result["error"]))))
+
+    @app.post("/v1/oauth/session/claim")
+    async def claim(request: Request):
+        body = await request.json()
+        state, key = str(body.get("state", "")), str(body.get("key", ""))
+        now = clock()
+        with lock:
+            for k in [k for k, (expires, _key, _r) in claims.items() if expires < now]:
+                claims.pop(k, None)
+            entry = claims.get(state)
+            if entry is None or not key or not secrets.compare_digest(entry[1], key):
+                raise HTTPException(404, "This sign-in has expired. Start it again in Reelay.")
+            claims.pop(state, None)                       # handed out once, then forgotten
+        return JSONResponse(entry[2])
+
+    @app.post("/v1/oauth/tiktok/revoke")
+    async def tiktok_revoke(request: Request):
+        body = await request.json()
+        c = creds("tiktok")
+        resp = http.post("https://open.tiktokapis.com/v2/oauth/revoke/", data={
+            "client_key": c["id"], "client_secret": c["secret"], "token": body.get("access_token", "")}, timeout=30)
+        if resp.status_code != 200:
+            raise HTTPException(502, "TikTok didn't confirm the revoke.")
+        return JSONResponse({"revoked": True})
 
     @app.get("/v1/oauth/session/{state}")
     def session_result(state: str):

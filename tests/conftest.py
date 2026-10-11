@@ -62,6 +62,9 @@ class FakeSession:
     def get(self, url, **kwargs):
         return self.request("GET", url, **kwargs)
 
+    def delete(self, url, **kwargs):
+        return self.request("DELETE", url, **kwargs)
+
 
 @pytest.fixture
 def fake_session():

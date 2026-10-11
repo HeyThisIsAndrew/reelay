@@ -14,7 +14,6 @@ from __future__ import annotations
 import base64
 import hashlib
 import html
-import http.server
 import json
 import logging
 import secrets
@@ -85,6 +84,7 @@ class Tokens:
     refresh_token: str
     expires_at: float
     scope: str = ""
+    issuer: str = ""          # "reelay" (Reelay's Google app) | "own" (your Google project) | "" (older sign-ins)
 
     @property
     def expired(self) -> bool:
@@ -95,7 +95,11 @@ class Tokens:
 
     @classmethod
     def from_json(cls, text: str) -> Tokens:
-        return cls(**json.loads(text))
+        data = json.loads(text)
+        return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
+
+    def __repr__(self) -> str:   # never print tokens
+        return f"Tokens(scope={self.scope!r}, issuer={self.issuer!r})"
 
     @classmethod
     def from_response(cls, data: dict, previous_refresh: str = "") -> Tokens:
@@ -127,78 +131,19 @@ def build_auth_url(client: OAuthClient, redirect_uri: str, state: str, challenge
     return f"{AUTH_URL}?{urllib.parse.urlencode(query)}"
 
 
-_DONE_PAGE = """<!doctype html><meta charset="utf-8"><title>Reelay</title>
-<body style="background:#1f1e1d;color:#ecebe7;font-family:-apple-system,Segoe UI,sans-serif;
-display:flex;align-items:center;justify-content:center;height:90vh;text-align:center">
-<div><h2>{title}</h2><p style="color:#a9a8a2">{body}</p></div></body>"""
-
-
-class LoopbackReceiver:
-    """One-shot HTTP server on 127.0.0.1 that captures the OAuth redirect."""
-
-    def __init__(self) -> None:
-        self.result: dict[str, str] = {}
-        self._event = threading.Event()
-        receiver = self
-
-        class Handler(http.server.BaseHTTPRequestHandler):
-            def do_GET(self) -> None:  # noqa: N802
-                params = dict(urllib.parse.parse_qsl(urllib.parse.urlparse(self.path).query))
-                if not params:  # favicon etc.
-                    self.send_response(404)
-                    self.end_headers()
-                    return
-                receiver.result = params
-                ok = "code" in params
-                page = _DONE_PAGE.format(
-                    title="You're connected" if ok else "Connection cancelled",
-                    body="You can close this tab and go back to Reelay." if ok
-                    else html.escape(params.get("error", "No authorization code was returned.")))
-                body = page.encode()
-                self.send_response(200)
-                self.send_header("Content-Type", "text/html; charset=utf-8")
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
-                receiver._event.set()
-
-            def log_message(self, *_args) -> None:
-                pass
-
-        self.server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
-        self.port = self.server.server_address[1]
-        self._thread = threading.Thread(target=self.server.serve_forever, daemon=True)
-        self._thread.start()
-
-    @property
-    def redirect_uri(self) -> str:
-        return f"http://127.0.0.1:{self.port}/"
-
-    def wait(self, timeout: float, cancel: threading.Event | None = None) -> dict[str, str]:
-        deadline = time.monotonic() + timeout
-        try:
-            while not self._event.wait(0.2):
-                if cancel is not None and cancel.is_set():
-                    raise YouTubeError("Sign-in was cancelled.")
-                if time.monotonic() > deadline:
-                    raise YouTubeError("Timed out waiting for Google sign-in. Please try again.")
-            return self.result
-        finally:
-            self.server.shutdown()
-            self.server.server_close()
-
-
 def authorize(client: OAuthClient, open_browser: Callable[[str], object] = webbrowser.open,
               timeout: float = 300, cancel: threading.Event | None = None,
               session: requests.Session | None = None, scopes: list[str] | None = None) -> Tokens:
     """Run the full browser sign-in and return tokens."""
+    from .loopback import LoopbackError, LoopbackReceiver
     verifier, challenge = pkce_pair()
     state = secrets.token_urlsafe(24)
-    receiver = LoopbackReceiver()
+    receiver = LoopbackReceiver(state, path="/", label="Google sign-in")   # only the real redirect counts
     open_browser(build_auth_url(client, receiver.redirect_uri, state, challenge, scopes))
-    params = receiver.wait(timeout, cancel)
-    if params.get("state") != state:
-        raise YouTubeError("Sign-in response didn't match this request. Please try again.")
+    try:
+        params = receiver.wait(timeout, cancel)
+    except LoopbackError as exc:
+        raise YouTubeError(str(exc)) from None
     if "error" in params:
         raise YouTubeError("Google sign-in was cancelled." if params["error"] == "access_denied"
                            else f"Google sign-in failed: {params['error']}")
@@ -232,7 +177,9 @@ def refresh_tokens(client: OAuthClient, tokens: Tokens, session: requests.Sessio
     if resp.status_code != 200:
         raise YouTubeError(f"Couldn't refresh YouTube access: {data.get('error_description') or resp.status_code}",
                            resp.status_code)
-    return Tokens.from_response(data, previous_refresh=tokens.refresh_token)
+    fresh = Tokens.from_response(data, previous_refresh=tokens.refresh_token)
+    fresh.issuer = tokens.issuer
+    return fresh
 
 
 def revoke(tokens: Tokens, session: requests.Session | None = None) -> None:

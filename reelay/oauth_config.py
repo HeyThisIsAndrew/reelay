@@ -14,6 +14,10 @@ goes in REELAY_AUTH_BROKER_URL.
 
 Until a value is filled in, that platform keeps its current setup (your own
 Google project, App Passwords, pasted tokens).
+
+GOOGLE_CLIENT_ID ships as a placeholder until Reelay's Google app is approved: anything still containing
+PLACEHOLDER counts as "not set up", so the app says so plainly instead of sending people to a broken
+Google page. Replace it (or set REELAY_GOOGLE_CLIENT_ID) with the real client ID to switch it on.
 """
 
 from __future__ import annotations
@@ -21,8 +25,9 @@ from __future__ import annotations
 import os
 
 # Filled in when Reelay's apps are registered and approved. Empty = not available yet.
+PLACEHOLDER = "PLACEHOLDER"
 DEFAULTS: dict[str, str] = {
-    "GOOGLE_CLIENT_ID": "",
+    "GOOGLE_CLIENT_ID": f"REELAY_GOOGLE_CLIENT_ID_{PLACEHOLDER}.apps.googleusercontent.com",
     "GOOGLE_CLIENT_SECRET": "",
     "TIKTOK_CLIENT_ID": "",
     "INSTAGRAM_CLIENT_ID": "",
@@ -37,8 +42,19 @@ def value(name: str) -> str:
     return (os.environ.get(f"REELAY_{name}") or DEFAULTS.get(name, "")).strip()
 
 
+def is_placeholder(text: str) -> bool:
+    return PLACEHOLDER in (text or "")
+
+
 def client_id(provider: str) -> str:
-    return value(f"{provider.upper()}_CLIENT_ID")
+    """The provider's client ID, or "" while it's missing or still the placeholder."""
+    cid = value(f"{provider.upper()}_CLIENT_ID")
+    return "" if is_placeholder(cid) else cid
+
+
+def pending_setup(provider: str) -> bool:
+    """True while this build only has the placeholder for the provider (set up, but not finished)."""
+    return is_placeholder(value(f"{provider.upper()}_CLIENT_ID"))
 
 
 def broker_url() -> str:

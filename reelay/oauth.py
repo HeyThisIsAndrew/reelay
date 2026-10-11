@@ -12,8 +12,10 @@ Each platform's rules (checked against their docs, October 2026):
 - Instagram, Threads, Facebook (Meta): the code exchange needs the app secret
   and must happen server-side, and redirect URIs must be registered https
   addresses. So the platform redirects to the broker, which exchanges the code
-  (and swaps it for a long-lived token); the app picks the result up with the
-  one-time `state` it generated.
+  (and swaps it for a long-lived token), then sends the browser back to this
+  computer's loopback receiver with a one-time key; the app claims the tokens
+  with the state it generated plus that key. The state starts with the
+  receiver's port ("<port>.<random>") so the broker knows where to send it.
 - Bluesky: atproto OAuth (PAR + DPoP, public client) is planned; App Passwords
   keep working until then.
 
@@ -99,6 +101,9 @@ def availability(provider: Provider) -> tuple[bool, str]:
     """(can sign in now, why not)."""
     if provider.status != "ready":
         return False, provider.note
+    if oauth_config.pending_setup(provider.key):
+        return False, (f"Reelay's one-click {provider.label} sign-in isn't finished being set up yet. Until it is, "
+                       "use Advanced Setup to connect with your own developer keys.")
     if not oauth_config.client_id(provider.key):
         return False, f"One-click {provider.label} sign-in arrives once Reelay's {provider.label} app is approved."
     if provider.exchange == "device" and not oauth_config.value(f"{provider.key.upper()}_CLIENT_SECRET"):
@@ -178,7 +183,7 @@ def _error(data: dict, fallback) -> str:
 # ====================================================================== the flow
 def sign_in(provider_key: str, open_browser: Callable[[str], object] = webbrowser.open,
             cancel: threading.Event | None = None, session=None, timeout: float = 300,
-            poll_interval: float = 1.5, analytics: bool = True) -> TokenSet:
+            analytics: bool = True) -> TokenSet:
     """Run the browser sign-in for one platform with Reelay's app and return
     its tokens. Raises SignInError. Blocking: call from a worker thread."""
     provider = PROVIDERS[provider_key]
@@ -191,24 +196,28 @@ def sign_in(provider_key: str, open_browser: Callable[[str], object] = webbrowse
     verifier, challenge = pkce_pair(provider.pkce) if provider.pkce else ("", None)
     state = secrets.token_urlsafe(32)
 
+    from .loopback import LoopbackReceiver
     if provider.redirect == "broker":
+        # Meta → broker → back to this computer with a one-time key → claim the tokens.
+        receiver = LoopbackReceiver(path="/callback", label=f"{provider.label} sign-in")
+        state = f"{receiver.port}.{state}"
+        receiver.expect(state)
         redirect_uri = f"{broker}/v1/oauth/{provider.key}/callback"
         open_browser(authorize_url(provider, client_id, redirect_uri, state, challenge, analytics))
-        return _poll_broker(http, broker, state, cancel, timeout, poll_interval)
+        params = _wait(receiver, provider, timeout, cancel)
+        if not params.get("key"):
+            raise SignInError(f"The {provider.label} sign-in came back without its key. Please try again.")
+        resp = http.post(f"{broker}/v1/oauth/session/claim", json={"state": state, "key": params["key"]},
+                         timeout=30)
+        data = _json(resp)
+        if resp.status_code != 200 or data.get("error"):
+            raise SignInError(f"Couldn't finish {provider.label} sign-in: {_error(data, resp.status_code)}")
+        return TokenSet.from_response(data)
 
-    from .youtube import LoopbackReceiver, YouTubeError
-    receiver = LoopbackReceiver()
-    redirect_uri = f"http://127.0.0.1:{receiver.port}{provider.loopback_path}"
+    receiver = LoopbackReceiver(state, path=provider.loopback_path, label=f"{provider.label} sign-in")
+    redirect_uri = receiver.redirect_uri
     open_browser(authorize_url(provider, client_id, redirect_uri, state, challenge, analytics))
-    try:
-        params = receiver.wait(timeout, cancel)
-    except YouTubeError as exc:
-        raise SignInError(str(exc).replace("Google", provider.label)) from None
-    if params.get("state") != state:
-        raise SignInError("The sign-in response didn't match this request. Please try again.")
-    if "error" in params:
-        raise SignInError(f"{provider.label} sign-in was cancelled." if params["error"] in ("access_denied",)
-                          else f"{provider.label} sign-in failed: {params.get('error_description') or params['error']}")
+    params = _wait(receiver, provider, timeout, cancel)
     code = urllib.parse.unquote(params.get("code", ""))
     if provider.exchange == "device":
         resp = http.post(provider.token_url, data={
@@ -224,26 +233,39 @@ def sign_in(provider_key: str, open_browser: Callable[[str], object] = webbrowse
     return TokenSet.from_response(data)
 
 
-def _poll_broker(http, broker: str, state: str, cancel, timeout: float, interval: float) -> TokenSet:
-    """Meta redirects to the Reelay server; collect the result with our one-time state."""
-    deadline = time.monotonic() + timeout
-    while True:
-        if cancel is not None and cancel.is_set():
-            raise SignInError("Sign-in was cancelled.")
-        if time.monotonic() > deadline:
-            raise SignInError("Timed out waiting for sign-in. Please try again.")
-        try:
-            resp = http.get(f"{broker}/v1/oauth/session/{state}", timeout=15)
-        except requests.RequestException:
-            resp = None
-        if resp is not None and resp.status_code == 200:
-            data = _json(resp)
-            if data.get("error"):
-                raise SignInError(f"Sign-in failed: {_error(data, 'unknown error')}")
-            return TokenSet.from_response(data)
-        if resp is not None and resp.status_code not in (202, 404):
-            raise SignInError(f"The Reelay sign-in server answered {resp.status_code}.")
-        time.sleep(interval)
+def _wait(receiver, provider: Provider, timeout: float, cancel) -> dict:
+    """The redirect's parameters (the receiver has already checked the path and state)."""
+    from .loopback import LoopbackError
+    try:
+        params = receiver.wait(timeout, cancel)
+    except LoopbackError as exc:
+        raise SignInError(str(exc)) from None
+    if "error" in params:
+        raise SignInError(f"{provider.label} sign-in was cancelled." if params["error"] in ("access_denied",)
+                          else f"{provider.label} sign-in failed: {params.get('error_description') or params['error']}")
+    return params
+
+
+def revoke_access(platform: str, secret: dict, session=None) -> bool:
+    """Best effort, on disconnect: tell the platform to drop Reelay's access. Never raises.
+
+    TikTok goes through the broker (revoking needs the client secret); Facebook revokes the user's grant
+    directly. Instagram and Threads offer no revoke call for apps: people remove access in the app's
+    settings, and an unused token expires on its own."""
+    http = session or requests
+    token = secret.get("access_token", "")
+    try:
+        if platform == "tiktok" and oauth_config.broker_url():
+            resp = http.post(f"{oauth_config.broker_url()}/v1/oauth/tiktok/revoke", json={"access_token": token},
+                             timeout=15)
+            return resp.status_code == 200
+        if platform == "facebook":
+            resp = http.delete("https://graph.facebook.com/v23.0/me/permissions", params={"access_token": token},
+                               timeout=15)
+            return resp.status_code == 200
+    except requests.RequestException:
+        pass
+    return False
 
 
 def refresh(provider_key: str, tokens: TokenSet, session=None) -> TokenSet:
