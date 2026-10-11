@@ -5,6 +5,7 @@ Runs without a window and without network access. Exit code 0 = all good.
 
 from __future__ import annotations
 
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -50,12 +51,20 @@ def run() -> int:
         from .models import VideoItem
         from .store import Store
         with tempfile.TemporaryDirectory() as tmp:
-            store = Store(Path(tmp) / "t.db")
-            profile = store.create_profile("check", tmp)
-            row = store.save_video(profile.id, VideoItem(platform="TikTok", video_id="1", url="u"))
-            store.update_ticket(row, {"transcript": "polarized sunglasses"})
-            assert store.search(profile.id, "sungl"), "full-text search (FTS5) isn't working"
-            store.close()
+            home = os.environ.get("REELAY_HOME")
+            os.environ["REELAY_HOME"] = tmp       # its own data folder: the check never touches the real one
+            try:
+                store = Store(Path(tmp) / "t.db")
+                profile = store.create_profile("check", tmp)
+                row = store.save_video(profile.id, VideoItem(platform="TikTok", video_id="1", url="u"))
+                store.update_ticket(row, {"transcript": "polarized sunglasses"})
+                assert store.search(profile.id, "sungl"), "full-text search (FTS5) isn't working"
+                store.close()
+            finally:
+                if home is None:
+                    os.environ.pop("REELAY_HOME", None)
+                else:
+                    os.environ["REELAY_HOME"] = home
         return "ok, with full-text search"
 
     def captions():
