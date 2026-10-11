@@ -60,6 +60,10 @@ def log_dir() -> Path:
 
 
 def default_library_root() -> Path:
-    """~/Movies/Reelay on macOS, ~/Videos/Reelay elsewhere."""
+    """~/Movies/Reelay on macOS, ~/Videos/Reelay elsewhere (inside REELAY_HOME when that's set, so tests
+    and throwaway runs never write into the real Movies folder)."""
+    override = _home_override()
+    if override is not None:
+        return override / "Videos"
     movies = Path.home() / ("Movies" if sys.platform == "darwin" else "Videos")
     return (movies if movies.is_dir() else Path.home()) / APP_NAME
