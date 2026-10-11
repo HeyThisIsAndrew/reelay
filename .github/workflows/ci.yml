@@ -2,19 +2,17 @@
 # release.yml, when a release is published or someone starts it by hand.
 name: CI
 
+# PAUSED (October 2026): the GitHub Actions minutes for this month are used up, so tests and builds run
+# locally on the Mac (`python -m pytest -q`, `./packaging/build_mac.sh`). The workflow is also disabled on
+# GitHub (`gh workflow disable CI`). To bring it back: restore the push / pull_request triggers below, then
+# `gh workflow enable CI`.
 on:
-  push:
-    branches: [main]
-    paths-ignore:            # docs-only commits don't need a test run
-      - "docs/**"
-      - "**/*.md"
-      - "LICENSE*"
-  pull_request:
-    paths-ignore:
-      - "docs/**"
-      - "**/*.md"
-      - "LICENSE*"
   workflow_dispatch:
+  # push:
+  #   branches: [main]
+  #   paths-ignore: ["docs/**", "**/*.md", "LICENSE*"]
+  # pull_request:
+  #   paths-ignore: ["docs/**", "**/*.md", "LICENSE*"]
 
 # A newer push to the same branch cancels the run still going for the older one.
 concurrency:
