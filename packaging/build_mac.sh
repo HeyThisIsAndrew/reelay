@@ -4,21 +4,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-PY=${PYTHON:-.venv/bin/python}
-if [ ! -x "$PY" ]; then
-  python3 -m venv .venv
-  PY=.venv/bin/python
-fi
-
-"$PY" -m pip install -q -r requirements.txt -r requirements-dev.txt
-"$PY" packaging/make_icons.py
-"$PY" -m PyInstaller --noconfirm --clean packaging/Reelay.spec
-
-APP="dist/Reelay.app"
-VERSION=$("$PY" -c "import reelay; print(reelay.__version__)")
-ARCH=$(uname -m)
-DMG="dist/Reelay-${VERSION}-mac-${ARCH}.dmg"
-
+# ---- signing preflight: before anything is built, so a wrong setup fails in seconds
 # Sign with a stable identity when there is one, so macOS remembers "Allow"
 # (folder access, Keychain) across rebuilds. An ad-hoc signature changes with
 # every build, which makes macOS ask again each time.
@@ -54,12 +40,45 @@ if [ "$IDENTITY" != "-" ]; then
   IDENTITY_NAME=$(security find-identity -v -p codesigning \
     | awk -v id="$IDENTITY" '$2==id || index($0, id) {$1="";$2=""; print; exit}' | sed 's/^ *//')
 fi
-NOTARIZE=${REELAY_NOTARY_PROFILE:-}
-if [ -n "$NOTARIZE" ] && [[ "$IDENTITY_NAME" != *"Developer ID Application"* ]]; then
-  echo "REELAY_NOTARY_PROFILE is set, but notarization needs a \"Developer ID Application\" identity" >&2
-  echo "(found: ${IDENTITY_NAME:-ad-hoc})." >&2
+if [ "$IDENTITY" != "-" ] && [ -z "$IDENTITY_NAME" ]; then
+  echo "Signing identity \"$IDENTITY\" isn't in this keychain (see: security find-identity -v -p codesigning)." >&2
   exit 1
 fi
+NOTARIZE=${REELAY_NOTARY_PROFILE:-}
+if [ -n "$NOTARIZE" ]; then
+  if [[ "$IDENTITY_NAME" != *"Developer ID Application"* ]]; then
+    echo "REELAY_NOTARY_PROFILE is set, but notarization needs a \"Developer ID Application\" identity" >&2
+    echo "(found: ${IDENTITY_NAME:-ad-hoc}). See docs/release-signing.md." >&2
+    exit 1
+  fi
+  if ! xcrun notarytool history --keychain-profile "$NOTARIZE" >/dev/null 2>&1; then
+    echo "Notarization profile \"$NOTARIZE\" couldn't be used (not stored in this keychain, or no network)." >&2
+    echo "Store it with: xcrun notarytool store-credentials $NOTARIZE --apple-id … --team-id … --password …" >&2
+    exit 1
+  fi
+fi
+if [ "$IDENTITY" = "-" ]; then
+  echo "Preflight: ad-hoc signature, no hardened runtime, not notarized"
+else
+  echo "Preflight: $IDENTITY_NAME, hardened runtime, $([ -n "$NOTARIZE" ] && echo "notarized ($NOTARIZE)" || echo "not notarized")"
+fi
+if [ -n "${REELAY_PREFLIGHT_ONLY:-}" ]; then exit 0; fi   # checks only (used by the tests)
+
+
+PY=${PYTHON:-.venv/bin/python}
+if [ ! -x "$PY" ]; then
+  python3 -m venv .venv
+  PY=.venv/bin/python
+fi
+
+"$PY" -m pip install -q -r requirements.txt -r requirements-dev.txt
+"$PY" packaging/make_icons.py
+"$PY" -m PyInstaller --noconfirm --clean packaging/Reelay.spec
+
+APP="dist/Reelay.app"
+VERSION=$("$PY" -c "import reelay; print(reelay.__version__)")
+ARCH=$(uname -m)
+DMG="dist/Reelay-${VERSION}-mac-${ARCH}.dmg"
 
 SIGN_OPTS=(--force --deep --sign "$IDENTITY")
 if [ "$IDENTITY" = "-" ]; then

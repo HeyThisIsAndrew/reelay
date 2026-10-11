@@ -200,6 +200,11 @@ class Pipeline:
         uploads.completion_handler = self._on_upload_finished
         uploads.progress_handler = self._on_upload_progress
         uploads.pause_handler = self.pause_upload
+        try:     # the first time this computer opens this database, its folders are the ones it may post from
+            from .trusted_folders import first_open
+            first_open(store)
+        except Exception:  # noqa: BLE001 — never block opening the app; untrusted folders are just refused
+            log.exception("Couldn't record this database's folders as trusted")
 
     # ================================================================ reads
     def _row(self, row_id: int) -> VideoRow:
@@ -259,8 +264,23 @@ class Pipeline:
         return original
 
     def media_roots(self, row: VideoRow) -> list[str]:
-        """The folders a video's files may live in: the profile's folder and the one it was downloaded to."""
+        """The folders a video's files may live in: the profile's folder and the one it was downloaded to,
+        but only those this computer trusts (trusted_folders.py; the database alone can't add one)."""
+        from .trusted_folders import is_trusted
+        return [f for f in self._candidate_roots(row) if is_trusted(f)]
+
+    def _candidate_roots(self, row: VideoRow) -> list[str]:
         return [f for f in (self._profile(row.profile_id).output_folder, row.item.folder) if f]
+
+    def file_problem(self, row: VideoRow) -> str:
+        """Why there's no file to post for this video, in plain words."""
+        from .trusted_folders import is_trusted
+        untrusted = [f for f in self._candidate_roots(row) if not is_trusted(f)]
+        original = self.original_path(row)
+        if untrusted and original is not None and os.path.lexists(original):
+            return (f"Reelay won't post from {untrusted[0]}: that folder wasn't chosen on this computer. Choose it "
+                    "in the Library's Download Settings (Where videos go) if it's right.")
+        return "The video file is missing. Download it again first."
 
     def original_path(self, row: VideoRow) -> Path | None:
         return row.item.path(self._profile(row.profile_id).output_folder)
@@ -810,7 +830,7 @@ class Pipeline:
             if platform not in Platform.ALL:
                 add(f"Unknown platform “{platform}”.")
         if path is None or not path.is_file():
-            add("The video file is missing. Download it again first.")
+            add(self.file_problem(row))
         when = parse_utc(post.publish_at)
         if post.publish_at and when is None:
             add("The scheduled time isn't valid.")
@@ -1026,7 +1046,7 @@ class Pipeline:
             raise PermanentError("No YouTube channel is connected for this post.")
         path = self.video_path(row)
         if path is None or not path.is_file():
-            raise PermanentError("The video file is missing.")
+            raise PermanentError(self.file_problem(row))
         try:
             client = self.accounts.client_for(account)
         except YouTubeError as exc:
@@ -1201,7 +1221,7 @@ class Pipeline:
             raise PermanentError(f"{label}: the sign-in is missing from the keychain. Reconnect it in Accounts.")
         path = self.video_path(row)
         if path is None or not path.is_file():
-            raise PermanentError("The video file is missing.")
+            raise PermanentError(self.file_problem(row))
         text = ""
         if dispatch.platform in (Platform.BLUESKY, Platform.THREADS):
             try:

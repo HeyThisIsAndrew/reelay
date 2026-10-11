@@ -461,3 +461,85 @@ def test_search_finds_spoken_words(api):
     assert "«sunglasses»" in r["results"][0]["snippet"]
     r = api.get("/v1/search", params={"profile": api.world.profile.name, "q": "letting go"}).json()
     assert r["total"] == 4 and not r["results"][0]["spoken"]           # original captions, downloaded or not
+
+
+# ------------------------------------------------------------------ network exposure, with real servers
+def _firewall_on() -> bool:
+    """Binding to every interface makes macOS ask about incoming connections when its firewall is on."""
+    import subprocess
+    import sys
+    if sys.platform != "darwin":
+        return False
+    out = subprocess.run(["/usr/libexec/ApplicationFirewall/socketfilterfw", "--getglobalstate"],
+                         capture_output=True, text=True).stdout
+    return "enabled" in out.lower()
+
+
+def _lan_address() -> str | None:
+    """This computer's own network address (no packet is sent), or None when there's no network."""
+    import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("192.0.2.1", 9))
+        ip = s.getsockname()[0]
+    except OSError:
+        return None
+    finally:
+        s.close()
+    return None if ip.startswith("127.") else ip
+
+
+def test_lan_access_works_only_when_explicitly_enabled(tmp_path, monkeypatch):
+    disable_publishing(monkeypatch)
+    world = make_world(tmp_path, monkeypatch)
+    auth = {"Authorization": f"Bearer {TOKEN}"}
+
+    def serve():
+        server = ApiServer(create_app(world.store, world.pipeline, world.accounts, lambda: TOKEN, MediaLinks()),
+                           port=0)
+        assert server.start()
+        return server, server._server.servers[0].sockets[0].getsockname()[0]
+    lan = _lan_address()
+    # 1) REELAY_HOST=0.0.0.0 alone: still only this computer, and a LAN-style Host is refused.
+    monkeypatch.setenv("REELAY_HOST", "0.0.0.0")
+    monkeypatch.delenv("REELAY_ALLOW_NETWORK", raising=False)
+    server, listening = serve()
+    try:
+        assert listening == "127.0.0.1"
+        assert requests.get(f"http://127.0.0.1:{server.port}/openapi.json", timeout=10).status_code == 200
+        assert requests.get(f"http://127.0.0.1:{server.port}/openapi.json", headers={"Host": "192.168.1.5"},
+                            timeout=10).status_code == 400
+        if lan:
+            with pytest.raises(requests.ConnectionError):
+                requests.get(f"http://{lan}:{server.port}/openapi.json", timeout=5)
+    finally:
+        server.stop()
+    if _firewall_on():
+        pytest.skip("macOS firewall is on: not binding to every interface in a test (it would ask)")
+    # 2) With the opt-in: reachable on this Mac's network address, still token-protected, still Host-checked.
+    monkeypatch.setenv("REELAY_ALLOW_NETWORK", "1")
+    server, listening = serve()
+    try:
+        assert listening == "0.0.0.0"
+        base = f"http://{lan or '127.0.0.1'}:{server.port}"
+        assert requests.get(f"{base}/openapi.json", timeout=10).status_code == 200
+        assert requests.get(f"{base}/v1/board", params={"profile": "Lydia Livingood"}, timeout=10).status_code == 401
+        assert requests.get(f"{base}/v1/board", params={"profile": "Lydia Livingood"}, headers=auth,
+                            timeout=10).status_code == 200
+        assert requests.get(f"{base}/openapi.json", headers={"Host": "evil.example"}, timeout=10).status_code == 400
+    finally:
+        server.stop()
+        world.store.close()
+
+
+def test_web_pages_get_no_cross_origin_access(api):
+    """A page on another origin can't read the API: no CORS headers, preflights aren't granted."""
+    pre = requests.options(f"{api.base}/v1/board", headers={"Origin": "https://evil.example",
+                                                            "Access-Control-Request-Method": "GET",
+                                                            "Access-Control-Request-Headers": "authorization"},
+                           timeout=10)
+    assert "access-control-allow-origin" not in {k.lower() for k in pre.headers}
+    assert pre.status_code >= 400
+    r = requests.get(f"{api.base}/v1/board", params={"profile": "Lydia Livingood"},
+                     headers={"Authorization": f"Bearer {TOKEN}", "Origin": "https://evil.example"}, timeout=10)
+    assert r.status_code == 200 and "access-control-allow-origin" not in {k.lower() for k in r.headers}

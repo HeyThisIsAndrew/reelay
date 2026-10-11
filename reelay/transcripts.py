@@ -67,10 +67,28 @@ def pick_track(info: dict) -> dict | None:
     return None
 
 
+def _caption_bytes(ydl, track: dict) -> bytes:
+    """The caption file. On the platform's own site (e.g. YouTube's timedtext) it goes through yt-dlp, with
+    its cookies; anywhere else (a CDN) it's fetched pinned to a checked public address (safefetch), so a
+    name that switches to a local address, or a redirect to one, can't be used."""
+    from .safefetch import FetchRefused, fetch_public
+    from .urlsafety import DOWNLOAD_HOSTS, asset_url_problem, fetch_url_problem
+    link = track["url"]
+    problem = asset_url_problem(link, resolve=False)
+    if problem:
+        raise TranscriptError(f"The captions link can't be used: {problem}")
+    if fetch_url_problem(link, DOWNLOAD_HOSTS) is None:
+        return ydl.urlopen(link).read()
+    try:
+        return fetch_public(link, headers=track.get("http_headers") or None)
+    except FetchRefused as exc:
+        raise TranscriptError(f"The captions link can't be used: {exc}") from None
+
+
 def fetch_transcript(url: str, ydl_opts: dict, ydl_factory=None) -> tuple[str, dict]:
     """(transcript text, the track used) for the post at `url`. Raises
     TranscriptError. Network: one metadata request and one captions request."""
-    from .urlsafety import app_ydl, asset_url_problem, fetch_url_problem
+    from .urlsafety import app_ydl, fetch_url_problem
     from .ytdl import guarded_ydl
     problem = fetch_url_problem(url)                   # before any network activity
     if problem:
@@ -85,10 +103,7 @@ def fetch_transcript(url: str, ydl_opts: dict, ydl_factory=None) -> tuple[str, d
             track = pick_track(info or {})
             if track is None:
                 raise TranscriptError("This post has no captions to make a transcript from.")
-            problem = asset_url_problem(track["url"])
-            if problem:
-                raise TranscriptError(f"The captions link can't be used: {problem}")
-            data = ydl.urlopen(track["url"]).read().decode("utf-8", "replace")
+            data = _caption_bytes(ydl, track).decode("utf-8", "replace")
     except TranscriptError:
         raise
     except Exception as exc:  # noqa: BLE001 — yt-dlp raises many types; report them plainly

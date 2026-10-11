@@ -449,6 +449,9 @@ def test_valid_library_and_custom_folder_files_are_posted(world, tmp_path):
     custom = tmp_path / "older-folder"                               # downloaded before the folder moved
     _mp4(custom / "clip.mp4")
     moved = replace(row, item=replace(row.item, folder=str(custom), filename="clip.mp4"))
+    assert world.pipeline.video_path(moved) is None                  # the database alone can't add a folder
+    from reelay import trusted_folders
+    trusted_folders.trust(custom)                                    # chosen on this computer earlier
     assert world.pipeline.video_path(moved) == custom / "clip.mp4"
 
 
@@ -699,11 +702,9 @@ def test_names_are_looked_up_and_must_point_somewhere_public(monkeypatch):
 
 
 def test_cover_downloads_skip_local_links(monkeypatch, tmp_path):
-    import urllib.request
-
     from reelay.gui import thumbnails
     opened = []
-    monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **k: opened.append(a) or (_ for _ in ()).throw(OSError()))
+    monkeypatch.setattr(thumbnails, "fetch_public", lambda *a, **k: opened.append(a) or b"")
 
     class Signals:
         class done:
@@ -885,3 +886,187 @@ def test_the_backup_includes_changes_still_in_the_wal(tmp_path, monkeypatch):
     assert backup.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
     backup.close()
     writer.close()
+
+
+# ====================================================================== folders the database alone can't choose
+def test_folders_named_only_by_the_database_are_refused_with_a_clear_reason(world, tmp_path):
+    from dataclasses import replace
+
+    from reelay import video_tools as vt
+    row = world.store.get_video(world.rows[0])
+    private = _mp4(tmp_path / "Private" / "family.mp4")
+    evil = replace(row, item=replace(row.item, folder=str(private.parent), filename="family.mp4"))
+    assert world.pipeline.video_path(evil) is None
+    assert "wasn't chosen on this computer" in world.pipeline.file_problem(evil)
+    profile = world.store.get_profile(row.profile_id)
+    profile.output_folder = "/"                                       # an edited (shared or restored) database
+    world.store.update_profile(profile)
+    vt.set_edit(world.store, row.id, private, ["strip"])
+    assert world.pipeline.video_path(world.store.get_video(row.id)) == world.folder / "video0.mp4"  # still the
+    # original: "/" isn't trusted, and the original sits in the folder this computer chose
+    assert any("wasn't chosen on this computer" in p or "missing" in p
+               for p in [world.pipeline.file_problem(evil)])
+
+
+def test_a_database_is_trusted_on_first_open_only(tmp_path):
+    from reelay import trusted_folders
+    from reelay.store import Store
+    db = tmp_path / "shared.db"
+    store = Store(db)
+    store.create_profile("Lydia", tmp_path / "lydia-videos")
+    store.close()
+    trusted_folders._save({"folders": [], "databases": []})          # as on a computer that never opened it
+    store = Store(db)
+    assert trusted_folders.first_open(store) is True                  # e.g. Open Shared Database, or updating
+    assert trusted_folders.is_trusted(tmp_path / "lydia-videos" / "sub")
+    profile = store.list_profiles()[0]
+    profile.output_folder = str(tmp_path / "somewhere-else")          # later edits by anyone with the file
+    store.update_profile(profile)
+    assert trusted_folders.first_open(store) is False
+    assert not trusted_folders.is_trusted(tmp_path / "somewhere-else")
+    store.close()
+
+
+def test_the_trust_list_is_private_and_fails_closed(tmp_path):
+    import stat as st
+
+    from reelay import paths, trusted_folders
+    trusted_folders.trust(tmp_path / "videos")
+    f = paths.data_dir() / trusted_folders.FILE_NAME
+    if os.name == "posix":
+        assert st.S_IMODE(os.stat(f).st_mode) & 0o077 == 0
+    f.write_text("{not json")
+    assert not trusted_folders.is_trusted(tmp_path / "videos")         # unreadable: nothing is trusted
+
+
+def test_new_profiles_trust_their_own_folder(tmp_path):
+    from reelay import trusted_folders
+    from reelay.store import Store
+    store = Store(tmp_path / "s.db")
+    store.create_profile("New", tmp_path / "new-videos")
+    assert trusted_folders.is_trusted(tmp_path / "new-videos")
+    store.close()
+
+
+# ====================================================================== pinned downloads (covers, caption files)
+@pytest.fixture
+def local_http():
+    """A tiny HTTP server on 127.0.0.1 whose routes the test sets."""
+    import http.server
+    import threading
+    routes = {}
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):                                               # noqa: N802
+            status, headers, body = routes.get(self.path, (404, {}, b""))
+            self.send_response(status)
+            for k, v in headers.items():
+                self.send_header(k, v)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            routes.setdefault("_hosts", []).append(self.headers.get("Host"))
+
+        def log_message(self, *a):
+            pass
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield server.server_address[1], routes
+    server.shutdown()
+
+
+def _resolver(monkeypatch, answers):
+    """Stub DNS: each name returns its answers in turn (to simulate a name that changes)."""
+    calls = []
+    real = socket.getaddrinfo
+
+    def fake(host, port, *a, **k):
+        if k.get("flags", 0) & socket.AI_NUMERICHOST:
+            return real(host, port, *a, **k)
+        calls.append(host)
+        seq = answers.get(host)
+        if not seq:
+            raise socket.gaierror("not found")
+        ip = seq.pop(0) if len(seq) > 1 else seq[0]
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, port))]
+    monkeypatch.setattr(socket, "getaddrinfo", fake)
+    return calls
+
+
+def test_a_name_is_looked_up_once_and_the_checked_address_is_used(local_http, monkeypatch):
+    from reelay.safefetch import fetch_public
+    port, routes = local_http
+    routes["/cover.jpg"] = (200, {}, b"JPEGDATA")
+    # The first answer is the (test-)allowed address; a rebinding second answer would be a private one.
+    calls = _resolver(monkeypatch, {"cdn.test": ["127.0.0.1", "10.0.0.5"]})
+    data = fetch_public(f"http://cdn.test:{port}/cover.jpg", allowed=lambda ip: ip == "127.0.0.1")
+    assert data == b"JPEGDATA" and calls == ["cdn.test"]                 # one lookup, no second chance
+    assert routes["_hosts"] == [f"cdn.test:{port}"]                      # the name still goes in Host
+
+
+def test_names_pointing_anywhere_private_are_never_connected(monkeypatch, no_network):
+    from reelay.safefetch import FetchRefused, fetch_public
+    _resolver(monkeypatch, {"rebind.test": ["10.0.0.5"], "mixed.test": ["151.101.1.1"]})
+    with pytest.raises(FetchRefused, match="local network"):
+        fetch_public("https://rebind.test/c.jpg")
+
+
+def test_redirects_are_checked_hop_by_hop(local_http, monkeypatch):
+    from reelay.safefetch import FetchRefused, fetch_public
+    port, routes = local_http
+    allowed = {"127.0.0.1"}
+    _resolver(monkeypatch, {"cdn.test": ["127.0.0.1"], "inside.test": ["10.0.0.5"]})
+    routes["/ok"] = (302, {"Location": f"http://cdn.test:{port}/final"}, b"")
+    routes["/final"] = (200, {}, b"DONE")
+    assert fetch_public(f"http://cdn.test:{port}/ok", allowed=lambda ip: ip in allowed) == b"DONE"
+    for target in ("http://169.254.169.254/latest/meta-data", "http://inside.test/x", "file:///etc/passwd",
+                   "http://2130706433/x"):
+        routes["/bounce"] = (302, {"Location": target}, b"")
+        with pytest.raises(FetchRefused):
+            fetch_public(f"http://cdn.test:{port}/bounce", allowed=lambda ip: ip in allowed)
+    routes["/loop"] = (302, {"Location": f"http://cdn.test:{port}/loop"}, b"")
+    with pytest.raises(FetchRefused, match="Too many redirects"):
+        fetch_public(f"http://cdn.test:{port}/loop", allowed=lambda ip: ip in allowed)
+    routes["/big"] = (200, {}, b"x" * 2048)
+    with pytest.raises(FetchRefused, match="larger"):
+        fetch_public(f"http://cdn.test:{port}/big", allowed=lambda ip: ip in allowed, max_bytes=1024)
+
+
+def test_https_is_verified_for_the_name_not_the_address(monkeypatch):
+    """The connection goes to the checked address, but TLS checks the certificate for the host name."""
+    from reelay import safefetch
+    seen = {}
+
+    class Ctx:
+        def wrap_socket(self, sock, server_hostname=None):
+            seen["sni"] = server_hostname
+            raise OSError("stop here")
+    monkeypatch.setattr(safefetch, "_connect", lambda found, timeout: seen.setdefault("addr", found[4]))
+    _resolver(monkeypatch, {"cdn.test": ["151.101.1.1"]})
+    with pytest.raises(safefetch.FetchRefused):
+        safefetch.fetch_public("https://cdn.test/c.jpg", context=Ctx())
+    assert seen == {"addr": ("151.101.1.1", 443), "sni": "cdn.test"}
+
+
+def test_caption_files_on_cdns_use_the_pinned_download(monkeypatch):
+    from reelay import safefetch, transcripts
+    got = []
+    monkeypatch.setattr(safefetch, "fetch_public", lambda url, headers=None: got.append(url) or b"WEBVTT\n\nhi")
+
+    class YDL:
+        def __init__(self, opts):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def extract_info(self, url, download=False):
+            return {"subtitles": {"en": [{"ext": "vtt", "url": "https://v16.tiktokcdn-us.com/sub.vtt"}]}}
+
+        def urlopen(self, url):
+            raise AssertionError("a CDN caption file must not go through the unpinned opener")
+    text, _ = transcripts.fetch_transcript("https://www.tiktok.com/@x/video/1", {}, YDL)
+    assert text == "hi" and got == ["https://v16.tiktokcdn-us.com/sub.vtt"]

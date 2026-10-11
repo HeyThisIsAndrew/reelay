@@ -13,8 +13,18 @@ How release builds are signed, what was verified, and what's still needed from a
 | "Developer ID Application" (paid program) | distributable | **yes** | when `REELAY_NOTARY_PROFILE` is set |
 
 With `REELAY_NOTARY_PROFILE`, the script signs with a secure timestamp, notarizes the app (zip) and staples
-it, builds the `.dmg`, signs and notarizes that, staples it, and checks both with `spctl`. It refuses to run
-if the identity isn't Developer ID.
+it, builds the `.dmg`, signs and notarizes that, staples it, and checks both with `spctl`.
+
+**Preflight, before anything is built** (so a wrong setup fails in seconds): the script picks the identity,
+refuses one that isn't in the keychain, refuses `REELAY_NOTARY_PROFILE` without a Developer ID identity, and
+refuses a notarization profile that `xcrun notarytool` can't use; then it prints what it will do.
+`REELAY_PREFLIGHT_ONLY=1 ./packaging/build_mac.sh` runs just that (`tests/test_release_signing.py` does).
+Verified here: the default build (no credentials) signs with the hardened runtime and isn't notarized; ad-hoc
+skips the hardened runtime; notarizing without Developer ID and an unknown identity both fail clearly. The
+"profile can't be used" branch needs a Developer ID certificate to reach, so it's untested until there is one.
+The installed app's signature was checked with `codesign --verify --deep --strict` (valid; hardened runtime
+on the app and on nested code such as the bundled ffmpeg; no entitlements). `spctl` rejects it, as expected
+for an Apple Development signature that isn't notarized.
 
 **Entitlements: none.** Verified on 2026-10-11 with Reelay 0.12.0 (PyInstaller, PySide6 6.x with QtMultimedia
 and its FFmpeg backend, yt-dlp 2026.08.19 with curl_cffi, imageio-ffmpeg, keyring): the packaged app was

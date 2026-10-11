@@ -843,6 +843,8 @@ class DownloadPage(QWidget):
             return
         chosen = QFileDialog.getExistingDirectory(self, "Choose Output Folder", str(self.folder))
         if chosen:
+            from ..trusted_folders import trust
+            trust(chosen)                          # chosen here, so Reelay may post from it
             self.profile.output_folder = chosen
             self.store.update_profile(self.profile)
             self._open_folder(Path(chosen))

@@ -15,13 +15,13 @@ import re
 import ssl
 import subprocess
 import sys
-import urllib.request
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, Qt, Signal
 from PySide6.QtGui import QImage, QPixmap
 
 from ..models import VideoItem
+from ..safefetch import fetch_public
 from ..urlsafety import asset_url_problem
 from ..ytdl import find_ffmpeg
 
@@ -69,11 +69,11 @@ class _FetchCover(QRunnable):
                 self.signals.done.emit(self.key, image)
                 return
         ok = False
-        if self.url and not asset_url_problem(self.url):    # never file:// or a local address
+        if self.url and not asset_url_problem(self.url, resolve=False):    # never file:// or a local address
             try:
-                req = urllib.request.Request(self.url, headers={"User-Agent": USER_AGENT})
-                with urllib.request.urlopen(req, timeout=15, context=_SSL) as resp:
-                    data = resp.read()
+                # looked up once, checked, and connected to that same address (no DNS rebinding); every
+                # redirect checked again
+                data = fetch_public(self.url, headers={"User-Agent": USER_AGENT}, context=_SSL)
                 if not QImage.fromData(data).isNull():
                     self.dest.write_bytes(data)
                     ok = True

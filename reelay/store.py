@@ -736,6 +736,9 @@ class Store:
                  profile.cookies_browser, profile.last_source, profile.created_at))
         profile.id = cur.lastrowid
         self._emit("profile", (profile.id,), profile.id)
+        if self.path != ":memory:" and not self.read_only:
+            from .trusted_folders import trust
+            trust(profile.output_folder)          # a folder chosen on this computer
         return profile
 
     def update_profile(self, profile: Profile) -> None:

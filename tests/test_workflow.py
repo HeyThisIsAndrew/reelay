@@ -221,7 +221,7 @@ class FakeYDL:
 def test_fetch_transcript_with_a_fake_ytdlp(world):
     post = "https://www.tiktok.com/@x/video/1"
     text, track = fetch_transcript(post, {}, FakeYDL({"subtitles": {"en": [{"ext": "vtt",
-                                                                             "url": "https://151.101.1.1/u.vtt"}]}}))
+                                                                             "url": "https://www.youtube.com/api/timedtext?v=x&lang=en"}]}}))
     assert text.startswith("Hi, it's Lydia.") and track["lang"] == "en"
     with pytest.raises(TranscriptError, match="no captions"):
         fetch_transcript(post, {}, FakeYDL({}))
