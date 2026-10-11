@@ -56,6 +56,19 @@ class Palette:
     warning: str           # ready to publish
     on_badge: str          # text on coloured badges
 
+    # Derived tints of the accent (so a profile's brand colour can glow without shouting)
+    @property
+    def accent_soft(self) -> str:      # hover and selected washes
+        return mix(self.bg_surface, self.accent_color, 0.14)
+
+    @property
+    def accent_ring(self) -> str:      # hover borders
+        return mix(self.bg_surface, self.accent_color, 0.55)
+
+    @property
+    def scrim(self) -> str:            # badges laid over thumbnails (painted with alpha)
+        return "#000000" if self.scheme == "dark" else "#141414"
+
 
 THEMES: dict[str, Palette] = {
     "dark": Palette(
@@ -226,6 +239,7 @@ def _icon(kind: str, color: str) -> str:
 
 def tokens_for(p: Palette, icons: bool = True) -> dict[str, object]:
     tokens: dict[str, object] = asdict(p)
+    tokens.update(accent_soft=p.accent_soft, accent_ring=p.accent_ring)
     tokens.update(font_xs=BASE_PT - 2, font_sm=BASE_PT - 1, font_pt=BASE_PT, font_lg=BASE_PT + 1,
                   font_h2=BASE_PT + 2, font_h1=BASE_PT + 4, font_title=BASE_PT + 8, font_display=BASE_PT + 22,
                   radius_sm=RADIUS_SM, radius=RADIUS, radius_lg=RADIUS_LG)

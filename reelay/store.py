@@ -918,6 +918,21 @@ class Store:
         return [Revision(id=r["id"], video_row=r["video_row"], at=r["at"], origin=r["origin"], field=r["field"],
                          old_value=r["old_value"], new_value=r["new_value"]) for r in rows]
 
+    def latest_copy_origins(self, profile_id: int, fields: Iterable[str]) -> dict[int, str]:
+        """For every video in a profile: who made the newest edit to its copy (``origin``), ignoring
+        Automations' own edits. One query, for the Board's "edited by an AI assistant" mark."""
+        fields = tuple(fields)
+        if not fields:
+            return {}
+        rows = self.conn.execute(
+            "SELECT r.video_row, r.origin FROM revisions r JOIN videos v ON v.id = r.video_row "
+            f"WHERE v.profile_id = ? AND r.origin != 'automation' AND r.field IN ({','.join('?' * len(fields))}) "
+            "ORDER BY r.id DESC", (profile_id, *fields)).fetchall()
+        newest: dict[int, str] = {}
+        for r in rows:
+            newest.setdefault(r["video_row"], r["origin"])
+        return newest
+
     # ---------------------------------------------------------------- manual posts
     def add_manual_post(self, post: ManualPost) -> ManualPost:
         post.created_at = utcnow()

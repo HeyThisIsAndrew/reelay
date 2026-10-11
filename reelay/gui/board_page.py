@@ -7,14 +7,13 @@ import json
 import logging
 import time
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timezone
 
 from PySide6.QtCore import (QAbstractListModel, QItemSelectionModel, QMimeData, QModelIndex, QPointF, QRect, QRectF,
-                            QSettings, QSize,
-                            Qt, QTimer, Signal)
+                            QEvent, QSettings, QSize, Qt, QTimer, Signal)
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QKeySequence, QPainter, QPainterPath, QPen, QShortcut
 from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QListView, QMenu,
-                               QMessageBox, QPushButton, QScrollArea, QSplitter, QStackedWidget, QStyle, QStyledItemDelegate,
+                               QMessageBox, QScrollArea, QSplitter, QStackedWidget, QStyle, QStyledItemDelegate, QToolButton,
                                QVBoxLayout, QWidget)
 
 from ..models import Platform, Post, PostStatus, Profile, Stage
@@ -24,7 +23,6 @@ from ..store import Change
 from ..text import clock, local_text
 from ..uploads import UploadManager
 from . import theme
-from .theme import set_prop
 from ..columns import ColumnError, column_for, default_columns, is_custom
 from ..columns import add as add_column
 from ..columns import load as load_columns
@@ -32,9 +30,13 @@ from ..columns import remove as remove_column
 from ..columns import save as save_columns
 from .board_tools import ArchivedDialog, BulkPanel, ImportDialog
 from .bridge import change_bridge
-from .inspector import ContextualSplitter, Inspector
+from . import icons
+from .cards import HoverFader, draw_frame, draw_pill, draw_thumbnail, media_label, small_font
+from .chrome import FilterButton, Popover, icon_button
+from .inspector import ContextualSplitter, Inspector, MediaPane
+from .player import PlayerWidget
 from .post_panel import PostPanel
-from .table_model import fmt_duration, short_date
+from .table_model import fmt_count, fmt_duration, short_date
 from .thumbnails import ThumbnailCache
 from .tips import tip
 from .workers import CallWorker
@@ -121,6 +123,19 @@ class BoardModel(QAbstractListModel):
         return False  # the page reloads everything; Qt must not remove source rows
 
 
+def card_notes(card: Card) -> list[str]:
+    """Plain-language notes for a card's marks (its tooltip)."""
+    flags = getattr(card, "flags", {})
+    notes = []
+    if flags.get("automation"):
+        notes.append("Automations ran on this video: " + ", ".join(flags["automation"]))
+    if flags.get("approval"):
+        notes.append("An AI assistant asked to change this video; it's waiting for your approval")
+    if flags.get("ai"):
+        notes.append("The caption was last edited by an AI assistant")
+    return notes
+
+
 def _two_lines(fm: QFontMetrics, text: str, width: int) -> list[str]:
     words, line1 = text.split(), ""
     while words and fm.horizontalAdvance((line1 + " " + words[0]).strip()) <= width:
@@ -132,14 +147,124 @@ def _two_lines(fm: QFontMetrics, text: str, width: int) -> list[str]:
 
 
 class CardDelegate(QStyledItemDelegate):
+    """A Board card. "Large" (the default) leads with a 16:9 thumbnail; "Compact" is the dense strip."""
+
+    density = "large"                 # set by the Board from Filter → Cards
+
     def __init__(self, thumbs: ThumbnailCache, parent=None):
         super().__init__(parent)
         self.thumbs = thumbs
+        self.fader = HoverFader(parent.viewport()) if parent is not None else None
+        if parent is not None:
+            parent.viewport().installEventFilter(self)
+            self._view = parent
 
-    def sizeHint(self, option, index) -> QSize:
-        return QSize(option.rect.width(), CARD_HEIGHT)
+    # hover easing: follow the mouse over the list
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        if self.fader is not None:
+            if event.type() == QEvent.MouseMove:
+                index = self._view.indexAt(event.position().toPoint())
+                self.fader.hover(str(index.data(Qt.UserRole).id) if index.isValid() else None)
+            elif event.type() in (QEvent.Leave, QEvent.HoverLeave):
+                self.fader.hover(None)
+        return False
+
+    def sizeHint(self, option, index) -> QSize:  # noqa: N802
+        width = option.widget.viewport().width() if option.widget is not None else option.rect.width()
+        if self.density == "compact":
+            return QSize(width, CARD_HEIGHT)
+        tf = QFontMetrics(small_font(option.font, 0, bold=True)).height()
+        sf = QFontMetrics(small_font(option.font, -2)).height()
+        text = 10 + 2 * tf + 4 + sf + 8 + CARD_LOGO_SIZE + 8 + sf + 12
+        return QSize(width, int((width - 4) * 9 / 16) + text + 10)
+
+    def helpEvent(self, event, view, option, index) -> bool:  # noqa: N802
+        card: Card = index.data(Qt.UserRole)
+        notes = card_notes(card)
+        if notes and event.type() == QEvent.ToolTip:
+            from PySide6.QtWidgets import QToolTip
+            QToolTip.showText(event.globalPos(), "\n".join(notes), view)
+            return True
+        return super().helpEvent(event, view, option, index)
 
     def paint(self, painter: QPainter, option, index) -> None:
+        if self.density == "compact":
+            return self._paint_compact(painter, option, index)
+        card: Card = index.data(Qt.UserRole)
+        p = theme.P
+        item = card.row.item
+        r = QRectF(option.rect).adjusted(2, 5, -2, -5)
+        selected = bool(option.state & QStyle.State_Selected)
+        hover = self.fader.value(str(card.id)) if self.fader is not None else 0.0
+        painter.save()
+        painter.setRenderHint(QPainter.Antialiasing)
+        frame = draw_frame(painter, r, hover, selected)
+        thumb = QRectF(r.left(), r.top(), r.width(), r.width() * 9 / 16)
+        top = QPainterPath()
+        top.addRect(thumb)
+        cover = self.thumbs.cover(item)
+        draw_thumbnail(painter, thumb, item, cover, frame.intersected(top))
+        draw_pill(painter, media_label(item, cover), QPointF(thumb.left() + 8, thumb.top() + 8),
+                  Qt.AlignLeft | Qt.AlignTop, small_font(option.font, -3, bold=True))
+        if item.duration:
+            draw_pill(painter, fmt_duration(item.duration), QPointF(thumb.right() - 8, thumb.bottom() - 8),
+                      Qt.AlignRight | Qt.AlignBottom, small_font(option.font, -2, bold=True))
+        self._draw_flags(painter, card, QPointF(thumb.right() - 8, thumb.top() + 8))
+        if card.uploading and card.progress is not None and not card.queued:
+            bar = QRectF(thumb.left(), thumb.bottom() - 3, thumb.width(), 3)
+            back = QColor(p.scrim)
+            back.setAlphaF(0.5)
+            painter.fillRect(bar, back)
+            painter.fillRect(QRectF(bar.x(), bar.y(), bar.width() * card.progress / 100, 3), QColor(p.accent_color))
+
+        x, w = int(r.left() + 12), int(r.width() - 24)
+        y = int(thumb.bottom() + 10)
+        title_font = small_font(option.font, 0, bold=True)
+        painter.setFont(title_font)
+        painter.setPen(QColor(p.text_primary))
+        fm = QFontMetrics(title_font)
+        for line in _two_lines(fm, card.title, w):
+            painter.drawText(QRect(x, y, w, fm.height()), Qt.AlignLeft | Qt.AlignVCenter, line)
+            y += fm.height()
+        y = int(thumb.bottom() + 10 + fm.height() * 2 + 4)
+        small = small_font(option.font, -2)
+        painter.setFont(small)
+        sfm = QFontMetrics(small)
+        meta = " · ".join(b for b in (short_date(item.upload_date),
+                                      f"{fmt_count(item.view_count)} views" if item.view_count else "") if b)
+        painter.setPen(QColor(p.text_muted))
+        painter.drawText(QRect(x, y, w, sfm.height()), Qt.AlignLeft | Qt.AlignVCenter,
+                         sfm.elidedText(meta, Qt.ElideRight, w))
+        y += sfm.height() + 8
+        self._draw_platforms(painter, card, x + 1, y, width=w - 4)
+        y += CARD_LOGO_SIZE + 8
+        status, color = self._status(card)
+        painter.setFont(small)
+        painter.setPen(QColor(color))
+        painter.drawText(QRect(x, y, w, sfm.height()), Qt.AlignLeft | Qt.AlignVCenter,
+                         sfm.elidedText(status, Qt.ElideRight, w))
+        painter.restore()
+
+    @staticmethod
+    def _draw_flags(painter: QPainter, card: Card, anchor: QPointF) -> None:
+        """Small marks over the thumbnail: an Automation acted, a request awaits approval, AI wrote the copy."""
+        flags = getattr(card, "flags", {})
+        marks = [name for name, on in (("bolt", flags.get("automation")), ("hourglass", flags.get("approval")),
+                                       ("sparkles", flags.get("ai"))) if on]
+        x = anchor.x()
+        for name in reversed(marks):
+            d = 22.0
+            rect = QRectF(x - d, anchor.y(), d, d)
+            bg = QColor(theme.P.scrim)
+            bg.setAlphaF(0.62)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(bg)
+            painter.drawEllipse(rect)
+            color = {"hourglass": theme.P.warning, "bolt": QColor(Qt.white).name()}.get(name, theme.P.accent_ring)
+            painter.drawPixmap(rect.adjusted(4, 4, -4, -4).toRect(), icons.pixmap(name, color, 14))
+            x -= d + 4
+
+    def _paint_compact(self, painter: QPainter, option, index) -> None:
         card: Card = index.data(Qt.UserRole)
         p = theme.P
         r = QRectF(option.rect).adjusted(2, 4, -2, -4)
@@ -357,7 +482,8 @@ class BoardColumn(QFrame):
         self.view.setDropIndicatorShown(True)
         self.view.setMouseTracking(True)
         self.view.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
-        self.view.setUniformItemSizes(True)
+        self.view.setUniformItemSizes(False)
+        self.view.setResizeMode(QListView.Adjust)        # cards are as tall as the column is wide (16:9)
         self.view.setAttribute(Qt.WA_MacShowFocusRect, False)
         self.empty = QLabel(EMPTY_TEXT.get(stage, "Drag cards here."))
         self.empty.setProperty("faint", True)
@@ -429,68 +555,74 @@ class BoardPage(QWidget):
         outer.setContentsMargins(18, 16, 18, 12)
         outer.setSpacing(12)
         head = QHBoxLayout()
+        head.setSpacing(10)
         title = QLabel("Board", objectName="PageTitle")
-        self.subtitle = QLabel()
-        self.subtitle.setProperty("muted", True)
-        tv = QVBoxLayout()
-        tv.setSpacing(2)
-        tv.addWidget(title)
-        tv.addWidget(self.subtitle)
-        head.addLayout(tv)
+        self.subtitle = QLabel(objectName="PageCount")
+        head.addWidget(title, 0, Qt.AlignBottom)
+        head.addWidget(self.subtitle, 0, Qt.AlignBottom)
         head.addStretch()
         self.sync_label = QLabel()
         self.sync_label.setProperty("faint", True)
         head.addWidget(self.sync_label)
+        self.search = tip(QLineEdit(objectName="SearchField"),
+                          "Find videos by words in the title, caption, any platform's copy, hashtags, topic, keywords, "
+                          "notes, or anything said in the video (its transcript). Put \"quotes\" around an exact "
+                          "phrase.")
+        self.search.setPlaceholderText("Search titles, captions and what was said")
+        self.search.setClearButtonEnabled(True)
+        self.search.setFixedWidth(340)
+        self.search.setAttribute(Qt.WA_MacShowFocusRect, False)
+        self.search.addAction(icons.icon("search", 16), QLineEdit.LeadingPosition)
+        self.search.textChanged.connect(self._on_search)
+        head.addWidget(self.search)
+
+        # Filter & Sort popover: readiness, hashtag, brand / product
         self.filter_box = tip(QComboBox(), "Show only tickets that are ready, not ready, or blocked on a platform")
-        for key, label in (("all", "Show: All tickets"), ("ready", "Show: Ready"), ("not_ready", "Show: Not ready"),
-                           *((f"blocking:{p}", f"Show: Blocking {Platform.LABELS[p]}") for p in Platform.ALL)):
+        for key, label in (("all", "All tickets"), ("ready", "Ready"), ("not_ready", "Not ready"),
+                           *((f"blocking:{p}", f"Blocking {Platform.LABELS[p]}") for p in Platform.ALL)):
             self.filter_box.addItem(label, key)
         self.filter_box.currentIndexChanged.connect(self._on_filter)
-        self.import_btn = tip(QPushButton("Import Sheet…"), "Fill tickets from a spreadsheet (CSV file or a Google "
-                                                            "Sheets link), with a preview before anything changes")
-        self.import_btn.clicked.connect(self.open_import)
-        head.addWidget(self.import_btn)
-        self.columns_btn = tip(QPushButton("Edit Columns…"), "Rename, add, remove or reorder the Board's columns. "
-                                                             "You can also right-click a column's name.")
-        set_prop(self.columns_btn, "flat")
-        self.columns_btn.clicked.connect(self.edit_columns)
-        head.addWidget(self.columns_btn)
-        self.archived_btn = tip(QPushButton("Archived…"), "Videos you've archived. Bring them back from here.")
-        set_prop(self.archived_btn, "flat")
-        self.archived_btn.clicked.connect(self.open_archived)
-        head.addWidget(self.archived_btn)
-        self.sync_btn = QPushButton("Check YouTube for Updates")
-        self.sync_btn.setToolTip("Ask YouTube whether scheduled videos have gone live, and move them to Published")
-        self.sync_btn.clicked.connect(lambda: self.sync(force=True))
-        head.addWidget(self.sync_btn)
-        outer.addLayout(head)
-
-        # ---- find tickets: search, hashtag (category), readiness
-        find = QHBoxLayout()
-        find.setSpacing(10)
-        self.search = tip(QLineEdit(), "Find videos by words in the title, caption, any platform's copy, hashtags, "
-                                       "topic, keywords, notes, or anything said in the video (its transcript). "
-                                       "Put \"quotes\" around an exact phrase.")
-        self.search.setPlaceholderText("Search titles, captions, hashtags, products, and what was said…")
-        self.search.setClearButtonEnabled(True)
-        self.search.setAttribute(Qt.WA_MacShowFocusRect, False)
-        self.search.textChanged.connect(self._on_search)
-        find.addWidget(self.search, 1)
         self.tag_box = tip(QComboBox(), "Show only tickets with one hashtag, like a category. The number is how many "
                                         "tickets have it.")
-        self.tag_box.setMinimumWidth(170)
-        self.tag_box.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
-        self.tag_box.setMinimumContentsLength(14)
+        self.tag_box.setMinimumWidth(260)
         self.tag_box.addItem("All hashtags", "")
         self.tag_box.currentIndexChanged.connect(self._on_filter)
-        find.addWidget(self.tag_box)
         from .widgets import ProductFilter
         self.products_filter = ProductFilter(self.store)
         self.product_box = self.products_filter.product       # brand menu: products_filter.brand
         self.products_filter.changed.connect(lambda _ids: self._on_filter())
-        find.addWidget(self.products_filter)
-        find.addWidget(self.filter_box)
-        outer.addLayout(find)
+        self.filter_popover = Popover(self)
+        self.filter_popover.add_section("Show", "Which tickets the Board shows", self.filter_box)
+        self.filter_popover.add_section("Hashtag", "Only tickets with this hashtag", self.tag_box)
+        self.filter_popover.add_section("Brand and product", "Only tickets tagged with a brand's products, or one "
+                                        "product", self.products_filter)
+        self.density_box = tip(QComboBox(), "Large cards lead with the video's thumbnail; compact cards fit more "
+                                            "on screen")
+        self.density_box.addItem("Large, with thumbnails", "large")
+        self.density_box.addItem("Compact", "compact")
+        self.density_box.setCurrentIndex(max(self.density_box.findData(
+            self.store.get_setting("ui.board_density", "large")), 0))
+        CardDelegate.density = self.density_box.currentData()
+        self.density_box.currentIndexChanged.connect(self._set_density)
+        self.filter_popover.add_section("Cards", "How big the Board's cards are", self.density_box)
+        self.filter_btn = FilterButton(self.filter_popover)
+        head.addWidget(self.filter_btn)
+
+        # Less frequent board actions live in ⋯; checking YouTube is one click
+        self.more_btn = icon_button("more", "More: import tickets from a spreadsheet, edit the columns, or see "
+                                            "archived videos")
+        self.more_btn.setPopupMode(QToolButton.InstantPopup)
+        more = QMenu(self.more_btn)
+        more.addAction("Import Sheet…", self.open_import)
+        more.addAction("Edit Columns…", self.edit_columns)
+        more.addAction("Archived Videos…", self.open_archived)
+        self.more_btn.setMenu(more)
+        self.sync_btn = icon_button("refresh", "Check YouTube for updates: whether scheduled videos have gone live "
+                                               "(moves them to Published)")
+        self.sync_btn.clicked.connect(lambda: self.sync(force=True))
+        head.addWidget(self.sync_btn)
+        head.addWidget(self.more_btn)
+        outer.addLayout(head)
 
         cols_body = QWidget(objectName="Page")
         self.columns_layout = QHBoxLayout(cols_body)
@@ -507,6 +639,7 @@ class BoardPage(QWidget):
         cols.setWidget(cols_body)
 
         self.panel = PostPanel(self.thumbs)
+        self.panel.use_player(True)
         self.panel.set_enabled_platforms(self.pipeline.enabled_platforms())
         self.panel.saveRequested.connect(self._save_post)
         self.panel.uploadRequested.connect(self._request_upload)
@@ -536,7 +669,12 @@ class BoardPage(QWidget):
         self.side.addWidget(self.panel)
         self.side.addWidget(self.bulk)
         # The ticket only takes room while a card is selected; otherwise the columns get the whole width.
-        self.inspector = Inspector(self.side, "Ticket")
+        # The Command Center: the video on top, the ticket under it.
+        self.player = PlayerWidget()
+        self.player.message.connect(self._status)
+        self._player_row: int | None = None
+        self.media_pane = MediaPane(self.player, self.side)
+        self.inspector = Inspector(self.media_pane, "Ticket")
         self.inspector.closeRequested.connect(self.close_inspector)
         self.split = ContextualSplitter(cols, self.inspector, self.pipeline.store, "board", default_width=420)
         outer.addWidget(self.split, 1)
@@ -684,7 +822,7 @@ class BoardPage(QWidget):
         self.selected_id = None
         self.bulk_ids = []
         self._hide_inspector()
-        self.subtitle.setText(f"{profile.name}'s pipeline · drag cards to move them along")
+        self.subtitle.setText("Drag cards to move them along")
         self._last_sync = 0.0
         self._advance_due()
         self.reload()
@@ -708,6 +846,7 @@ class BoardPage(QWidget):
         if self._run_rules():
             columns = self.pipeline.board(self.profile.id)     # rules changed tickets: show the result
         self.cards = {card.id: card for cards in columns.values() for card in cards}
+        self._mark_cards()
         hits = {h.row_id: h for h in self.store.search(self.profile.id, self.query)} if self.query else {}
         for card in self.cards.values():
             card.search_hit = hits.get(card.id)
@@ -723,6 +862,34 @@ class BoardPage(QWidget):
             self._reselect_bulk()
         else:
             self._reselect()
+
+    def _mark_cards(self) -> None:
+        """What each card's small marks say: an Automation acted on it, an agent's request awaits
+        approval, or an AI assistant made the latest copy edit."""
+        from ..models import ApprovalStatus
+        from ..rules import AGENT_ORIGINS, COPY_REVISION_FIELDS, activity
+        try:
+            origins = self.store.latest_copy_origins(self.profile.id, COPY_REVISION_FIELDS)
+            pending = {vid for req in self.store.list_approvals(self.profile.id, ApprovalStatus.PENDING, 500)
+                       for vid in req.target_ids}
+            ran: dict[int, list[str]] = {}
+            for entry in activity(self.store, self.profile.id):
+                if entry.get("done") and entry["done"] != ["nothing to do"]:
+                    names = ran.setdefault(entry.get("video"), [])
+                    if entry.get("rule") and entry["rule"] not in names:
+                        names.append(entry["rule"])
+        except Exception:  # noqa: BLE001 — marks are a nicety; never break the board
+            log.exception("Couldn't work out card marks")
+            return
+        for card in self.cards.values():
+            card.flags = {"automation": ran.get(card.id, [])[:3], "approval": card.id in pending,
+                          "ai": origins.get(card.id, "").split(":")[0] in AGENT_ORIGINS}
+
+    def _set_density(self) -> None:
+        CardDelegate.density = self.density_box.currentData()
+        self.store.set_setting("ui.board_density", CardDelegate.density)
+        for col in self.columns.values():
+            col.model.layoutChanged.emit()
 
     def _run_rules(self) -> bool:
         """Automations: run enabled rules on videos they haven't handled yet. True if any acted."""
@@ -809,6 +976,7 @@ class BoardPage(QWidget):
         self.filter = self.filter_box.currentData()
         self.tag = self.tag_box.currentData() or ""
         self.product_ids = self.products_filter.selection()
+        self.filter_btn.set_count(sum(bool(x) for x in (self.filter != "all", self.tag, self.product_ids)))
         self.reload()
 
     # ---------------------------------------------------------------- multi-select & bulk
@@ -824,6 +992,9 @@ class BoardPage(QWidget):
             self.selected_id = None
             self.bulk.show_cards(chosen)
             self.side.setCurrentWidget(self.bulk)
+            self.player.clear()
+            self._player_row = None
+            self.media_pane.set_player_visible(False)
             self.inspector.set_title(f"{len(chosen)} selected")
             self.split.reveal()
         elif self.bulk_ids:
@@ -990,6 +1161,23 @@ class BoardPage(QWidget):
                 col.view.setCurrentIndex(col.model.index(row))
         self._show_card(card)
 
+    def next_up(self) -> tuple[str, datetime | None]:
+        """The next thing going out for this profile: ("TikTok", when) or ("", None)."""
+        from ..models import DispatchStatus
+        from ..publishing import parse_utc
+        now = datetime.now(timezone.utc)
+        best: tuple[datetime, str] | None = None
+        for card in self.cards.values():
+            moments = [(d.publish_at or d.due_at, d.platform) for d in card.dispatches
+                       if d.status in (DispatchStatus.PENDING, DispatchStatus.SCHEDULED)]
+            if card.post and card.post.status == PostStatus.SCHEDULED and card.post.publish_at:
+                moments.append((card.post.publish_at, "youtube"))
+            for iso, platform in moments:
+                when = parse_utc(iso) if iso else None
+                if when and when > now and (best is None or when < best[0]):
+                    best = (when, platform)
+        return (Platform.LABELS.get(best[1], best[1]), best[0]) if best else ("", None)
+
     # ---------------------------------------------------------------- the inspector
     def close_inspector(self) -> None:
         """The person closed the ticket (✕ or Esc): offer to save typed copy, then clear the selection."""
@@ -1022,13 +1210,27 @@ class BoardPage(QWidget):
     def _hide_inspector(self) -> None:
         self.side.setCurrentWidget(self.panel)
         self.panel.show_empty()
+        self.player.clear()
+        self._player_row = None
         self.split.dismiss()
+
+    def _load_player(self, card: Card) -> None:
+        """Put the card's video in the player (only when the card changes, so playback isn't interrupted)."""
+        self.media_pane.set_player_visible(True)
+        if self._player_row == card.id:
+            return
+        from .. import previews
+        self._player_row = card.id
+        path = self.pipeline.video_path(card.row) if card.row.item.is_downloaded else None
+        preview = previews.existing_preview(path) if path else None
+        self.player.set_video(path, self.thumbs.cover(card.row.item), preview)
 
     def _show_card(self, card: Card) -> None:
         self.inspector.set_title("Ticket")
         self.split.reveal()
+        self._load_player(card)
         self.panel.show_card(card, self.pipeline.youtube_accounts(self.profile.id),
-                             self.pipeline.add_shorts_default())
+                             self.pipeline.add_shorts_default_for(card.row))
         others = sorted(((c.id, c.title) for c in self.cards.values()), key=lambda t: t[1].lower())
         self.panel.set_ticket(others, self.pipeline.publishing_history(card.id))
         self.panel.set_platform_states(card.platform_states, card.post.publish_at if card.post else None)
@@ -1219,7 +1421,7 @@ class BoardPage(QWidget):
         post = self.panel.collect() if self.panel.card and self.panel.card.id == card.id \
             else self.store.get_post(card.id)
         self._request_upload(post, self.panel.shorts.isChecked() if self.panel.card
-                             else self.pipeline.add_shorts_default())
+                             else self.pipeline.add_shorts_default_for(card.row))
 
     # ---------------------------------------------------------------- posts
     def _save_post(self, post: Post) -> None:
@@ -1332,5 +1534,6 @@ class BoardPage(QWidget):
         self._reload_timer.stop()
         self._advance_timer.stop()
         self.panel.video_tools.shutdown()
+        self.player.shutdown()
         if self.sync_worker:
             self.sync_worker.wait(3000)

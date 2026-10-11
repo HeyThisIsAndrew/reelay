@@ -229,6 +229,12 @@ class Pipeline:
     def add_shorts_default(self) -> bool:
         return self.store.get_setting("add_shorts", "1") == "1"
 
+    def add_shorts_default_for(self, row: VideoRow) -> bool:
+        """The #Shorts default for one video: only for Shorts (vertical, 3 minutes or less)."""
+        from .readiness import is_short_form
+        item = row.item
+        return self.add_shorts_default() and is_short_form(item.width, item.height, item.duration)
+
     def video_path(self, row: VideoRow) -> Path | None:
         """The file to post: the edited version from the ticket's Video tools, else the download."""
         from .video_tools import edited_path
@@ -933,7 +939,7 @@ class Pipeline:
                         add_shorts: bool | None, now: datetime) -> ScheduleResult:
         row_id = row.id
         now_iso = utc_iso(now)
-        add_shorts = self.add_shorts_default() if add_shorts is None else add_shorts
+        add_shorts = self.add_shorts_default_for(row) if add_shorts is None else add_shorts
         dispatches = []
         for platform in targets:
             account = (self.store.get_account(base.account_id) if platform == Platform.YOUTUBE
@@ -998,7 +1004,7 @@ class Pipeline:
         except YouTubeError as exc:
             raise PermanentError(str(exc)) from None
         resource = build_resource(replace(post, publish_at=dispatch.publish_at),
-                                  dispatch.options.get("add_shorts", self.add_shorts_default()))
+                                  dispatch.options.get("add_shorts", self.add_shorts_default_for(row)))
         try:
             self.uploads.enqueue(row.id, client, path, resource)
         except ValueError:

@@ -12,7 +12,7 @@ Reelay imports every video from a TikTok, Instagram or YouTube profile you own o
 
 You paste the copy into each platform yourself. YouTube can also be uploaded and scheduled automatically, and Bluesky, Threads and Facebook can be turned on later (see [Automatic posting](#automatic-posting)).
 
-It's a native desktop app for macOS (Windows builds included) in a Light, Dark, Black or Custom theme (each profile's own brand colours, with its logo in the sidebar). Hover over anything for a plain-language tip (turn them off in **Settings → Show helpful tips**), and **Help** at the bottom of the sidebar has the full guide, offline.
+It's a native desktop app for macOS (Windows builds included) in a Light, Dark, Black or Custom theme (each profile's own brand colours, with its logo in the sidebar). The Library and Board are media-first grids of thumbnails (hover a card to scrub through the video), and selecting a video plays it in the right-hand panel above its captions and readiness. Hover over anything for a plain-language tip (turn them off in **Settings → Show helpful tips**), and **Help** at the bottom of the sidebar has the full guide, offline.
 
 ## What it does
 

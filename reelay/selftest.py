@@ -70,6 +70,16 @@ def run() -> int:
         assert {"jpeg", "png", "webp"} <= formats, f"image plugins missing: {formats}"
         return "jpeg/png/webp"
 
+    def player():
+        from PySide6.QtMultimedia import QMediaFormat, QMediaPlayer
+        from PySide6.QtWidgets import QApplication
+        QApplication.instance() or QApplication([])
+        QMediaPlayer()
+        codecs = QMediaFormat().supportedVideoCodecs(QMediaFormat.Decode)
+        if QMediaFormat.VideoCodec.H264 not in codecs:
+            raise RuntimeError("the player can't decode H.264")
+        return f"{len(codecs)} video codecs, H.264 included"
+
     def agent_api():
         import urllib.request
 
@@ -101,7 +111,7 @@ def run() -> int:
 
     for name, fn in (("yt-dlp", ytdlp), ("TikTok impersonation", impersonation), ("ffmpeg", ffmpeg),
                      ("Caption burning", captions), ("Keychain", keychain), ("Database", database),
-                     ("Qt image plugins", qt),
+                     ("Qt image plugins", qt), ("Video player", player),
                      ("Agent API server", agent_api), ("Help page", help_page)):
         check(name, fn)
 

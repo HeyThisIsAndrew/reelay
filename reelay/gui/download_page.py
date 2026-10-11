@@ -28,10 +28,15 @@ from ..store import Store
 from ..tokens import MemoryTokenStore
 from ..youtube import YouTubeError
 from ..ytdl import COOKIE_BROWSERS, base_options, find_ffmpeg
+from . import icons
 from .bridge import change_bridge
+from .chrome import FilterButton, Popover, ViewToggle, icon_button
 from .detail_panel import DetailPanel
-from .inspector import ContextualSplitter, Inspector
+from .inspector import ContextualSplitter, Inspector, MediaPane
+from .player import PlayerWidget
+from .scrub import ScrubCache
 from .dialogs import RenamePreviewDialog, tokens_help_html
+from .cards import LibraryCardDelegate, MediaGrid
 from .table_model import ROW_HEIGHT, Col, CoverDelegate, VideoFilterProxy, VideoTableModel
 from .theme import set_prop
 from .tips import tip
@@ -41,6 +46,8 @@ from .workers import CallWorker, DetailsWorker, DownloadWorker, FetchWorker, Pro
 
 log = logging.getLogger("reelay")
 OWN_CONTENT = "Own content"
+SORTS = (("newest", "Newest first"), ("oldest", "Oldest first"), ("views", "Most viewed"),
+         ("longest", "Longest first"), ("shortest", "Shortest first"), ("title", "Caption A to Z"))
 
 
 def fmt_speed(bps) -> str:
@@ -150,6 +157,59 @@ class SourceDialog(QDialog):
         return self.mine_box.isChecked()
 
 
+class DownloadSettingsDialog(QDialog):
+    """Where videos are saved, quality, browser sign-in and file naming: set once, rarely changed,
+    so they live here instead of crowding the Library."""
+
+    def __init__(self, page: "DownloadPage"):
+        super().__init__(page)
+        self.page = page
+        self.setWindowTitle("Download Settings")
+        self.setMinimumWidth(560)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(22, 20, 22, 16)
+        lay.setSpacing(8)
+
+        def section(title: str, hint: str = "") -> None:
+            label = QLabel(title, objectName="DetailTitle")
+            lay.addSpacing(6)
+            lay.addWidget(label)
+            if hint:
+                lay.addWidget(muted(hint))
+
+        section("Where videos go")
+        row = QHBoxLayout()
+        row.addWidget(page.folder_btn, 1)
+        row.addWidget(page.open_folder_btn)
+        lay.addLayout(row)
+        section("Quality")
+        lay.addWidget(page.quality)
+        section("Browser sign-in", "Instagram, and private or scheduled YouTube videos, need you to be signed in. "
+                                   "Reelay borrows the sign-in from a browser; your password is never seen.")
+        lay.addWidget(page.cookies)
+        section("File names", "How downloaded video files are named.")
+        lay.addWidget(page.naming)
+        row = QHBoxLayout()
+        row.addWidget(page.autoname_btn)
+        row.addWidget(page.apply_btn)
+        row.addStretch()
+        lay.addLayout(row)
+        lay.addSpacing(8)
+        lay.addWidget(page.doors_note)
+        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        buttons.rejected.connect(self.accept)
+        done = buttons.button(QDialogButtonBox.Close)
+        done.setText("Done")
+        set_prop(done, "primary")
+        tip(done, "Close Download Settings. Changes are saved as you make them.")
+        lay.addWidget(buttons)
+
+    def open_for_profile(self) -> None:
+        name = self.page.profile.name if self.page.profile else ""
+        self.setWindowTitle(f"Download Settings · {name}" if name else "Download Settings")
+        self.open()
+
+
 class DownloadPage(QWidget):
     videosChanged = Signal()        # downloads finished / files renamed (board should reload)
     busyChanged = Signal(bool)
@@ -191,79 +251,80 @@ class DownloadPage(QWidget):
         outer.setContentsMargins(18, 16, 18, 12)
         outer.setSpacing(12)
 
-        # ---- "Bring videos in": the IN door (Accounts is the OUT door)
-        intake = QFrame(objectName="Card")
-        il = QVBoxLayout(intake)
-        il.setContentsMargins(16, 14, 16, 14)
-        il.setSpacing(10)
+        # ---- header: what this is, how many, and the few controls that matter
         head = QHBoxLayout()
-        head.setSpacing(12)
-        title = QLabel("Bring videos in")
-        title.setObjectName("DetailTitle")
-        tip(title, "This page copies videos into Reelay from TikTok, Instagram or YouTube. "
+        head.setSpacing(10)
+        title = QLabel("Library", objectName="PageTitle")
+        tip(title, "Your videos: bring them in from TikTok, Instagram or YouTube, then choose what to download. "
                    "To post videos out, connect accounts under Accounts.")
-        head.addWidget(title)
-        self.doors_note = muted("Import media you own or have permission to manage. Downloading pulls videos in "
-                                "from these sources; posting pushes videos out to the accounts you connect "
-                                "under Accounts.")
-        self.doors_note.setWordWrap(True)
-        head.addWidget(self.doors_note, 1)
-        il.addLayout(head)
+        head.addWidget(title, 0, Qt.AlignBottom)
+        self.page_count = QLabel(objectName="PageCount")
+        head.addWidget(self.page_count, 0, Qt.AlignBottom)
+        head.addStretch()
+        self.search = GrowingSearch("Search captions, hashtags, products, names")
+        self.search.setFixedWidth(340)
+        tip(self.search, "Filter the list. Matches captions (hashtags included), the names you've given videos, "
+                         "and file names.")
+        head.addWidget(self.search, 0, Qt.AlignVCenter)
+        self.filter_popover = Popover(self)
+        self.filter_btn = FilterButton(self.filter_popover)
+        head.addWidget(self.filter_btn)
+        self.view_toggle = ViewToggle(self.store, "library")
+        self.view_toggle.changed.connect(self._set_view)
+        head.addWidget(self.view_toggle)
+        self.settings_btn = icon_button("gear", "Download settings: where videos are saved, quality, browser "
+                                                "sign-in and how files are named")
+        head.addWidget(self.settings_btn)
+        outer.addLayout(head)
 
+        # ---- sources: the IN door (Accounts is the OUT door)
+        intake = QFrame(objectName="SourceBar")
+        il = QHBoxLayout(intake)
+        il.setContentsMargins(0, 0, 0, 0)
+        il.setSpacing(8)
         self.chip_area = QScrollArea()
         self.chip_area.setWidgetResizable(True)
         self.chip_area.setFrameShape(QFrame.NoFrame)
         self.chip_area.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.chip_area.setFixedHeight(54)
+        self.chip_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.chip_area.setFixedHeight(46)
         tip(self.chip_area, "Your saved sources. Click List Videos on one to see its videos below.")
         chip_body = QWidget(objectName="CardBody")
         self.chip_row = QHBoxLayout(chip_body)
         self.chip_row.setContentsMargins(0, 0, 0, 0)
         self.chip_row.setSpacing(8)
         self.chip_area.setWidget(chip_body)
-        il.addWidget(self.chip_area)
-
-        self.paste_label = muted("Or paste a profile link (yours, or an account you manage), or several video links.")
-        il.addWidget(self.paste_label)
-        row1 = QHBoxLayout()
-        row1.setSpacing(8)
+        il.addWidget(self.chip_area, 3)
         self.url = QLineEdit(objectName="UrlField")
-        self.url.setPlaceholderText("https://www.tiktok.com/@creator")
+        self.url.setPlaceholderText("Paste a profile or video link")
         self.url.setClearButtonEnabled(True)
         self.url.setAttribute(Qt.WA_MacShowFocusRect, False)
-        tip(self.url, "A TikTok, Instagram or YouTube profile link, or one or more video links separated by spaces.")
-        self.fetch_btn = QPushButton("List Videos")
-        set_prop(self.fetch_btn, "primary")
-        self.fetch_btn.setMinimumHeight(38)
-        tip(self.fetch_btn, "Show every video from this link below. Nothing is downloaded until you click Download.")
+        self.url.addAction(icons.icon("link", 16), QLineEdit.LeadingPosition)
+        tip(self.url, "A TikTok, Instagram or YouTube profile link (yours, or an account you manage), or one or more "
+                      "video links separated by spaces.")
+        il.addWidget(self.url, 2)
         self.save_source_btn = QPushButton("Save This Link…")
         tip(self.save_source_btn, "Keep this link as a one-click source for this profile, so next time you "
                                   "don't have to paste it")
-        self.save_source_btn.setMinimumHeight(38)
-        row1.addWidget(self.url, 1)
-        row1.addWidget(self.save_source_btn)
-        row1.addWidget(self.fetch_btn)
-        il.addLayout(row1)
+        il.addWidget(self.save_source_btn)
+        self.fetch_btn = QPushButton("List Videos")
+        set_prop(self.fetch_btn, "primary")
+        tip(self.fetch_btn, "Show every video from this link below. Nothing is downloaded until you click Download.")
+        il.addWidget(self.fetch_btn)
+        outer.addWidget(intake)
+        self.doors_note = muted("Only import media you own or have permission to manage.", "faint")
+        tip(self.doors_note, "Downloading pulls videos in from these sources; posting pushes videos out to the "
+                             "accounts you connect under Accounts.")
 
-        row2 = QHBoxLayout()
-        row2.setSpacing(8)
-        row2.addWidget(tip(muted("Save videos to"), "The folder on this Mac where downloaded videos go"))
+        # ---- Download settings (a dialog): folder, quality, browser sign-in, file names
         self.folder_btn = QPushButton()
         set_prop(self.folder_btn, "flat")
-        row2.addWidget(self.folder_btn)
         self.open_folder_btn = QPushButton("Show in Finder")
         tip(self.open_folder_btn, "Open the folder where this profile's videos are saved")
-        row2.addWidget(self.open_folder_btn)
-        row2.addStretch()
-        row2.addWidget(tip(muted("Quality"), "Video quality to download"))
         self.quality = QComboBox()
         for key, label in QUALITY_LABELS.items():
             self.quality.addItem(label, key)
         tip(self.quality, "Video quality to download. Best is the original quality the platform keeps.")
-        self.quality.setSizeAdjustPolicy(QComboBox.AdjustToContents)
-        row2.addWidget(self.quality)
-        row2.addSpacing(12)
-        row2.addWidget(tip(muted("Use browser sign-in"), "Borrow your sign-in from a web browser"))
         self.cookies = QComboBox()
         self.cookies.addItem("Don't use", "")
         for b in COOKIE_BROWSERS:
@@ -271,32 +332,38 @@ class DownloadPage(QWidget):
         tip(self.cookies, "Instagram, and private or scheduled YouTube videos, need you to be signed in. "
                           "Reelay borrows the sign-in from the browser you pick; make sure you're signed in there. "
                           "Your password is never seen or stored.")
-        row2.addWidget(self.cookies)
-        il.addLayout(row2)
-        outer.addWidget(intake)
+        self.naming = NamingPicker()
+        self.autoname_btn = QToolButton(text="Suggest Names  ▾")
+        self.autoname_btn.setPopupMode(QToolButton.InstantPopup)
+        tip(self.autoname_btn, "Fill in a short name for videos from the first words of their captions")
+        self.apply_btn = QPushButton("Rename Files…")
+        tip(self.apply_btn, "Rename videos you've already downloaded so they match the naming choice. "
+                            "You'll see every change before anything is renamed.")
+        self.settings_dialog = DownloadSettingsDialog(self)
+        self.settings_btn.clicked.connect(self.settings_dialog.open_for_profile)
 
         list_area = QWidget(objectName="ListArea")
         ll = QVBoxLayout(list_area)
         ll.setContentsMargins(12, 12, 12, 0)
         ll.setSpacing(10)
-        bar = QHBoxLayout()
-        bar.setSpacing(10)
-        self.search = GrowingSearch("Search captions, hashtags, tagged products, your names, file names")
-        self.search.setMinimumWidth(220)
-        tip(self.search, "Filter the list. Matches captions (hashtags included), the names you've given videos, "
-                         "and file names.")
-        bar.addWidget(self.search, 2)
+        # Filter & Sort popover: hashtag, brand / product, what to show, order
         self.tag_filter = tip(QComboBox(), "Show only videos with one hashtag, like a category. The number is how "
                                            "many videos have it. Tip: click a hashtag in the side panel too.")
-        self.tag_filter.setMinimumWidth(170)
-        self.tag_filter.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
-        self.tag_filter.setMinimumContentsLength(14)
+        self.tag_filter.setMinimumWidth(260)
         self.tag_filter.addItem("All hashtags", "")
-        bar.addWidget(self.tag_filter, 0, Qt.AlignTop)
         self.products_filter = ProductFilter(self.store)
         self.product_filter = self.products_filter.product     # the product menu (brand menu is .brand)
-        bar.addWidget(self.products_filter, 0, Qt.AlignTop)
-        ll.addLayout(bar)
+        self.show_filter = tip(QComboBox(), "Show every video, only those not downloaded yet, or only downloaded ones")
+        for key, label in (("", "All videos"), ("pending", "Not downloaded yet"), ("downloaded", "Downloaded")):
+            self.show_filter.addItem(label, key)
+        self.sort_box = tip(QComboBox(), "The order videos are shown in")
+        for key, label in SORTS:
+            self.sort_box.addItem(label, key)
+        self.filter_popover.add_section("Show", "Which videos the Library shows", self.show_filter)
+        self.filter_popover.add_section("Hashtag", "Only videos with this hashtag", self.tag_filter)
+        self.filter_popover.add_section("Brand and product", "Only videos tagged with a brand's products, or one "
+                                        "product (TikTok Shop)", self.products_filter)
+        self.filter_popover.add_section("Sort by", "The order videos are shown in", self.sort_box)
 
         # ---- selection strip: what will download, and the buttons to change it
         strip = QFrame(objectName="SelectionStrip")
@@ -317,26 +384,9 @@ class DownloadPage(QWidget):
         self.select_btn = QToolButton(text="More  ▾")
         self.select_btn.setPopupMode(QToolButton.InstantPopup)
         tip(self.select_btn, "More ways to select: only the newest few, only what your search shows, or the "
-                             "highlighted rows")
+                             "highlighted videos; and renaming files")
         sl.addWidget(self.select_btn)
         ll.addWidget(strip)
-
-        bar2 = QHBoxLayout()
-        bar2.setSpacing(10)
-        name_label = tip(muted("Name files"), "How downloaded video files are named")
-        name_label.setMinimumHeight(32)
-        bar2.addWidget(name_label, 0, Qt.AlignTop)
-        self.naming = NamingPicker()
-        bar2.addWidget(self.naming, 1)
-        self.autoname_btn = QToolButton(text="Suggest Names  ▾")
-        self.autoname_btn.setPopupMode(QToolButton.InstantPopup)
-        tip(self.autoname_btn, "Fill in a short name for videos from the first words of their captions")
-        bar2.addWidget(self.autoname_btn, 0, Qt.AlignTop)
-        self.apply_btn = QPushButton("Rename Files…")
-        tip(self.apply_btn, "Rename videos you've already downloaded so they match the naming choice. "
-                            "You'll see every change before anything is renamed.")
-        bar2.addWidget(self.apply_btn, 0, Qt.AlignTop)
-        ll.addLayout(bar2)
 
         self.table = VideoTable(self._toggle_selected)
         self.table.setModel(self.proxy)
@@ -378,11 +428,20 @@ class DownloadPage(QWidget):
         self.list_stack = QStackedWidget()
         self.list_stack.addWidget(self._build_empty_state())
         self.list_stack.addWidget(self.table)
+        self.grid = self._build_grid()
+        self.list_stack.addWidget(self.grid)
         ll.addWidget(self.list_stack, 1)
 
         self.detail = DetailPanel(self.thumbs)
+        self.detail.cover.setVisible(False)          # the player above shows the video
+        self.detail.title.setObjectName("CommandTitle")
         # Details only take room while a video is selected; otherwise the list gets the whole width.
-        self.inspector = Inspector(self.detail, "Video")
+        # The video plays on top; its details are under it.
+        self.player = PlayerWidget()
+        self.player.message.connect(self._set_status)
+        self._player_key: str | None = None
+        self.media_pane = MediaPane(self.player, self.detail)
+        self.inspector = Inspector(self.media_pane, "Video")
         self.inspector.closeRequested.connect(self.close_inspector)
         self.split = ContextualSplitter(list_area, self.inspector, self.store, "download", default_width=340,
                                         min_width=300)
@@ -428,8 +487,12 @@ class DownloadPage(QWidget):
         sel.addAction("Select Only the Newest…", self._check_newest)
         sel.addAction("Select Only What the Search Shows", self._check_visible)
         sel.addSeparator()
-        sel.addAction("Select Highlighted Rows", lambda: self._check_selected(True))
-        sel.addAction("Unselect Highlighted Rows", lambda: self._check_selected(False))
+        sel.addAction("Select Highlighted Videos", lambda: self._check_selected(True))
+        sel.addAction("Unselect Highlighted Videos", lambda: self._check_selected(False))
+        sel.addSeparator()
+        sel.addAction("Suggest Names for Highlighted Videos", lambda: self._auto_name(selected_only=True))
+        sel.addAction("Rename Downloaded Files…", self._apply_names)
+        sel.addAction("Download Settings…", self.settings_dialog.open_for_profile)
         self.select_btn.setMenu(sel)
 
         auto = QMenu(self)
@@ -452,9 +515,10 @@ class DownloadPage(QWidget):
             act.toggled.connect(lambda on, c=col: self._set_column_visible(c, on))
         menu.exec(self.table.horizontalHeader().mapToGlobal(pos))
 
-    def _row_menu(self, pos) -> None:
-        """Right-click a video (or highlighted videos)."""
-        index = self.table.indexAt(pos)
+    def _row_menu(self, pos, view=None) -> None:
+        """Right-click a video (or highlighted videos), in the grid or the list."""
+        view = view or self.table
+        index = view.indexAt(pos)
         if not index.isValid():
             return
         if not self.table.selectionModel().isRowSelected(index.row(), index.parent()):
@@ -471,7 +535,7 @@ class DownloadPage(QWidget):
             menu.addAction("Open Original Post", lambda: QDesktopServices.openUrl(QUrl(items[0].url)))
         menu.addSeparator()
         menu.addAction(f"Archive {n} Video{plural}…" if n > 1 else "Archive…", lambda: self._archive(items))
-        menu.exec(self.table.viewport().mapToGlobal(pos))
+        menu.exec(view.viewport().mapToGlobal(pos))
 
     def _archive(self, items: list[VideoItem]) -> None:
         """Hide videos from this list and the Board (nothing is deleted)."""
@@ -499,6 +563,57 @@ class DownloadPage(QWidget):
         self.table.setColumnHidden(col, not visible)
         hidden = [c for c in range(len(Col)) if self.table.isColumnHidden(c)]
         QSettings().setValue("hidden_columns", hidden)
+
+    # ================================================================ grid / list
+    def _build_grid(self) -> MediaGrid:
+        grid = MediaGrid()
+        grid.setModel(self.proxy)
+        grid.setSelectionModel(self.table.selectionModel())   # one selection, whichever view is showing
+        self.card_delegate = LibraryCardDelegate(self, grid)
+        self.scrub = ScrubCache(self)                 # hover a downloaded video's thumbnail to flip through it
+        self.scrub.loaded.connect(lambda _key: grid.viewport().update())
+        self.card_delegate.scrub = self.scrub
+        grid.setItemDelegate(self.card_delegate)
+        grid.checkToggled.connect(self._toggle_check_at)
+        grid.setContextMenuPolicy(Qt.CustomContextMenu)
+        grid.customContextMenuRequested.connect(lambda pos: self._row_menu(pos, grid))
+        grid.doubleClicked.connect(self._toggle_check_at)
+        space = QShortcut(QKeySequence(Qt.Key_Space), grid, context=Qt.WidgetShortcut)
+        space.activated.connect(self._toggle_selected)
+        return grid
+
+    def _view_index(self) -> int:
+        return 2 if self.view_toggle.mode == "grid" else 1
+
+    def _set_view(self, mode: str) -> None:
+        if self.model.items():
+            self.list_stack.setCurrentIndex(self._view_index())
+        current = self.table.selectionModel().currentIndex()
+        if current.isValid():
+            (self.grid if mode == "grid" else self.table).scrollTo(current)
+
+    def _toggle_check_at(self, index) -> None:
+        item = self.model.item(self.proxy.mapToSource(index).row())
+        if not item.is_downloaded:
+            self.model.set_checked([item.key], not item.checked)
+
+    def _on_show_filter(self) -> None:
+        self.proxy.set_state(self.show_filter.currentData())
+        self._update_counts()
+
+    def _apply_sort(self) -> None:
+        column, order = {"newest": (Col.DATE, Qt.DescendingOrder), "oldest": (Col.DATE, Qt.AscendingOrder),
+                         "views": (Col.VIEWS, Qt.DescendingOrder), "longest": (Col.LENGTH, Qt.DescendingOrder),
+                         "shortest": (Col.LENGTH, Qt.AscendingOrder),
+                         "title": (Col.HOOK, Qt.AscendingOrder)}.get(self.sort_box.currentData(),
+                                                                    (Col.DATE, Qt.DescendingOrder))
+        self.table.sortByColumn(column, order)
+
+    def _sync_filter_count(self) -> None:
+        brand, product = self.products_filter.brand.currentData(), self.products_filter.product.currentData()
+        n = sum(bool(x) for x in (self.tag_filter.currentData(), self.show_filter.currentData(),
+                                  brand or product))
+        self.filter_btn.set_count(n)
 
     def _build_empty_state(self) -> QWidget:
         w = QWidget()
@@ -531,6 +646,8 @@ class DownloadPage(QWidget):
         self.search.textChangedTo.connect(lambda text: (self.proxy.set_query(text), self._update_counts()))
         self.tag_filter.currentIndexChanged.connect(self._on_tag_filter)
         self.products_filter.changed.connect(self._on_product_filter)
+        self.show_filter.currentIndexChanged.connect(self._on_show_filter)
+        self.sort_box.currentIndexChanged.connect(self._apply_sort)
         self.detail.productClicked.connect(self.filter_by_product)
         self.detail.tagClicked.connect(self.filter_by_tag)
         self._tags_timer = QTimer(self, singleShot=True, interval=400, timeout=self._refresh_tags)
@@ -613,7 +730,7 @@ class DownloadPage(QWidget):
         return base_options(self.cookies.currentData() or None)
 
     def _selected_items(self) -> list[VideoItem]:
-        rows = {self.proxy.mapToSource(i).row() for i in self.table.selectionModel().selectedRows()}
+        rows = {self.proxy.mapToSource(i).row() for i in self.table.selectionModel().selectedIndexes()}
         return [self.model.item(r) for r in sorted(rows)]
 
     def _in_folder(self, item: VideoItem) -> bool:
@@ -631,7 +748,10 @@ class DownloadPage(QWidget):
 
     def _update_counts(self) -> None:
         items = self.model.items()
-        self.list_stack.setCurrentIndex(1 if items else 0)
+        self.list_stack.setCurrentIndex(self._view_index() if items else 0)
+        self.page_count.setText(f"{len(items)} video{'s' if len(items) != 1 else ''}"
+                                + (f" · {sum(1 for i in items if i.is_downloaded)} downloaded" if items else "")
+                                if items else "")
         checked = len(self.model.checked_items())
         done = sum(1 for i in items if i.is_downloaded)
         pending = len(items) - done
@@ -649,6 +769,7 @@ class DownloadPage(QWidget):
             hint = (f"<b>{checked} selected</b> to download.{narrowed} Click <b>Download {checked} "
                     f"Video{'s' if checked != 1 else ''}</b> at the bottom right.")
         self.selection_hint.setText(hint)
+        self._sync_filter_count()
         set_prop(self.select_all_btn, "primary", pending > 0 and not checked)   # the obvious next step
         set_prop(self.download_btn, "primary", checked > 0)
         self._tags_timer.start()
@@ -666,14 +787,32 @@ class DownloadPage(QWidget):
         if len(items) == 1:
             self.detail.show_item(items[0], self.model.planned_filename(items[0]))
             self.inspector.set_title("Video")
+            self._load_player(items[0])
             self.split.reveal()
         elif len(items) > 1:
             self.detail.show_multi(items)
             self.inspector.set_title(f"{len(items)} selected")
+            self._load_player(None)
             self.split.reveal()
         else:
             self.detail.show_empty()
+            self._load_player(None)
             self.split.dismiss()
+
+    def _load_player(self, item: VideoItem | None) -> None:
+        """The selected video in the player; changes only when the selection does."""
+        self.media_pane.set_player_visible(item is not None)
+        key = item.key if item is not None else None
+        if key == self._player_key and (item is None or item.is_downloaded == (self.player.original is not None)):
+            return
+        self._player_key = key
+        if item is None:
+            self.player.clear()
+            return
+        from .. import previews
+        path = item.path(self.folder) if item.is_downloaded else None
+        path = path if path and path.is_file() else None
+        self.player.set_video(path, self.thumbs.cover(item), previews.existing_preview(path) if path else None)
 
     def close_inspector(self) -> None:
         """✕ or Esc: deselect, which closes the details. Ticked videos stay ticked."""
@@ -755,7 +894,7 @@ class DownloadPage(QWidget):
         for item in merged:   # new videos arrive unselected; choices already made are kept
             item.checked = previous.get(item.key, False) and not item.is_downloaded
         self.model.set_items(merged)
-        self.table.sortByColumn(Col.DATE, Qt.DescendingOrder)
+        self._apply_sort()
         self._update_counts()
         self._refresh_detail()
 
@@ -841,8 +980,9 @@ class DownloadPage(QWidget):
             chip.set_busy(self.fetching)
             self.chip_row.addWidget(chip)
         if not views:
-            hint = muted("No sources yet. Paste a profile link below and click “Save This Link…”, or connect a "
-                         "YouTube channel under Accounts.")
+            hint = muted("No sources yet: paste a link, then Save This Link…")
+            tip(hint, "Saved sources become one-click buttons here. You can also connect a YouTube channel under "
+                      "Accounts.")
             hint.setProperty("faint", True)
             self.chip_row.addWidget(hint)
         self.chip_row.addStretch()
@@ -1279,6 +1419,8 @@ class DownloadPage(QWidget):
     def shutdown(self, timeout_ms: int = 8000) -> None:
         for timer in (self._tags_timer, self._products_timer):
             timer.stop()
+        self.player.shutdown()
+        self.scrub.shutdown()
         if getattr(self, "_bridge", None) is not None:
             self._bridge.changed.disconnect(self._on_store_change)
             self._bridge = None

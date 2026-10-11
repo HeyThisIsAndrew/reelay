@@ -1,6 +1,7 @@
 # Runtime dependencies (same as pyproject.toml).
 yt-dlp[default,curl-cffi]>=2026.8.19
 PySide6-Essentials>=6.8
+PySide6-Addons>=6.8         # QtMultimedia: the built-in video player (keep the same version as Essentials)
 imageio-ffmpeg>=0.5
 keyring>=25
 # Agent API server.

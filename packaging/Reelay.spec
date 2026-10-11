@@ -45,6 +45,7 @@ hiddenimports += collect_submodules("keyring.backends")
 # Agent API: uvicorn picks its event loop / protocol modules at runtime.
 hiddenimports += collect_submodules("uvicorn") + ["reelay.api", "reelay.scheduler"]
 hiddenimports += collect_submodules("reelay.publishers")
+hiddenimports += ["PySide6.QtMultimedia", "PySide6.QtMultimediaWidgets", "PySide6.QtSvg"]   # player, icons
 datas += copy_metadata("keyring")
 
 # Bundled ffmpeg (used when the user has no system ffmpeg).
@@ -58,8 +59,9 @@ a = Analysis(
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
-    excludes=["tkinter", "matplotlib", "numpy", "pytest", "PySide6.QtWebEngineCore",
-              "PySide6.Qt3DCore", "PySide6.QtQuick", "PySide6.QtQml"],
+    excludes=["tkinter", "matplotlib", "numpy", "pytest", "PySide6.QtWebEngineCore", "PySide6.QtWebEngineWidgets",
+              "PySide6.Qt3DCore", "PySide6.QtQuick", "PySide6.QtQml", "PySide6.QtCharts", "PySide6.QtDataVisualization",
+              "PySide6.QtGraphs", "PySide6.QtPdf", "PySide6.QtBluetooth", "PySide6.QtLocation", "PySide6.QtSensors"],
     noarchive=False,
 )
 pyz = PYZ(a.pure)

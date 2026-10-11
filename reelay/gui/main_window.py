@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import re
 
-from PySide6.QtCore import QSettings, Qt, QUrl
+from PySide6.QtCore import QSettings, Qt, QTimer, QUrl
 from PySide6.QtGui import QAction, QActionGroup, QColor, QDesktopServices, QKeySequence, QPainter
 from PySide6.QtWidgets import (QApplication, QButtonGroup, QFrame, QHBoxLayout, QLabel, QMainWindow,
                                QMenu, QMessageBox, QPushButton, QStackedWidget, QToolButton, QVBoxLayout, QWidget)
@@ -21,16 +21,20 @@ from .help_page import HelpPage
 from .settings_page import SettingsPage
 from . import branding
 from .profile_dialog import ProfileDialog
+from .chrome import NavButton, UpNext, icon_button, retint_icon_buttons
 from .theme import MODE_LABELS, MODES, apply_theme, set_prop
 from .thumbnails import ThumbnailCache
 from .tips import tip
 
 log = logging.getLogger("reelay")
 
-PAGES = [("download", "Download"), ("board", "Board"), ("automations", "Automations"), ("accounts", "Accounts"),
+PAGES = [("download", "Library"), ("board", "Board"), ("automations", "Automations"), ("accounts", "Accounts"),
          ("settings", "Settings")]
+NAV_ICONS = {"download": "library", "board": "board", "automations": "bolt", "accounts": "accounts",
+             "settings": "settings", "help": "help"}
+SIDEBAR_WIDE, SIDEBAR_RAIL = 212, 64
 NAV_TIPS = {
-    "download": "Bring videos in from TikTok, Instagram or YouTube",
+    "download": "Your video library: bring videos in from TikTok, Instagram or YouTube",
     "board": "Your video tickets: write captions, check readiness, schedule and track posts",
     "automations": "Rules that work your tickets for you: templates, hashtags, platforms and scheduling",
     "accounts": "Connect the accounts videos go out to",
@@ -86,6 +90,7 @@ class MainWindow(QMainWindow):
 
         self._build_ui()
         self._build_menu()
+        self.rail_btn.setChecked(store.get_setting("ui.sidebar_compact", "0") == "1")
         self.download.videosChanged.connect(self.board.reload)
         self.download.busyChanged.connect(lambda _b: self._sync_switch_enabled())
         self.board.openAccounts.connect(lambda: self.go("accounts"))
@@ -107,7 +112,8 @@ class MainWindow(QMainWindow):
         h.setSpacing(0)
 
         side = QWidget(objectName="Sidebar")
-        side.setFixedWidth(204)
+        side.setFixedWidth(SIDEBAR_WIDE)
+        self.sidebar = side
         outer_side = QVBoxLayout(side)
         outer_side.setContentsMargins(0, 0, 0, 0)
         outer_side.setSpacing(0)
@@ -148,30 +154,33 @@ class MainWindow(QMainWindow):
 
         self.nav = QButtonGroup(self)
         self.nav.setExclusive(True)
-        self.nav_buttons: dict[str, QPushButton] = {}
-        for key, label in PAGES:
-            b = QPushButton(label)
-            set_prop(b, "nav")
-            b.setCheckable(True)
+        self.nav_buttons: dict[str, NavButton] = {}
+        for key, label in PAGES + [("help", "Help")]:
+            b = NavButton(label, NAV_ICONS[key])
             b.clicked.connect(lambda _=False, k=key: self.go(k))
             tip(b, NAV_TIPS[key])
             self.nav.addButton(b)
             self.nav_buttons[key] = b
+            if key == "help":
+                sl.addStretch()
+                self.up_next = UpNext()
+                self.up_next.clicked.connect(lambda: self.go("board"))
+                sl.addWidget(self.up_next)
+                sl.addSpacing(8)
             sl.addWidget(b)
-        sl.addStretch()
-        help_btn = QPushButton("Help")
-        set_prop(help_btn, "nav")
-        help_btn.setCheckable(True)
-        help_btn.clicked.connect(lambda: self.go("help"))
-        tip(help_btn, NAV_TIPS["help"])
-        self.nav.addButton(help_btn)
-        self.nav_buttons["help"] = help_btn
-        sl.addWidget(help_btn)
         sl.addSpacing(6)
-        foot = QLabel(f"{APP_NAME} {__version__}")
-        foot.setProperty("faint", True)
-        foot.setContentsMargins(10, 0, 0, 0)
-        sl.addWidget(foot)
+        foot_row = QHBoxLayout()
+        foot_row.setContentsMargins(10, 0, 0, 0)
+        self.version_label = QLabel(f"{APP_NAME} {__version__}")
+        self.version_label.setProperty("faint", True)
+        self.rail_btn = icon_button("sidebar", "Collapse the sidebar to icons (or expand it again)")
+        self.rail_btn.setCheckable(True)
+        self.rail_btn.toggled.connect(self.set_sidebar_compact)
+        foot_row.addWidget(self.version_label, 1)
+        foot_row.addWidget(self.rail_btn)
+        sl.addLayout(foot_row)
+        self._up_next_timer = QTimer(self, interval=60_000, timeout=self._refresh_up_next)
+        self._up_next_timer.start()
         h.addWidget(side)
 
         self.stack = QStackedWidget()
@@ -242,6 +251,22 @@ class MainWindow(QMainWindow):
         menu.addAction(a)
         return a
 
+    # ---------------------------------------------------------------- sidebar
+    def set_sidebar_compact(self, compact: bool) -> None:
+        """Icons only (more room for videos), or icons with labels."""
+        self.sidebar.setFixedWidth(SIDEBAR_RAIL if compact else SIDEBAR_WIDE)
+        for b in self.nav_buttons.values():
+            b.set_compact(compact)
+        for w in (self.profile_name, self.version_label):
+            w.setVisible(not compact)
+        self.tagline.setVisible(not compact and bool(self.tagline.text()))
+        self.up_next.setMaximumHeight(0 if compact else 16777215)
+        self.store.set_setting("ui.sidebar_compact", "1" if compact else "0")
+
+    def _refresh_up_next(self) -> None:
+        what, when = self.board.next_up() if self.profile else ("", None)
+        self.up_next.set_next(what, when)
+
     # ---------------------------------------------------------------- navigation
     def set_view_only(self, text: str, button: str = "", on_click=None) -> None:
         """Show (or with text="" hide) the banner across the top, e.g. for a shared database
@@ -272,6 +297,7 @@ class MainWindow(QMainWindow):
         if page is self.board:
             self.board.reload()
             self.board.sync()
+            self._refresh_up_next()
         elif page is self.accounts_page:
             self.accounts_page.refresh()
         elif page is self.automations_page:
@@ -302,6 +328,7 @@ class MainWindow(QMainWindow):
         for page in self.pages.values():
             if hasattr(page, "set_profile"):
                 page.set_profile(profile)
+        self._refresh_up_next()
 
     def _show_brand(self) -> None:
         """The active profile's logo, name, tagline and colour strip in the sidebar."""
@@ -314,7 +341,7 @@ class MainWindow(QMainWindow):
         self.profile_name.ensurePolished()        # bold from the stylesheet changes how it wraps
         self.profile_btn.setMinimumHeight(max(48, self.profile_btn.layout().totalHeightForWidth(184)))
         self.tagline.setText(brand.tagline)
-        self.tagline.setVisible(bool(brand.tagline))
+        self.tagline.setVisible(bool(brand.tagline) and not self.rail_btn.isChecked())
         self.brand_strip.set_color(branding.strip_color(self.store, profile))
 
     def _fill_profile_menu(self, menu: QMenu | None = None) -> None:
@@ -403,6 +430,7 @@ class MainWindow(QMainWindow):
             a.setChecked(a.data() == name)
         self.settings_page.refresh()
         self._show_brand()
+        retint_icon_buttons(self)
         self.download.model.refresh_all()
         for w in QApplication.allWidgets():
             w.update()

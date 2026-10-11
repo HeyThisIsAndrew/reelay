@@ -157,3 +157,26 @@ class ContextualSplitter(QSplitter):
     def _save_width(self) -> None:
         if self.store is not None and self.key:
             self.store.set_setting(self._setting, str(self.width_wanted))
+
+
+class MediaPane(QWidget):
+    """The player on top (16:9, never more than about half the panel), the rest below it.
+    The player stays put while the content under it scrolls."""
+
+    def __init__(self, player: QWidget, content: QWidget, parent=None):
+        super().__init__(parent)
+        self.player, self.content = player, content
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        lay.addWidget(player)
+        lay.addWidget(content, 1)
+
+    def set_player_visible(self, on: bool) -> None:
+        self.player.setVisible(on)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        stage = getattr(self.player, "stage", None)
+        if stage is not None:
+            stage.setFixedHeight(int(min(self.width() * 9 / 16, self.height() * 0.48)))

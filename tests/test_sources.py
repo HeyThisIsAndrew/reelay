@@ -218,5 +218,5 @@ def test_save_pasted_link_and_remove_with_duplicates(page_env, qtbot, monkeypatc
 def test_doors_are_explained(page_env):
     window, *_ = page_env
     page = window.download
-    assert "pulls videos in" in page.doors_note.text() and "pushes videos out" in page.doors_note.text()
-    assert "account you manage" in page.paste_label.text() and "permission to manage" in page.doors_note.text()
+    assert "pulls videos in" in page.doors_note.toolTip() and "pushes videos out" in page.doors_note.toolTip()
+    assert "account you manage" in page.url.toolTip() and "permission to manage" in page.doors_note.text()

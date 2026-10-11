@@ -14,15 +14,22 @@ Hover over almost anything to see what it does. You can turn those tips off in *
 ## Getting started
 
 1. **Pick a profile.** The name at the top of the sidebar is the current profile. Each creator or channel gets their own profile, with its own videos, board and accounts. Click it to switch profiles or make a new one.
-2. **Bring videos in.** On **Download**, paste a profile link and click **List Videos**. Nothing is selected at first: click **Select All**, or tick the ones you want, then click **Download**.
+2. **Bring videos in.** On **Library**, paste a profile link and click **List Videos**. Nothing is selected at first: click **Select All**, or tick the ones you want, then click **Download**.
 3. **Write the posts.** On **Board**, click a video to open its ticket. Fill in the captions, then check the readiness list at the top.
 4. **Post.** Copy each caption into the platform's app, or connect YouTube under **Accounts** and let Reelay schedule it for you.
 
 ---
 
-## Bringing videos in (Download)
+## Bringing videos in (Library)
 
 Only import media you own or have permission to manage.
+
+- **Grid or list.** Videos show as cards with big thumbnails (the grid), or as rows in a dense list for bulk work like renaming. Switch with the two buttons at the top right; Reelay remembers your choice.
+  - **Badges on a card:** what kind of video it is (*Short · 1080p*, *Long-form · 4K*) and its length. Vertical videos sit on a soft, blurred copy of themselves, so Shorts and long-form are easy to tell apart.
+  - **The circle at the top right** ticks a video for downloading (or press **Space**); a green check means it's downloaded. While downloading, a line along the bottom of the thumbnail shows progress.
+  - **Hover-scrub:** move the mouse across a downloaded video's thumbnail to flip through it. The frames are made in the background the first time (about a second) and kept.
+- **Filter** (top right) holds what to show (all, not downloaded yet, downloaded), the hashtag and brand or product filters, and the sort order. The button shows how many filters are on.
+- **Download settings** (the gear) hold where videos are saved, the quality, browser sign-in, and how files are named.
 
 - **Saved sources** are buttons for links you use often. Click **List Videos** on one to see its videos. To add one, paste a link and click **Save This Link…**. Use the **⋯** menu on a source to rename it, mark it as one of your own accounts, or remove it.
 - **Connected YouTube channels** (from Accounts) appear as sources automatically and don't need a link. Private and scheduled videos are shown but left unticked.
@@ -37,7 +44,7 @@ Only import media you own or have permission to manage.
 - **Hashtags as categories.** The menu next to the search (**All hashtags ▾**) lists every hashtag in the list, with how many videos have it. Pick one to show only those videos. You can also click a hashtag in the side panel. **Select All** then selects just what's shown.
 - **Tagged products (TikTok Shop).** Reelay looks up which products are tagged on each TikTok video, in the background. **All products ▾** (next to the hashtags) lists them with how many videos have each; pick one to see every video for that product, even when the captions and hashtags are worded differently. Search finds product names too: typing a brand finds every video tagged with its products. Products also show in the side panel (click one to filter) and on the ticket, under *Where it came from*.
   - YouTube and Instagram product tags aren't read yet. YouTube's API doesn't include them, and Instagram's need the account owner's Meta app.
-- **The selection strip** right above the list always says what will download ("Nothing selected yet" or "12 selected"), and holds **Select All**, **Unselect All** and **More ▾**.
+- **The selection strip** right above the videos always says what will download ("Nothing selected yet" or "12 selected"), and holds **Select All**, **Unselect All** and **More ▾** (which also has renaming and Download Settings).
 - **Use browser sign-in** borrows your sign-in from a web browser. Instagram usually needs it, as do your own private YouTube videos. Reelay never sees your password.
 - **TikTok** downloads are the clean original without the watermark, with the creator's own audio.
 
@@ -45,7 +52,7 @@ Every imported video records where it came from: the platform, the original link
 
 ### Naming files
 
-**Name files** chooses how downloaded files are named, and shows an example right next to it. Common choices:
+**Name files** (in Download Settings, the gear) chooses how downloaded files are named, and shows an example right next to it. Common choices:
 
 - *Platform, date and video ID* (the default), such as `TikTok_20261002_7692175258450677023.mp4`
 - *Date and your name*, such as `20261002_letting-go.mp4`
@@ -134,7 +141,7 @@ Edits never change the original download: they make one edited copy, and Reelay 
 - **Search** (under the Board's title) finds videos by any words in their title, original caption, any platform's copy, topic, keywords, notes, **and anything said in the video** (its transcript). Words match as you type ("sungl" finds "sunglasses"); put "quotes" around an exact phrase. A card found by what was said shows the quote. Get transcripts with **Get from Original Post**, or type or paste them into Details.
 - **All hashtags ▾**, **All brands ▾** and **All products ▾** narrow the Board to a hashtag, or to a TikTok Shop brand or product tagged in the video.
 - **Show: …** narrows the Board to tickets that are ready, not ready, or blocked on a particular platform. Each column shows how many of its cards are visible ("3 of 12").
-- **Archive** hides videos from the Board and the Download page without deleting anything. **Archived…** brings them back.
+- **Archive** hides videos from the Board and the Library without deleting anything. **Archived…** (in the Board's ⋯ menu) brings them back.
 - **Change History…** lists every saved change. Highlight one and click **Restore the Earlier Value** to undo it. The undo is saved as a new change, so nothing is ever lost.
 
 ### Scheduling
@@ -209,7 +216,18 @@ Passwords and tokens are kept in your Mac's Keychain (or Windows Credential Mana
 - **My Channel** is the starting profile. It stays empty until you add sources or connect accounts.
 - **Branding:** **Profile → Edit Profile & Branding…** (or **Settings → Profile**) gives a profile its name, a tagline, a logo and brand colours. The logo becomes its icon in the sidebar and the Profile menu, and a thin bar in the brand colour runs across the top of the sidebar in every theme, so you always know whose account you're working in. **Match Logo** picks colours from the logo.
 - **Custom theme:** **Settings → Appearance → Custom** shows Reelay in the current profile's brand colours, and switching profiles switches the colours. Reelay keeps text readable whatever colours you pick, and warns if buttons would be hard to see. Light, Dark and Black look the same for every profile.
-- **The panel on the right** (a video's details on Download, its ticket on the Board) only opens when something is selected, so the list and board get the whole window otherwise. Close it with **✕** or **Esc**; if you typed copy you haven't saved, Reelay asks first. Drag its edge to resize it; Reelay remembers the width.
+- **The panel on the right** (a video's details in the Library, its ticket on the Board) only opens when something is selected, so the list and board get the whole window otherwise. Close it with **✕** or **Esc**; if you typed copy you haven't saved, Reelay asks first. Drag its edge to resize it; Reelay remembers the width.
+
+---
+
+## Watching videos and the Command Center
+
+- **The player.** Selecting a downloaded video plays it at the top of the right-hand panel: press play (or **Space**), click anywhere on the bar to jump, hover the bar to see the time. **J** and **L** skip 10 seconds, the arrow keys 5, **M** mutes. The buttons on the right change the speed, loop, open it in its own window, or open it in QuickTime.
+- **If a video won't play** (often 4K YouTube videos, which use formats the built-in player can't decode), click **Make a Preview Copy**: Reelay makes a small copy that plays, in the background. The original file is never changed, and copies are cleaned up automatically.
+- **On the Board** the panel is your Command Center: the video on top, then the readiness ring (how many of the platforms it's going to are ready), the platforms, the captions, and **Schedule** pinned at the bottom with one line saying exactly what will happen.
+- **Card marks on the Board:** ⚡ an Automation acted on the video, ⏳ an AI assistant asked to change it and it's waiting for your approval, ✦ the caption was last edited by an AI assistant. Hover a card for details. **Filter → Cards** switches between large cards with thumbnails and compact ones.
+- **Long videos.** #Shorts is only added for Shorts (vertical, 3 minutes or less); longer videos go to YouTube as regular videos. Bluesky (3 minutes) and Threads (5 minutes) say so in the readiness list when a video is too long for them.
+- **The sidebar** can shrink to icons (the button at its bottom right), and *Up next* shows the next post going out for this profile.
 
 ---
 
@@ -228,7 +246,7 @@ Reelay can let AI assistants on this Mac read your board, edit tickets and sched
 
 ## Where things are kept
 
-- **Videos:** the folder shown next to **Save videos to** on the Download page.
+- **Videos:** the folder shown under **Where videos go** in Download Settings (the gear on the Library).
 - **Database:** shown at the top of **Settings → Data** (it can live in a shared folder; see above).
 - **Caches:** **Settings → Open Data Folder**.
 - **Passwords and tokens:** your system keychain.

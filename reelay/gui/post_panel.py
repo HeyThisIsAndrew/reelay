@@ -221,7 +221,7 @@ class PostPanel(QFrame):
         self.cover.setFixedSize(72, 128)
         head.addWidget(self.cover, 0, Qt.AlignTop)
         hv = QVBoxLayout()
-        self.hook = QLabel(objectName="DetailTitle")
+        self.hook = QLabel(objectName="CommandTitle")
         self.hook.setWordWrap(True)
         self.meta = QLabel()
         self.meta.setProperty("muted", True)
@@ -377,6 +377,7 @@ class PostPanel(QFrame):
         self.publish_at = tip(QDateTimeEdit(), "When the video goes live, in your local time")
         self.publish_at.setCalendarPopup(True)
         self.publish_at.setDisplayFormat("ddd MMM d, yyyy   h:mm AP")
+        self.publish_at.dateTimeChanged.connect(lambda _dt: self._sync_dock())
         fl.addWidget(self.publish_at)
         self.sched_note = QLabel()
         self.sched_note.setProperty("faint", True)
@@ -403,16 +404,7 @@ class PostPanel(QFrame):
         lay.addSpacing(4)
         lay.addWidget(self.errors)
 
-        arow = QHBoxLayout()
-        self.save_btn = tip(QPushButton("Save Changes"), "Save this ticket without posting anything")
-        self.save_btn.clicked.connect(lambda: self.saveRequested.emit(self.collect()))
-        self.upload_btn = tip(QPushButton("Schedule"), "Hand the video to the ticked platforms at the chosen time")
-        set_prop(self.upload_btn, "primary")
-        self.upload_btn.clicked.connect(lambda: self.uploadRequested.emit(self.collect(), self.shorts.isChecked()))
-        arow.addWidget(self.save_btn)
-        arow.addWidget(self.upload_btn, 1)
-        lay.addSpacing(4)
-        lay.addLayout(arow)
+        # (Save and Schedule live in the action dock pinned under the scroll area; see below.)
 
         # ---- the ticket's own fields, and where it has gone
         lay.addSpacing(12)
@@ -432,7 +424,35 @@ class PostPanel(QFrame):
         lay.addWidget(self.history_section)
         lay.addStretch()
         scroll.setWidget(body)
-        return scroll
+
+        # ---- the action dock: always in reach, however far you've scrolled
+        page = QWidget()
+        pl = QVBoxLayout(page)
+        pl.setContentsMargins(0, 0, 0, 0)
+        pl.setSpacing(0)
+        pl.addWidget(scroll, 1)
+        self.dock = QWidget(objectName="ActionDock")
+        dl = QVBoxLayout(self.dock)
+        dl.setContentsMargins(16, 10, 16, 12)
+        dl.setSpacing(8)
+        self.dock_summary = QLabel(objectName="DockSummary")
+        self.dock_summary.setWordWrap(True)
+        dl.addWidget(self.dock_summary)
+        arow = QHBoxLayout()
+        self.save_btn = tip(QPushButton("Save Changes"), "Save this ticket without posting anything")
+        self.save_btn.clicked.connect(lambda: self.saveRequested.emit(self.collect()))
+        self.upload_btn = tip(QPushButton("Schedule"), "Hand the video to the ticked platforms at the chosen time")
+        set_prop(self.upload_btn, "primary")
+        self.upload_btn.clicked.connect(lambda: self.uploadRequested.emit(self.collect(), self.shorts.isChecked()))
+        arow.addWidget(self.save_btn)
+        arow.addWidget(self.upload_btn, 1)
+        dl.addLayout(arow)
+        pl.addWidget(self.dock)
+        return page
+
+    def use_player(self, on: bool = True) -> None:
+        """The inspector shows the video above this panel, so the small cover isn't needed."""
+        self.cover.setVisible(not on)
 
     def _refresh_video_summary(self) -> None:
         self.video_section.set_summary(self.video_tools.summary() if self.card else "")
@@ -685,6 +705,21 @@ class PostPanel(QFrame):
         self.sched_note.setText(" ".join(parts))
         self.upload_btn.setText("Schedule" if scheduled else "Publish Now")
         self.upload_btn.setEnabled(bool(targets))
+        self._sync_dock()
+
+    def _sync_dock(self) -> None:
+        """One line above Schedule saying exactly what will happen."""
+        targets = self._targets()
+        if not targets:
+            self.dock_summary.setText("Nothing posts automatically yet: mark a platform Going above.")
+            return
+        names = ", ".join(Platform.LABELS[p] for p in targets)
+        if self.when.currentData() == "schedule":
+            dt = self.publish_at.dateTime().toPython()
+            when = f"{dt:%a %b} {dt.day}, {dt.hour % 12 or 12}:{dt:%M}{'am' if dt.hour < 12 else 'pm'}"
+            self.dock_summary.setText(f"Goes live {when} on {names}.")
+        else:
+            self.dock_summary.setText(f"Publishes on {names} as soon as it's uploaded.")
 
     def _locked(self) -> bool:
         post = self.card.post if self.card else None
@@ -700,6 +735,7 @@ class PostPanel(QFrame):
         self.form.setVisible(not locked)
         self.save_btn.setVisible(not locked)
         self.upload_btn.setVisible(not locked)
+        self.dock.setVisible(not locked)        # scheduled or live: the status box above says what's next
         self.status_box.setVisible(locked or bool(card and card.row.stage == Stage.PUBLISHED))
         self.cancel_btn.setVisible(bool(post and post.status == PostStatus.UPLOADING))
         self.upload_bar.setVisible(bool(post and post.status == PostStatus.UPLOADING))

@@ -24,6 +24,15 @@ from .platform_text import text_problem
 from .publishing import DESCRIPTION_MAX_BYTES, TAGS_MAX_CHARS, TITLE_MAX
 
 THREADS_MAX_SECONDS = 300
+BLUESKY_MAX_SECONDS = 180
+SHORT_FORM_MAX_SECONDS = 180     # YouTube Shorts are at most 3 minutes
+
+
+def is_short_form(width: int | None, height: int | None, duration: float | None) -> bool:
+    """A Short: 3 minutes or less and not landscape (unknown sizes count as vertical)."""
+    if duration and duration > SHORT_FORM_MAX_SECONDS:
+        return False
+    return not (width and height and width > height)
 
 PASS, WARN = "pass", "warn"
 READY, NOT_READY, NOT_CHECKED = "ready", "not_ready", "not_checked"
@@ -130,6 +139,9 @@ def platform_checks(post: Post, platform: str, video_path: Path | None, duration
         checks.append(_check("tags", "Tags", f"Tags are {tags_len} characters in total; the limit is "
                                              f"{TAGS_MAX_CHARS}." if tags_len > TAGS_MAX_CHARS else None,
                              "Within 500 characters." if post.tags else "None (optional)."))
+        if duration and duration > SHORT_FORM_MAX_SECONDS:
+            checks.append(Check("format", "Format", PASS, "Posts as a regular YouTube video (longer than 3 "
+                                                          "minutes, so not a Short)."))
     elif platform in OWN_BLOCK:
         key, label = OWN_BLOCK[platform]
         text = (getattr(post, key) or "").strip()
@@ -138,6 +150,8 @@ def platform_checks(post: Post, platform: str, video_path: Path | None, duration
         checks.append(_check(key, label, problem, "Written, within the limit."))
         if platform == Platform.THREADS and duration and duration > THREADS_MAX_SECONDS:
             checks.append(Check("length", "Video length", WARN, "Threads videos can be at most 5 minutes long."))
+        if platform == Platform.BLUESKY and duration and duration > BLUESKY_MAX_SECONDS:
+            checks.append(Check("length", "Video length", WARN, "Bluesky videos can be at most 3 minutes long."))
     exists = video_path is not None and Path(video_path).is_file()
     checks.append(_check("video", "Video file", None if exists else "The video file is missing. Download it first.",
                          "Downloaded."))

@@ -151,3 +151,47 @@ QCheckBox::indicator:hover, QTableView::indicator:hover { border-color: {text_se
 QCheckBox::indicator:checked, QTableView::indicator:checked {
     background: {accent_color}; border-color: {accent_color}; image: url("{check}"); }
 QCheckBox::indicator:disabled { background: {bg_surface}; border-color: {border}; }
+
+/* ---- Reelay Studio chrome ---- */
+QFrame#Popover { background: {bg_raised}; border: 1px solid {border}; border-radius: {radius_lg}px; }
+QToolButton#FilterButton { padding: 6px 12px; }
+QToolButton#FilterButton[active="true"] { border-color: {accent_ring}; background: {accent_soft}; color: {text_primary}; }
+QToolButton#IconButton { background: transparent; border: 1px solid transparent; border-radius: {radius}px; padding: 6px; }
+QToolButton#IconButton:hover { background: {bg_hover}; border-color: {divider}; }
+QToolButton#IconButton:checked { background: {accent_soft}; border-color: {accent_ring}; }
+QToolButton#ViewToggle { border-radius: 0; padding: 5px 9px; background: {bg_raised}; border: 1px solid {border}; margin-left: -1px; }
+QToolButton#ViewToggle[segment="first"] { border-top-left-radius: {radius}px; border-bottom-left-radius: {radius}px; margin-left: 0; }
+QToolButton#ViewToggle[segment="last"] { border-top-right-radius: {radius}px; border-bottom-right-radius: {radius}px; }
+QToolButton#ViewToggle:checked { background: {accent_color}; border-color: {accent_color}; }
+QFrame#UpNext { background: {bg_raised}; border: 1px solid {divider}; border-radius: {radius}px; }
+QFrame#UpNext:hover { border-color: {accent_ring}; }
+QLabel#UpNextHeading { color: {text_muted}; font-size: {font_xs}pt; font-weight: 600; letter-spacing: 0.5px; }
+QLabel#UpNextText { color: {text_primary}; font-size: {font_sm}pt; }
+QPushButton[nav="true"][compact="true"] { padding: 9px 0; text-align: center; }
+QLineEdit#SearchField { padding: 7px 10px; border-radius: {radius}px; }
+QLabel#PageCount { color: {text_muted}; font-size: {font_sm}pt; }
+QFrame#SourceBar { background: transparent; border: none; }
+
+/* ---- Player ---- */
+QWidget#Player { background: {bg_surface}; }
+QWidget#PlayerBar { background: {bg_surface}; border-bottom: 1px solid {divider}; }
+QWidget#PlayerNotice { background: {bg_raised}; border-bottom: 1px solid {divider}; }
+QToolButton#PlayerButton { background: transparent; border: none; border-radius: {radius_sm}px; padding: 5px;
+                           color: {text_secondary}; font-size: {font_sm}pt; font-weight: 600; min-width: 18px; }
+QToolButton#PlayerButton:hover { background: {bg_hover}; color: {text_primary}; }
+QToolButton#PlayerButton:checked { background: {accent_soft}; }
+QLabel#PlayerTime { color: {text_secondary}; font-size: {font_sm}pt; padding: 0 6px; }
+QSlider#Scrubber::groove:horizontal { height: 4px; background: {bg_pressed}; border-radius: 2px; }
+QSlider#Scrubber::sub-page:horizontal { background: {accent_color}; border-radius: 2px; }
+QSlider#Scrubber::add-page:horizontal { background: {bg_pressed}; border-radius: 2px; }
+QSlider#Scrubber::handle:horizontal { background: {accent_color}; width: 12px; height: 12px; margin: -4px 0;
+                                      border-radius: 6px; }
+QSlider#Scrubber::handle:horizontal:hover { background: {accent_hover}; }
+QSlider#Scrubber:disabled::sub-page:horizontal { background: {bg_pressed}; }
+QSlider#Scrubber:disabled::handle:horizontal { background: {bg_pressed}; }
+
+/* ---- Command Center ---- */
+QLabel#CommandTitle { font-size: {font_h1}pt; font-weight: 700; }
+QWidget#ActionDock { background: {bg_surface}; border-top: 1px solid {divider}; }
+QLabel#DockSummary { color: {text_secondary}; font-size: {font_sm}pt; }
+QPlainTextEdit#CopyText, QLineEdit#CopyText { font-size: {font_lg}pt; }

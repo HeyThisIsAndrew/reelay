@@ -62,6 +62,42 @@ def _faint(text: str = "", prop: str = "faint") -> QLabel:
 
 
 # ====================================================================== readiness
+class ReadinessRing(QWidget):
+    """How many of the platforms this video is going to are ready, as a ring ("4/5")."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(40, 40)
+        self.ready, self.total = 0, 0
+
+    def set_counts(self, ready: int, total: int) -> None:
+        self.ready, self.total = ready, total
+        self.update()
+
+    def paintEvent(self, _event) -> None:  # noqa: N802
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QPainter, QPen
+        from . import theme
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        r = QRectF(3, 3, self.width() - 6, self.height() - 6)
+        p.setPen(QPen(QColor(theme.P.bg_pressed), 4))
+        p.drawEllipse(r)
+        if self.total:
+            done = self.ready == self.total
+            pen = QPen(QColor(theme.P.success if done else theme.P.accent_color), 4)
+            pen.setCapStyle(Qt.RoundCap)
+            p.setPen(pen)
+            p.drawArc(r, 90 * 16, -int(360 * 16 * self.ready / self.total))
+        p.setPen(QColor(theme.P.text_primary))
+        font = p.font()
+        font.setPointSize(max(font.pointSize() - 3, 8))
+        font.setBold(True)
+        p.setFont(font)
+        p.drawText(self.rect(), Qt.AlignCenter, f"{self.ready}/{self.total}" if self.total else "–")
+        p.end()
+
+
 class ReadinessHeader(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -70,7 +106,12 @@ class ReadinessHeader(QFrame):
         lay.setContentsMargins(12, 10, 12, 10)
         lay.setSpacing(6)
         top = QHBoxLayout()
+        top.setSpacing(12)
+        self.ring = ReadinessRing()
+        tip(self.ring, "How many of the platforms this video is going to are ready")
+        top.addWidget(self.ring)
         self.badge = QLabel()
+        self.badge.setVisible(False)       # the ring says it now; the text stays for screen readers and tests
         tip(self.badge, "READY when at least one platform this video is going to is ready. Platforms with "
                         "automatic posting off count as ready: you post those by hand.")
         top.addWidget(self.badge)
@@ -92,6 +133,7 @@ class ReadinessHeader(QFrame):
             return
         self.show()
         ready = readiness.ready
+        self.ring.set_counts(sum(1 for p in readiness.platforms.values() if p.ready), len(readiness.platforms))
         self.badge.setText("READY" if ready else "NOT READY")
         set_prop(self.badge, "badge", "ready" if ready else "not_ready")
         blocking = [readiness.platforms[n].label for n in readiness.blocking]
