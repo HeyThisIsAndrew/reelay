@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFrame, QHBoxLayout, QLabel,
-                               QLineEdit, QListWidget, QMessageBox, QPushButton, QScrollArea, QVBoxLayout, QWidget)
+from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFrame, QGridLayout, QHBoxLayout,
+                               QLabel, QLineEdit, QListWidget, QMenu, QMessageBox, QPushButton, QScrollArea,
+                               QToolButton, QVBoxLayout, QWidget)
 
 from .. import rules as R
 from ..columns import load as load_columns
 from ..text import local_text
+from . import icons, theme
 from .theme import set_prop
 from .tips import tip
 
@@ -22,6 +24,7 @@ def _muted(text: str, prop: str = "muted") -> QLabel:
 
 class ConditionRow(QWidget):
     removed = Signal(object)
+    changed = Signal()
 
     def __init__(self, c: R.Condition | None = None, parent=None):
         super().__init__(parent)
@@ -41,6 +44,8 @@ class ConditionRow(QWidget):
         if c:
             self.kind.setCurrentIndex(max(self.kind.findData(c.kind), 0))
             self.value.setText(c.value)
+        self.kind.currentIndexChanged.connect(lambda *_: self.changed.emit())
+        self.value.textChanged.connect(lambda *_: self.changed.emit())
 
     def condition(self) -> R.Condition:
         return R.Condition(self.kind.currentData(), self.value.text().strip())
@@ -48,6 +53,7 @@ class ConditionRow(QWidget):
 
 class ActionRow(QWidget):
     removed = Signal(object)
+    changed = Signal()
 
     def __init__(self, columns, a: R.Action | None = None, parent=None):
         super().__init__(parent)
@@ -73,6 +79,8 @@ class ActionRow(QWidget):
         if a:
             self.field.setCurrentIndex(max(self.field.findData(a.field), 0))
             self.value.setText(a.value)
+        for signal in (self.kind.currentIndexChanged, self.field.currentIndexChanged, self.value.textChanged):
+            signal.connect(lambda *_: self.changed.emit())
 
     def _sync(self) -> None:
         kind = self.kind.currentData()
@@ -102,11 +110,13 @@ class ActionRow(QWidget):
 class RuleDialog(QDialog):
     """Edit one rule."""
 
-    def __init__(self, rule: R.Rule, columns, parent=None):
+    def __init__(self, rule: R.Rule, columns, parent=None, pipeline=None, profile_id: int | None = None):
         super().__init__(parent)
         self.setWindowTitle("Automation")
-        self.resize(720, 560)
+        self.resize(760, 720)
         self.rule, self.columns = rule, columns
+        self.pipeline, self.profile_id = pipeline, profile_id
+        self._preview_timer = QTimer(self, singleShot=True, interval=250, timeout=self._update_preview)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(20, 16, 20, 14)
         lay.setSpacing(10)
@@ -165,6 +175,30 @@ class RuleDialog(QDialog):
         lay.addWidget(self.enabled)
         self.error = _muted("", "danger")
         lay.addWidget(self.error)
+
+        # ---- try it on a real video before saving (nothing is changed)
+        self.preview_box = QFrame(objectName="Card")
+        pl = QVBoxLayout(self.preview_box)
+        pl.setContentsMargins(14, 10, 14, 12)
+        prow = QHBoxLayout()
+        prow.addWidget(QLabel("<b>Test this rule on a video</b>"))
+        prow.addStretch()
+        self.test_video = tip(QComboBox(), "Pick any video on the board: you'll see what the rule would do to it. "
+                                           "Nothing is changed.")
+        self.test_video.setMinimumWidth(280)
+        prow.addWidget(self.test_video)
+        pl.addLayout(prow)
+        self.preview_text = QLabel()
+        self.preview_text.setWordWrap(True)
+        self.preview_text.setTextFormat(Qt.RichText)
+        pl.addWidget(self.preview_text)
+        lay.addWidget(self.preview_box)
+        self._fill_test_videos()
+        self.test_video.currentIndexChanged.connect(self._update_preview)
+        for signal in (self.name.textChanged, self.trigger.currentIndexChanged, self.column.currentIndexChanged,
+                       self.match.currentIndexChanged):
+            signal.connect(self._preview_soon)
+
         lay.addStretch()
         buttons = QDialogButtonBox(QDialogButtonBox.Cancel | QDialogButtonBox.Save)
         buttons.accepted.connect(self._save)
@@ -175,10 +209,12 @@ class RuleDialog(QDialog):
         for a in rule.actions or [R.Action("fill_copy", "tiktok_text", "")]:
             self._add_action(a)
         self._sync_empty()
+        self._update_preview()
 
     def _add_condition(self, c: R.Condition | None = None) -> None:
         row = ConditionRow(c)
         row.removed.connect(self._remove_condition)
+        row.changed.connect(self._preview_soon)
         self.cond_rows.append(row)
         self.cond_box.addWidget(row)
         self._sync_empty()
@@ -187,16 +223,68 @@ class RuleDialog(QDialog):
         self.cond_rows.remove(row)
         row.setParent(None)
         self._sync_empty()
+        self._preview_soon()
 
     def _add_action(self, a: R.Action | None = None) -> None:
         row = ActionRow(self.columns, a)
         row.removed.connect(self._remove_action)
+        row.changed.connect(self._preview_soon)
         self.act_rows.append(row)
         self.act_box.addWidget(row)
 
     def _remove_action(self, row) -> None:
         self.act_rows.remove(row)
         row.setParent(None)
+        self._preview_soon()
+
+    # ------------------------------------------------------------ preview
+    def _fill_test_videos(self) -> None:
+        if self.pipeline is None or self.profile_id is None:
+            self.preview_box.setVisible(False)
+            return
+        try:
+            cards = [c for cards in self.pipeline.board(self.profile_id).values() for c in cards]
+        except Exception:  # noqa: BLE001 — the preview is a helper, never a blocker
+            cards = []
+        for card in sorted(cards, key=lambda c: c.title.lower()):
+            self.test_video.addItem(card.title[:70], card.id)
+        if not cards:
+            self.preview_text.setText("Add videos to the board to test a rule on one.")
+            self.test_video.setEnabled(False)
+
+    def _preview_soon(self, *_args) -> None:
+        self._preview_timer.start()
+
+    def _column_name(self, stage: str) -> str:
+        return next((c.name for c in self.columns if stage in c.stages), stage)
+
+    def _update_preview(self) -> None:
+        import html
+        row_id = self.test_video.currentData() if self.preview_box.isVisible() or self.pipeline else None
+        if row_id is None or self.pipeline is None:
+            return
+        try:
+            pv = R.preview(self.pipeline, self.value(), row_id, column_name=self._column_name)
+        except Exception as exc:  # noqa: BLE001
+            self.preview_text.setText(html.escape(f"Can't preview this yet: {exc}"))
+            return
+
+        def yes(ok: bool) -> str:
+            return "<span style='color:%s'><b>%s</b></span>" % ((theme.P.success, "Yes") if ok
+                                                                else (theme.P.danger, "No"))
+        lines = [f"Trigger matches: {yes(pv.trigger_matches)} &nbsp;<span style='color:{theme.P.text_muted}'>"
+                 f"{html.escape(pv.trigger_note)}</span>",
+                 f"Conditions met: {yes(pv.conditions_met)}"]
+        for label, ok in pv.conditions:
+            lines.append(f"&nbsp;&nbsp;&nbsp;{'✓' if ok else '✗'} {html.escape(label)}")
+        if not pv.conditions:
+            lines.append(f"&nbsp;&nbsp;&nbsp;<span style='color:{theme.P.text_muted}'>No conditions: every video "
+                         "counts.</span>")
+        verb = "Would do" if pv.trigger_matches and pv.conditions_met else "Would do (if it matched)"
+        lines.append(f"<br><b>{verb}:</b>")
+        for what, result in pv.actions:
+            lines.append(f"&nbsp;&nbsp;&nbsp;{html.escape(what)} → <i>{html.escape(result)}</i>")
+        self.preview_text.setText("<br>".join(lines))
 
     def _sync_empty(self) -> None:
         self.no_conditions.setVisible(not self.cond_rows)
@@ -239,20 +327,91 @@ class AutomationsPage(QWidget):
                                "mentions sunglasses, fill the TikTok caption from a template and schedule it for "
                                "next Tuesday.”"))
         head.addLayout(title, 1)
+        self.recipes_btn = tip(QToolButton(text="Recipes  ▾"), "Ready-made automations you can add in one click")
+        self.recipes_btn.setPopupMode(QToolButton.InstantPopup)
+        menu = QMenu(self.recipes_btn)
+        for key, (name, _desc) in R.RECIPES.items():
+            menu.addAction(name, lambda k=key: self.add_recipe(k))
+        self.recipes_btn.setMenu(menu)
+        head.addWidget(self.recipes_btn, 0, Qt.AlignTop)
         self.new_btn = tip(QPushButton("New Rule"), "Make a new automation")
         set_prop(self.new_btn, "primary")
         self.new_btn.clicked.connect(self.new_rule)
         head.addWidget(self.new_btn, 0, Qt.AlignTop)
         self.lay.addLayout(head)
+        self.empty = self._build_empty_state()
+        self.lay.addWidget(self.empty)
         self.rules_box = QVBoxLayout()
         self.rules_box.setSpacing(8)
         self.lay.addLayout(self.rules_box)
-        self.lay.addWidget(QLabel("Activity", objectName="DetailTitle"))
+        self.activity_title = QLabel("Activity", objectName="DetailTitle")
+        self.lay.addWidget(self.activity_title)
         self.log = QListWidget()
         self.log.setMinimumHeight(220)
         tip(self.log, "What each rule did, newest first")
         self.lay.addWidget(self.log)
         self.lay.addStretch()
+
+    def _build_empty_state(self) -> QWidget:
+        """No rules yet: what automations are for, one button to make one, and starter recipes."""
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(0, 24, 0, 8)
+        lay.setSpacing(10)
+        mark = QLabel(objectName="EmptyIcon")
+        mark.setPixmap(icons.pixmap("bolt", theme.P.accent_color, 44))
+        mark.setAlignment(Qt.AlignCenter)
+        self.empty_mark = mark
+        title = QLabel("Automate your workflow", objectName="EmptyTitle")
+        title.setAlignment(Qt.AlignCenter)
+        body = _muted("Rules do the repetitive parts for you: fill captions from a template, add hashtags, pick "
+                      "platforms, and schedule ready tickets. They only ever act on new videos, and everything they "
+                      "do shows under Activity.")
+        body.setAlignment(Qt.AlignCenter)
+        body.setMaximumWidth(620)
+        create = tip(QPushButton("Create Rule"), "Start a rule from scratch")
+        set_prop(create, "primary")
+        create.clicked.connect(self.new_rule)
+        self.create_btn = create
+        for widget in (mark, title, body):
+            lay.addWidget(widget, 0, Qt.AlignHCenter)
+        lay.addWidget(create, 0, Qt.AlignHCenter)
+        lay.addSpacing(18)
+        section = QLabel("QUICK-START RECIPES")
+        section.setProperty("section", True)
+        tip(section, "Ready-made rules: add one, then edit it to fit")
+        lay.addWidget(section)
+        grid = QGridLayout()
+        grid.setSpacing(12)
+        self.recipe_buttons: dict[str, QPushButton] = {}
+        for n, (key, (name, desc)) in enumerate(R.RECIPES.items()):
+            card = QFrame(objectName="Card")
+            cl = QVBoxLayout(card)
+            cl.setContentsMargins(16, 14, 16, 14)
+            cl.setSpacing(8)
+            cl.addWidget(QLabel(name, objectName="DetailTitle"))
+            text = _muted(desc)
+            cl.addWidget(text, 1)
+            add = tip(QPushButton("Add Recipe"), f"Add “{name}”. It starts with videos added from now on.")
+            add.clicked.connect(lambda _=False, k=key: self.add_recipe(k))
+            self.recipe_buttons[key] = add
+            cl.addWidget(add, 0, Qt.AlignLeft)
+            grid.addWidget(card, 0, n)
+        lay.addLayout(grid)
+        return w
+
+    def add_recipe(self, key: str) -> None:
+        if not self.profile:
+            return
+        try:
+            added = R.install_recipe(self.store, self.profile.id, key)
+        except R.RuleError as exc:
+            QMessageBox.warning(self, "Automations", str(exc))
+            return
+        self.refresh()
+        names = ", ".join(r.name for r in added)
+        QMessageBox.information(self, "Recipe added", f"Added {names}. It applies to videos added from now on; "
+                                "use Edit… to change it, or Run on Existing Videos… to apply it to the board.")
 
     def set_profile(self, profile) -> None:
         self.profile = profile
@@ -270,8 +429,8 @@ class AutomationsPage(QWidget):
         if not self.profile:
             return
         rules = R.load(self.store, self.profile.id)
-        if not rules:
-            self.rules_box.addWidget(_muted("No automations yet. New Rule makes one.", "faint"))
+        self.empty.setVisible(not rules)
+        self.empty_mark.setPixmap(icons.pixmap("bolt", theme.P.accent_color, 44))
         for rule in rules:
             self.rules_box.addWidget(self._card(rule))
         self.log.clear()
@@ -280,8 +439,12 @@ class AutomationsPage(QWidget):
                              + "; ".join(e.get("done", [])))
         if not self.log.count():
             self.log.addItem("Nothing yet. When a rule acts on a video, it shows here.")
+        has_activity = bool(R.activity(self.store, self.profile.id))
+        self.activity_title.setVisible(bool(rules) or has_activity)
+        self.log.setVisible(bool(rules) or has_activity)
         read_only = getattr(self.store, "read_only", False)
-        self.new_btn.setEnabled(not read_only)
+        for b in [self.new_btn, self.create_btn, self.recipes_btn, *self.recipe_buttons.values()]:
+            b.setEnabled(not read_only)
 
     def _card(self, rule: R.Rule) -> QFrame:
         frame = QFrame(objectName="Card")
@@ -322,7 +485,7 @@ class AutomationsPage(QWidget):
             self.edit_rule(R.Rule(name=""), new=True)
 
     def edit_rule(self, rule: R.Rule, new: bool = False) -> None:
-        dialog = RuleDialog(rule, load_columns(self.store, self.profile.id), self)
+        dialog = RuleDialog(rule, load_columns(self.store, self.profile.id), self, self.pipeline, self.profile.id)
         if dialog.exec() != QDialog.Accepted:
             return
         updated = dialog.value()

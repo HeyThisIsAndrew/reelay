@@ -172,3 +172,41 @@ def test_automations_page_and_board(qtbot, tmp_path):
     assert page.log.count() == 3 and "added #summer" in page.log.item(0).text()
     window.close()
     store.close()
+
+
+# ------------------------------------------------------------------ recipes and "Test this rule"
+def test_recipes_install_and_start_from_now(world):
+    w = world
+    before = add_video(w, "9101", "my fitness routine")
+    added = R.install_recipe(w.store, w.profile.id, "hashtags")
+    assert [r.name for r in added] == ["Hashtags: fitness", "Hashtags: tech", "Hashtags: recipe"]
+    assert len(R.load(w.store, w.profile.id)) == 3
+    R.run(w.pipeline, w.profile.id)
+    existing = w.store.get_post(before)
+    assert existing is None or "#fitness" not in (existing.hashtags or "")      # already on the board: untouched
+    after = add_video(w, "9102", "tech review of a new phone")
+    R.run(w.pipeline, w.profile.id)
+    assert "#techtok" in w.store.get_post(after).hashtags
+    for key in R.RECIPES:
+        for rule in R.recipe(key):
+            R.validate(rule)                                       # every recipe is a valid rule
+    with pytest.raises(R.RuleError):
+        R.recipe("nope")
+
+
+def test_preview_says_what_a_rule_would_do_without_doing_it(world):
+    w = world
+    vid = add_video(w, "9201", "these sunglasses are great #shades")
+    pv = R.preview(w.pipeline, SUNNIES, vid)
+    assert pv.trigger_matches and pv.conditions_met
+    assert pv.conditions == [("Caption or copy contains “sunglasses”", True)]
+    actions = dict(pv.actions)
+    assert actions["TikTok caption"].startswith("these sunglasses are great")
+    assert "#summer" in actions["Hashtags"] and actions["Platforms"] == "TikTok, Instagram"
+    assert w.store.get_post(vid) is None or not w.store.get_post(vid).tiktok_text      # nothing was written
+    miss = R.preview(w.pipeline, SUNNIES, add_video(w, "9202", "a calm morning"))
+    assert not miss.conditions_met
+    moved = R.Rule(name="Queue", trigger="moved", column="staging", actions=[R.Action("schedule", value="Tuesday 09:00")])
+    pv = R.preview(w.pipeline, moved, vid)
+    assert not pv.trigger_matches and "moved to" in pv.trigger_note
+    assert "Tue" in dict(pv.actions)["Schedule"]

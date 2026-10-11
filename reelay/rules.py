@@ -249,6 +249,14 @@ def next_occurrence(weekday: int, at: time, now: datetime) -> datetime:
 
 # ---------------------------------------------------------------------- matching
 def matches(rule: Rule, row, post) -> bool:
+    results = [ok for _label, ok in condition_results(rule, row, post)]
+    if not results:
+        return True
+    return all(results) if rule.match == "all" else any(results)
+
+
+def condition_results(rule: Rule, row, post) -> list[tuple[str, bool]]:
+    """Each condition in plain words, and whether this video meets it."""
     from .tags import video_tags
     item = row.item
     results = []
@@ -272,9 +280,9 @@ def matches(rule: Rule, row, post) -> bool:
             results.append(bool(item.duration) and item.duration > int(v))
         elif c.kind == "source":
             results.append(v in (item.platform or "").lower())
-    if not results:
-        return True
-    return all(results) if rule.match == "all" else any(results)
+        else:
+            results.append(False)
+    return [(f"{CONDITIONS.get(c.kind, c.kind)} “{c.value}”", ok) for c, ok in zip(rule.conditions, results)]
 
 
 def _fill(template: str, row, post) -> str:
@@ -429,3 +437,103 @@ def _entry(rule: Rule, row, done: list[str]) -> dict:
     from .text import short_title
     return {"at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "rule": rule.name, "video": row.id,
             "title": short_title(row.item.hook, 60), "done": done or ["nothing to do"]}
+
+
+# ---------------------------------------------------------------------- trying a rule out
+@dataclass
+class Preview:
+    trigger_matches: bool
+    trigger_note: str
+    conditions_met: bool
+    conditions: list[tuple[str, bool]]
+    actions: list[tuple[str, str]]          # (what changes, what it would become)
+
+
+def preview(pipeline, rule: Rule, row_id: int, now: datetime | None = None,
+            column_name=lambda stage: stage) -> Preview:
+    """What ``rule`` would do to one video, without changing anything (for "Test this rule")."""
+    now = now or datetime.now(timezone.utc)
+    row = pipeline.store.get_video(row_id)
+    post, _saved = pipeline.post_or_default(row)
+    if rule.trigger == "moved":
+        here = row.stage == rule.column
+        trigger_ok = here
+        note = (f"Yes: it's in {column_name(rule.column)}, so it would run when a video is moved there."
+                if here else f"Not yet: this video is in {column_name(row.stage)}; the rule runs when a video is "
+                             f"moved to {column_name(rule.column)}.")
+    else:
+        trigger_ok = row.archived_at is None
+        note = ("Yes: it runs for videos as they're added to the board." if trigger_ok
+                else "No: this video is archived.")
+    results = condition_results(rule, row, post)
+    met = matches(rule, row, post)
+    actions: list[tuple[str, str]] = []
+    hashtags = (post.hashtags or "").split()
+    for a in rule.actions:
+        if a.kind == "fill_copy":
+            label = COPY_FIELDS.get(a.field, a.field)
+            current = (getattr(post, a.field, "") or "").strip() if a.field in COPY_FIELDS else ""
+            actions.append((label, "left alone (already written)" if current else _fill(a.value, row, post)
+                            or "(empty template)"))
+        elif a.kind == "add_hashtags":
+            new = [h for h in re.findall(r"#\w+", a.value) if h.lower() not in {x.lower() for x in hashtags}]
+            hashtags += new
+            actions.append(("Hashtags", " ".join(hashtags) + ("" if new else "  (nothing new)")))
+        elif a.kind == "set_platforms":
+            names = ", ".join(Platform.LABELS[p] for p in parse_platforms(a.value))
+            actions.append(("Platforms", names or "(none recognised)"))
+        elif a.kind == "set_ticket":
+            actions.append((TICKET_FIELDS_SETTABLE.get(a.field, a.field), _fill(a.value, row, post)))
+        elif a.kind == "move":
+            actions.append(("Column", "not moved: use “Schedule for the next…”" if a.field == Stage.SCHEDULED
+                            else column_name(a.field)))
+        elif a.kind == "schedule":
+            when = parse_when(a.value)
+            if when is None:
+                actions.append(("Schedule", "needs a weekday and time, e.g. Tuesday 09:00"))
+            else:
+                at = next_occurrence(*when, now=now).astimezone()
+                stamp = f"{at:%a %b} {at.day}, {at.hour % 12 or 12}:{at:%M %p}"
+                actions.append(("Schedule", f"{stamp}, if the ticket is ready then"))
+    return Preview(trigger_ok, note, met, results, actions)
+
+
+# ---------------------------------------------------------------------- starter recipes
+RECIPES = {
+    "cross_post": ("Cross-post short-form",
+                   "When a TikTok or Instagram video is added, send it to YouTube Shorts and Threads with "
+                   "captions written from its own, plus a link-in-bio line."),
+    "hashtags": ("Auto-hashtag by topic",
+                 "When a caption mentions fitness, tech or a recipe, add that topic's hashtag bundle. Change the "
+                 "words and hashtags to fit your niche."),
+    "ready_queue": ("Ready queue: Tuesday mornings",
+                    "When a ticket is moved to Staging, schedule it for the next Tuesday at 9:00 (only if it's "
+                    "ready)."),
+}
+
+
+def recipe(key: str) -> list[Rule]:
+    """The rule(s) a starter recipe installs (they apply to videos from now on, like any new rule)."""
+    if key == "cross_post":
+        return [Rule(name="Cross-post short-form", trigger="added", match="any",
+                     conditions=[Condition("source", "TikTok"), Condition("source", "Instagram")],
+                     actions=[Action("set_platforms", value="YouTube, Threads"),
+                              Action("fill_copy", "title", "{hook}"),
+                              Action("fill_copy", "description", "{caption}\n\nLinks and more: in my bio."),
+                              Action("fill_copy", "threads_text", "{hook} (link in bio) {hashtags}")])]
+    if key == "hashtags":
+        bundles = (("fitness", "#fitness #workout #fitnessmotivation"), ("tech", "#tech #gadgets #techtok"),
+                   ("recipe", "#recipe #foodtok #easyrecipes"))
+        return [Rule(name=f"Hashtags: {word}", trigger="added", conditions=[Condition("caption", word)],
+                     actions=[Action("add_hashtags", value=tags)]) for word, tags in bundles]
+    if key == "ready_queue":
+        return [Rule(name="Ready queue: Tuesday mornings", trigger="moved", column=Stage.STAGING,
+                     actions=[Action("schedule", value="Tuesday 09:00")])]
+    raise RuleError(f"Unknown recipe: {key}")
+
+
+def install_recipe(store, profile_id: int, key: str) -> list[Rule]:
+    """Add a recipe's rules to the profile (saved like any new rule, so they start from now)."""
+    new = recipe(key)
+    save(store, profile_id, load(store, profile_id) + new)
+    return new

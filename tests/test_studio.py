@@ -351,3 +351,24 @@ def test_inspector_can_neither_crush_the_library_nor_cover_it(qtbot):
     assert split.sizes()[1] <= int(900 * 0.55) and split.sizes()[0] >= 320
     split.dismiss()
     assert split.slide.isHidden()
+
+
+# ------------------------------------------------------------------ Automations page
+def test_automations_empty_state_recipes_and_rule_preview(app_window, monkeypatch):
+    window, store, _ = app_window
+    seed_board(store, window.profile, None)
+    page = window.automations_page
+    window.go("automations")
+    assert page.empty.isVisibleTo(page) and not page.log.isVisibleTo(page)
+    page.recipe_buttons["cross_post"].click()
+    assert not page.empty.isVisibleTo(page) and page.log.isVisibleTo(page)
+    from reelay import rules as R
+    rule = R.load(store, window.profile.id)[0]
+    assert rule.name == "Cross-post short-form"
+    from reelay.columns import load as load_columns
+    from reelay.gui.automations_page import RuleDialog
+    dialog = RuleDialog(rule, load_columns(store, window.profile.id), page, window.pipeline, window.profile.id)
+    assert dialog.test_video.count() == 3
+    text = dialog.preview_text.text()
+    assert "Trigger matches" in text and "Conditions met" in text and "Platforms" in text
+    dialog.close()
