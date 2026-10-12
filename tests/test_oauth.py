@@ -216,7 +216,7 @@ def test_accounts_page_offers_sign_in_buttons(central, qtbot, monkeypatch):
     qtbot.addWidget(window)
     page = window.accounts_page
     window.go("accounts")
-    assert page.connected_box.isVisibleTo(page) and not page.setup_box.isVisibleTo(page)   # no setup needed
+    assert page.connect_btn.isVisibleTo(page) and not page.setup_btn.isVisibleTo(page)     # no setup needed
     assert page.creds_label.text() == "Using Reelay's Google sign-in"
     tiktok = page.platform_cards["tiktok"]
     assert tiktok.signin.isVisibleTo(tiktok) and tiktok.signin.text() == "Sign in with TikTok"

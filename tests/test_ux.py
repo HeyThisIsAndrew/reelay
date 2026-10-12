@@ -42,7 +42,7 @@ def test_first_launch_opens_an_empty_my_channel(ui):
     assert store.list_accounts(window.profile.id) == [] and store.list_sources(window.profile.id) == []
     assert window.download.list_stack.currentIndex() == 0          # empty state, not a blank table
     window.go("accounts")
-    assert window.accounts_page.setup_box.isVisible()               # guided setup offered
+    assert window.accounts_page.setup_btn.isVisible()               # guided setup offered (the card's action)
 
 
 def test_default_profile_is_the_first_one_made(tmp_path):
@@ -112,8 +112,10 @@ def test_download_page_says_in_and_out_plainly(ui):
 def test_tiktok_posting_is_described_truthfully(ui):
     window, *_ = ui
     from PySide6.QtWidgets import QLabel
-    texts = " ".join(l.text() for l in window.accounts_page.findChildren(QLabel))
+    card = window.accounts_page.platform_cards["tiktok"]
+    texts = card.help_text + " " + " ".join(l.text() for l in window.accounts_page.findChildren(QLabel))
     assert "TikTok only allows automatic posting from developer apps it has reviewed and approved" in texts
+    assert card.capability.full_text() == "Copy and paste"                # on the card itself
     assert "private" in texts and "drafts" in texts
 
 
@@ -170,7 +172,7 @@ def test_sign_in_with_google_modal_connects_a_channel(ui, qtbot, monkeypatch):
     page = window.accounts_page
     window.accounts.set_oauth_client(OAuthClient("123-abc.apps.googleusercontent.com", "s"))
     page.refresh()
-    assert page.connected_box.isVisibleTo(page) and page.connect_btn.text() == "Sign in with Google"
+    assert page.connect_btn.isVisibleTo(page) and page.connect_btn.text() == "Sign in with Google"
     from reelay.gui import setup_dialogs
     opened = []
 

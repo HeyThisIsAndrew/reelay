@@ -202,17 +202,23 @@ QSlider#TileSlider::handle:horizontal { background: {text_primary}; width: 12px;
 QSlider#TileSlider::handle:horizontal:hover { background: {accent_color}; }
 
 /* ---- Accounts: integration cards ---- */
-QFrame#IntegrationCard { background: {bg_surface}; border: 1px solid {divider}; border-radius: {radius_lg}px; }
+/* Integration cards (Accounts): rounded, a hairline instead of a frame, content up top, actions on the bottom */
+QFrame#IntegrationCard, QFrame#HandOffStrip { background: {bg_surface}; border: 1px solid {divider};
+                                              border-radius: {radius_card}px; }
 QFrame#IntegrationCard:hover { border-color: {accent_ring}; }
+QLabel#CardTitle { font-size: {font_lg}pt; font-weight: 600; }
+QLabel#CardMode { color: {text_muted}; font-size: {font_xs}pt; }
+QLabel#CardLine { color: {text_secondary}; font-size: {font_sm}pt; }
+QLabel#CardLink { font-size: {font_sm}pt; }
+QPushButton#QuietButton { background: transparent; border: none; padding: 4px 2px; color: {text_muted};
+                          font-size: {font_sm}pt; }
+QPushButton#QuietButton:hover { color: {text_primary}; }
 QFrame#AccountRow { background: {bg_raised}; border: 1px solid {divider}; border-radius: {radius}px; }
-QLabel#StatusPill { border-radius: 9px; padding: 2px 10px; font-size: {font_xs}pt; font-weight: 600;
-                    background: {bg_raised}; color: {text_secondary}; border: 1px solid {border}; }
-QLabel#StatusPill[state="connected"] { background: {success}; color: {on_badge}; border-color: {success}; }
-QLabel#StatusPill[state="warning"] { background: {danger}; color: {on_badge}; border-color: {danger}; }
-QLabel#StatusPill[state="hand"] { background: transparent; color: {text_muted}; border-color: {divider}; }
-QToolButton#AdvancedToggle { background: transparent; border: none; padding: 2px 0; color: {text_secondary};
-                             font-size: {font_sm}pt; }
-QToolButton#AdvancedToggle:hover { color: {text_primary}; }
+QLabel#StatusPill { border-radius: 9px; padding: 2px 9px; font-size: {font_xs}pt; font-weight: 600;
+                    background: {bg_raised}; color: {text_secondary}; border: none; }
+QLabel#StatusPill[state="connected"] { background: {success_soft}; color: {success_ink}; }
+QLabel#StatusPill[state="warning"] { background: {warning_soft}; color: {warning_ink}; }
+QLabel#StatusPill[state="hand"] { background: {bg_raised}; color: {text_secondary}; }
 
 /* Download sources: one section per platform */
 QFrame#SourcePlatform { background: {bg_raised}; border: 1px solid {divider}; border-radius: {radius_lg}px; }

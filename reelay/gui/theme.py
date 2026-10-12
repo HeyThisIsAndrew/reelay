@@ -26,6 +26,7 @@ from ..paths import cache_dir
 IS_MAC = sys.platform == "darwin"
 BASE_PT = 14 if IS_MAC else 11
 RADIUS_SM, RADIUS, RADIUS_LG = 6, 8, 10        # small controls · buttons and inputs · panels and cards
+RADIUS_CARD = 14                                # integration cards and strips (the spatial card look)
 TEMPLATE = Path(__file__).with_name("styles") / "app.qss"
 
 
@@ -64,6 +65,23 @@ class Palette:
     @property
     def accent_ring(self) -> str:      # hover borders
         return mix(self.bg_surface, self.accent_color, 0.55)
+
+    # Tinted status pills: a soft fill in the status colour, with text in that colour made readable on it
+    @property
+    def success_soft(self) -> str:
+        return mix(self.bg_surface, self.success, 0.18)
+
+    @property
+    def success_ink(self) -> str:
+        return _readable(self.success, (self.success_soft,), 4.5, self.text_primary)
+
+    @property
+    def warning_soft(self) -> str:
+        return mix(self.bg_surface, self.warning, 0.18)
+
+    @property
+    def warning_ink(self) -> str:
+        return _readable(self.warning, (self.warning_soft,), 4.5, self.text_primary)
 
     @property
     def scrim(self) -> str:            # badges laid over thumbnails (painted with alpha)
@@ -239,10 +257,11 @@ def _icon(kind: str, color: str) -> str:
 
 def tokens_for(p: Palette, icons: bool = True) -> dict[str, object]:
     tokens: dict[str, object] = asdict(p)
-    tokens.update(accent_soft=p.accent_soft, accent_ring=p.accent_ring)
+    tokens.update(accent_soft=p.accent_soft, accent_ring=p.accent_ring, success_soft=p.success_soft,
+                  success_ink=p.success_ink, warning_soft=p.warning_soft, warning_ink=p.warning_ink)
     tokens.update(font_xs=BASE_PT - 2, font_sm=BASE_PT - 1, font_pt=BASE_PT, font_lg=BASE_PT + 1,
                   font_h2=BASE_PT + 2, font_h1=BASE_PT + 4, font_title=BASE_PT + 8, font_display=BASE_PT + 22,
-                  radius_sm=RADIUS_SM, radius=RADIUS, radius_lg=RADIUS_LG)
+                  radius_sm=RADIUS_SM, radius=RADIUS, radius_lg=RADIUS_LG, radius_card=RADIUS_CARD)
     tokens["chevron"] = _icon("chevron", p.text_secondary) if icons else ""
     tokens["check"] = _icon("check", p.on_accent) if icons else ""
     return tokens

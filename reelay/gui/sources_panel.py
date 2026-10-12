@@ -198,14 +198,18 @@ class SourcesPanel(QWidget):
         change_bridge(store).changed.connect(self._on_store_change)
 
     def set_columns(self, columns: int) -> None:
+        """At most `columns` columns, but always an even grid (2 x 2 or 1 x 4: never 3 + 1). Sections in a row
+        share its height; a section's list of sources sets how tall its row is."""
+        from .grid import balanced_columns
+        columns = balanced_columns(len(PLATFORMS), columns)
         if columns == self._columns:
             return
         self._columns = columns
         for section in self.sections.values():
             self.grid.removeWidget(section)
         for n, platform in enumerate(PLATFORMS):
-            self.grid.addWidget(self.sections[platform], n // columns, n % columns, Qt.AlignTop)
-        for c in range(2):
+            self.grid.addWidget(self.sections[platform], n // columns, n % columns)
+        for c in range(max(self.grid.columnCount(), columns)):
             self.grid.setColumnStretch(c, 1 if c < columns else 0)
 
     def set_profile(self, profile: Profile | None) -> None:

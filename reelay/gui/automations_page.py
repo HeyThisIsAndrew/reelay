@@ -384,6 +384,8 @@ class AutomationsPage(QWidget):
         grid = QGridLayout()
         grid.setSpacing(12)
         self.recipe_buttons: dict[str, QPushButton] = {}
+        from .grid import balanced_columns
+        columns = balanced_columns(len(R.RECIPES), 3)          # an even grid: every row full
         for n, (key, (name, desc)) in enumerate(R.RECIPES.items()):
             card = QFrame(objectName="Card")
             cl = QVBoxLayout(card)
@@ -396,7 +398,7 @@ class AutomationsPage(QWidget):
             add.clicked.connect(lambda _=False, k=key: self.add_recipe(k))
             self.recipe_buttons[key] = add
             cl.addWidget(add, 0, Qt.AlignLeft)
-            grid.addWidget(card, 0, n)
+            grid.addWidget(card, n // columns, n % columns)
         lay.addLayout(grid)
         return w
 

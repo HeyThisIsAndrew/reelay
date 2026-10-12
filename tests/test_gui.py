@@ -289,14 +289,15 @@ def test_accounts_import_connect_disconnect(app_window, tmp_path, monkeypatch):
     window, store, tokens = app_window
     page = window.accounts_page
     window.go("accounts")
-    assert page.setup_box.isVisible()
+    assert page.setup_btn.isVisible() and not page.connect_btn.isVisible()     # setup first
 
     secret = tmp_path / "client_secret.json"
     secret.write_text(json.dumps({"installed": {"client_id": "123-abc.apps.googleusercontent.com",
                                                 "client_secret": "s"}}))
     monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a, **k: (str(secret), "JSON"))
     page._import_client()
-    assert not page.setup_box.isVisible() and window.accounts.oauth_client().client_id.startswith("123")
+    assert not page.setup_btn.isVisible() and page.connect_btn.isVisible()
+    assert window.accounts.oauth_client().client_id.startswith("123")
 
     page._on_signed_in(({"id": "UCx", "title": "Lydia", "handle": "@lydia"}, Tokens("a", "r", 9e12)))
     account = store.list_accounts(window.profile.id)[0]
