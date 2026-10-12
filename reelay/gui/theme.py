@@ -324,6 +324,24 @@ def apply_theme(app: QApplication, name: str = DEFAULT_THEME, custom: tuple[str,
     return manager.apply(app, name, custom)
 
 
+_PROPER = {"youtube": "YouTube", "tiktok": "TikTok", "instagram": "Instagram", "bluesky": "Bluesky",
+           "threads": "Threads", "facebook": "Facebook", "snapchat": "Snapchat", "reelay": "Reelay", "ai": "AI",
+           "api": "API", "seo": "SEO", "id": "ID"}
+
+
+def heading(text: str) -> str:
+    """A section heading in sentence case ("QUICK-START RECIPES" → "Quick-start recipes",
+    "YOUTUBE TITLE" → "YouTube title"); text that isn't all capitals is left exactly as written."""
+    if not text or text != text.upper() or not any(c.isalpha() for c in text):
+        return text
+    words = text.lower().split(" ")
+    out = []
+    for n, w in enumerate(words):
+        fixed = _PROPER.get(w)
+        out.append(fixed if fixed else (w[:1].upper() + w[1:] if n == 0 else w))
+    return " ".join(out)
+
+
 def set_prop(widget, name: str, value=True) -> None:
     """Set a dynamic property used by the stylesheet and re-polish."""
     widget.setProperty(name, value)

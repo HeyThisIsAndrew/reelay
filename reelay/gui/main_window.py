@@ -135,10 +135,17 @@ class MainWindow(QMainWindow):
         self.profile_logo.setFixedSize(32, 32)
         self.profile_name = QLabel(objectName="ProfileName")
         self.profile_name.setWordWrap(True)
-        for lab in (self.profile_logo, self.profile_name):
+        from .widgets import LineLabel
+        self.tagline = LineLabel("", "BrandTagline")          # the profile's tagline: one line under its name
+        self.tagline.setVisible(False)
+        for lab in (self.profile_logo, self.profile_name, self.tagline):
             lab.setAttribute(Qt.WA_TransparentForMouseEvents)
         head.addWidget(self.profile_logo)
-        head.addWidget(self.profile_name, 1)
+        names = QVBoxLayout()
+        names.setSpacing(0)
+        names.addWidget(self.profile_name)
+        names.addWidget(self.tagline)
+        head.addLayout(names, 1)
         self.profile_btn.setMinimumHeight(48)
         self.profile_btn.setSizePolicy(self.profile_btn.sizePolicy().horizontalPolicy().Expanding,
                                        self.profile_btn.sizePolicy().verticalPolicy())
@@ -148,10 +155,6 @@ class MainWindow(QMainWindow):
         tip(self.profile_btn, "The current profile. Click to switch: each creator or channel gets their own "
                               "videos, board and accounts.")
         sl.addWidget(self.profile_btn)
-        self.tagline = QLabel(objectName="BrandTagline")
-        self.tagline.setWordWrap(True)
-        self.tagline.setVisible(False)
-        sl.addWidget(self.tagline)
         sl.addSpacing(14)
 
         self.nav = QButtonGroup(self)
@@ -261,7 +264,7 @@ class MainWindow(QMainWindow):
             b.set_compact(compact)
         for w in (self.profile_name, self.version_label):
             w.setVisible(not compact)
-        self.tagline.setVisible(not compact and bool(self.tagline.text()))
+        self.tagline.setVisible(not compact and bool(self.tagline.full_text()))
         self.up_next.setMaximumHeight(0 if compact else 16777215)
         self.store.set_setting("ui.sidebar_compact", "1" if compact else "0")
 
@@ -342,7 +345,7 @@ class MainWindow(QMainWindow):
         self.profile_logo.setPixmap(branding.avatar_pixmap(profile, brand, 32))
         self.profile_name.ensurePolished()        # bold from the stylesheet changes how it wraps
         self.profile_btn.setMinimumHeight(max(48, self.profile_btn.layout().totalHeightForWidth(184)))
-        self.tagline.setText(brand.tagline)
+        self.tagline.set_full(brand.tagline)
         self.tagline.setVisible(bool(brand.tagline) and not self.rail_btn.isChecked())
         self.brand_strip.set_color(branding.strip_color(self.store, profile))
 

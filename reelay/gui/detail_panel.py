@@ -33,6 +33,9 @@ def reveal_in_file_manager(path: Path) -> None:
 
 
 def _label(text: str = "", *, prop: str | None = None, wrap: bool = True, select: bool = False) -> QLabel:
+    if prop == "section":
+        from .theme import heading
+        text = heading(text)
     lab = QLabel(text)
     lab.setWordWrap(wrap)
     if prop:

@@ -31,6 +31,7 @@ from ..youtube import OAuthClient, YouTubeError, watch_url
 from . import theme
 from .chrome import icon_button
 from .grid import balanced_columns, equalize_heights, max_columns_for, place_even
+from .widgets import LineLabel
 from .logos import platform_pixmap
 from .post_panel import local_text
 from .sources_panel import SourcesPanel
@@ -70,35 +71,6 @@ class StatusPill(QLabel):
     def set_state(self, state: str, text: str) -> None:
         self.setText(text)
         set_prop(self, "state", state)
-
-
-class LineLabel(QLabel):
-    """One line of text that ends in "…" when it doesn't fit (the full text is its tooltip), so a long name
-    or hint never makes its card taller than the others."""
-
-    def __init__(self, text: str = "", object_name: str = "CardLine", parent=None):
-        super().__init__(parent)
-        self.setObjectName(object_name)
-        self.setWordWrap(False)
-        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-        self.setMinimumWidth(20)
-        self._full = ""
-        self.set_full(text)
-
-    def set_full(self, text: str) -> None:
-        self._full = text or ""
-        self.setToolTip(self._full if self._full else "")
-        self._elide()
-
-    def full_text(self) -> str:
-        return self._full
-
-    def resizeEvent(self, event) -> None:  # noqa: N802
-        super().resizeEvent(event)
-        self._elide()
-
-    def _elide(self) -> None:
-        self.setText(self.fontMetrics().elidedText(self._full, Qt.ElideRight, max(self.width(), 20)))
 
 
 def show_sheet(parent: QWidget, title: str, text: str) -> None:

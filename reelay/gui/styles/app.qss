@@ -9,18 +9,18 @@ QMainWindow, QDialog { background: {bg_primary}; }
 QWidget { color: {text_primary}; }
 QWidget#Page, QWidget#TopBar, QWidget#BottomBar { background: {bg_primary}; }
 QWidget#Sidebar { background: {bg_surface}; border-right: 1px solid {divider}; }
-QWidget#ListArea, QFrame#Card { background: {bg_surface}; border: 1px solid {divider}; border-radius: {radius_lg}px; }
+QWidget#ListArea, QFrame#Card { background: {bg_surface}; border: 1px solid {divider}; border-radius: {radius_card}px; }
 QWidget#CardBody { background: transparent; }
 QFrame#Card QFrame#Card { background: {bg_raised}; }
 QFrame#SelectionStrip { background: {bg_raised}; border: 1px solid {border}; border-radius: {radius}px; }
 QWidget#DetailPanel, QScrollArea#DetailScroll, QWidget#DetailBody { background: {bg_surface}; }
-QFrame#DetailFrame { background: {bg_surface}; border: 1px solid {divider}; border-radius: {radius_lg}px; }
-QFrame#BoardColumn { background: {bg_surface}; border: 1px solid {divider}; border-radius: {radius_lg}px; }
+QFrame#DetailFrame { background: {bg_surface}; border: 1px solid {divider}; border-radius: {radius_card}px; }
+QFrame#BoardColumn { background: {bg_surface}; border: 1px solid {divider}; border-radius: {radius_card}px; }
 
 /* The contextual inspector (right-hand panel) and its header */
-QFrame#Inspector { background: {bg_surface}; border: 1px solid {divider}; border-radius: {radius_lg}px; }
+QFrame#Inspector { background: {bg_surface}; border: 1px solid {divider}; border-radius: {radius_card}px; }
 QWidget#InspectorHeader { background: transparent; border-bottom: 1px solid {divider}; }
-QLabel#InspectorTitle { color: {text_secondary}; font-size: {font_xs}pt; font-weight: 600; letter-spacing: 0.5px; }
+QLabel#InspectorTitle { color: {text_secondary}; font-size: {font_sm}pt; font-weight: 600; }
 QToolButton#InspectorClose { background: transparent; border: none; border-radius: {radius_sm}px;
                              color: {text_secondary}; padding: 2px 6px; font-size: {font_lg}pt; }
 QFrame#Inspector QFrame#DetailFrame { border: none; border-radius: 0; background: transparent; }
@@ -31,7 +31,7 @@ QToolButton#ProfileButton { background: transparent; border: 1px solid transpare
                             padding: 6px 8px; text-align: left; font-weight: 600; font-size: {font_pt}pt; }
 QToolButton#ProfileButton:hover { background: {bg_hover}; }
 QLabel#ProfileName { font-weight: 600; font-size: {font_pt}pt; }
-QLabel#BrandTagline { color: {text_muted}; font-size: {font_xs}pt; padding-left: 10px; }
+QLabel#BrandTagline { color: {text_muted}; font-size: {font_xs}pt; }
 
 /* Empty states */
 QLabel#EmptyTitle { font-size: {font_h1}pt; font-weight: 600; color: {text_primary}; }
@@ -60,8 +60,7 @@ QLabel[badge="ready"] { color: {on_badge}; background: {success}; border-radius:
                         font-weight: 700; letter-spacing: 0.5px; }
 QLabel[badge="not_ready"] { color: {on_badge}; background: {danger}; border-radius: 9px; padding: 2px 10px;
                             font-weight: 700; letter-spacing: 0.5px; }
-QLabel[section="true"] { color: {text_muted}; font-size: {font_xs}pt; font-weight: 600;
-                         letter-spacing: 0.5px; padding-top: 6px; }
+QLabel[section="true"] { color: {text_secondary}; font-size: {font_sm}pt; font-weight: 600; padding-top: 6px; }
 QLabel#PageTitle { font-size: {font_title}pt; font-weight: 700; }
 QLabel#DetailTitle { font-size: {font_h2}pt; font-weight: 600; }
 QLabel#FilenamePreview { background: {bg_primary}; border: 1px solid {divider}; border-radius: {radius_sm}px;
@@ -165,7 +164,7 @@ QToolButton#ViewToggle[segment="last"] { border-top-right-radius: {radius}px; bo
 QToolButton#ViewToggle:checked { background: {accent_color}; border-color: {accent_color}; }
 QFrame#UpNext { background: {bg_raised}; border: 1px solid {divider}; border-radius: {radius}px; }
 QFrame#UpNext:hover { border-color: {accent_ring}; }
-QLabel#UpNextHeading { color: {text_muted}; font-size: {font_xs}pt; font-weight: 600; letter-spacing: 0.5px; }
+QLabel#UpNextHeading { color: {text_muted}; font-size: {font_xs}pt; font-weight: 600; }
 QLabel#UpNextText { color: {text_primary}; font-size: {font_sm}pt; }
 QPushButton[nav="true"][compact="true"] { padding: 9px 0; text-align: center; }
 QLineEdit#SearchField { padding: 7px 10px; border-radius: {radius}px; }
@@ -210,6 +209,10 @@ QLabel#CardTitle { font-size: {font_lg}pt; font-weight: 600; }
 QLabel#CardMode { color: {text_muted}; font-size: {font_xs}pt; }
 QLabel#CardLine { color: {text_secondary}; font-size: {font_sm}pt; }
 QLabel#CardLink { font-size: {font_sm}pt; }
+/* Buttons inside cards: one size smaller and semibold, so the card's content leads (the spatial look) */
+QFrame#IntegrationCard QPushButton, QFrame#HandOffStrip QPushButton, QFrame#SourcePlatform QPushButton,
+QFrame#Card QPushButton { font-size: {font_sm}pt; font-weight: 600; padding: 5px 13px; }
+QFrame#IntegrationCard QPushButton#QuietButton,
 QPushButton#QuietButton { background: transparent; border: none; padding: 4px 2px; color: {text_muted};
                           font-size: {font_sm}pt; }
 QPushButton#QuietButton:hover { color: {text_primary}; }
@@ -221,9 +224,17 @@ QLabel#StatusPill[state="warning"] { background: {warning_soft}; color: {warning
 QLabel#StatusPill[state="hand"] { background: {bg_raised}; color: {text_secondary}; }
 
 /* Download sources: one section per platform */
-QFrame#SourcePlatform { background: {bg_raised}; border: 1px solid {divider}; border-radius: {radius_lg}px; }
+QFrame#SourcePlatform { background: {bg_raised}; border: 1px solid {divider}; border-radius: {radius_card}px; }
 QFrame#SourcePlatform QFrame#AccountRow { background: {bg_surface}; }
-QPushButton#MineToggle { border-radius: 10px; padding: 2px 10px; min-height: 0; font-size: {font_xs}pt;
+QFrame#SourcePlatform QPushButton#MineToggle, QPushButton#MineToggle { border-radius: 10px; padding: 2px 10px; min-height: 0; font-size: {font_xs}pt;
                          background: transparent; color: {text_muted}; border: 1px solid {divider}; }
 QPushButton#MineToggle:checked { background: {accent_soft}; color: {accent_color}; border-color: {accent_ring}; }
 QPushButton#SourcePicker { text-align: left; padding-left: 10px; padding-right: 12px; }
+
+/* Readiness: one compact row per platform (logo · name · note · mark) */
+QFrame#ReadyRow { border: none; border-top: 1px solid {divider}; }
+QLabel#ReadyName { font-size: {font_sm}pt; font-weight: 600; }
+QLabel#ReadyNote { color: {text_muted}; font-size: {font_sm}pt; }
+QLabel#ReadyMark { color: {text_muted}; font-size: {font_sm}pt; font-weight: 700; }
+QLabel#ReadyMark[state="ready"] { color: {success_ink}; }
+QLabel#ReadyMark[state="blocking"] { color: {warning_ink}; }

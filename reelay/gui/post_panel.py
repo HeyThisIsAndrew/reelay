@@ -52,7 +52,8 @@ PRIVACY_LABELS = {Privacy.PUBLIC: "Public", Privacy.UNLISTED: "Unlisted", Privac
 
 
 def _section(text: str) -> QLabel:
-    lab = QLabel(text)
+    from .theme import heading
+    lab = QLabel(heading(text))
     lab.setProperty("section", True)
     return lab
 

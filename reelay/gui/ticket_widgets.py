@@ -42,7 +42,8 @@ ORIGIN_LABELS = {"local": "You (Reelay app)", "api": "AI agent (API)", "remote":
 
 
 def _section(text: str, hint: str) -> QLabel:
-    lab = QLabel(text)
+    from .theme import heading
+    lab = QLabel(heading(text))
     lab.setProperty("section", True)
     return tip(lab, hint)
 
@@ -119,7 +120,7 @@ class ReadinessHeader(QFrame):
         top.addWidget(self.summary, 1)
         lay.addLayout(top)
         self.rows = QVBoxLayout()
-        self.rows.setSpacing(3)
+        self.rows.setSpacing(0)
         lay.addLayout(self.rows)
 
 
@@ -127,6 +128,7 @@ class ReadinessHeader(QFrame):
         while self.rows.count():
             w = self.rows.takeAt(0).widget()
             if w:
+                w.hide()
                 w.deleteLater()
         if readiness is None:
             self.hide()
@@ -148,21 +150,42 @@ class ReadinessHeader(QFrame):
         else:
             self.summary.setText(f"Not ready for {', '.join(blocking)}.")
         for name, pr in readiness.platforms.items():
-            if pr.state == READY:
-                text, prop = f"✓  <b>{pr.label}</b>: ready", "success"
-            elif pr.state == NOT_CHECKED:
-                why = "always posted by hand" if pr.platform in ("tiktok", "instagram") else "automatic posting is off"
-                text, prop = f"–  <b>{pr.label}</b>: you post it ({why}), not checked", "faint"
-            else:
-                problems = "<br>".join("&nbsp;&nbsp;&nbsp;⚠ " + html.escape(c.message) for c in pr.checks if not c.ok)
-                text, prop = f"⚠  <b>{pr.label}</b>: blocking<br>{problems}", "danger"
-            lab = QLabel(text)
-            lab.setTextFormat(Qt.RichText)
-            lab.setWordWrap(True)
-            lab.setProperty(prop, True)
-            lab.setToolTip("\n".join(f"{'✓' if c.ok else '⚠'} {c.label}: {c.message}" for c in pr.checks)
-                           or pr.note)
-            self.rows.addWidget(lab)
+            self.rows.addWidget(_readiness_row(pr))
+
+
+def _readiness_row(pr) -> QFrame:
+    """One compact line per platform: logo, name, a short note, and a mark (✓ ready, – by hand, ! blocking).
+    The full checks are in the row's tooltip."""
+    from .logos import platform_pixmap
+    from .widgets import LineLabel
+    row = QFrame(objectName="ReadyRow")
+    rl = QHBoxLayout(row)
+    rl.setContentsMargins(8, 5, 10, 5)
+    rl.setSpacing(8)
+    logo = QLabel()
+    logo.setPixmap(platform_pixmap(pr.platform, 14))
+    logo.setFixedSize(14, 14)
+    rl.addWidget(logo)
+    name = QLabel(pr.label, objectName="ReadyName")
+    name.setMinimumWidth(78)
+    rl.addWidget(name)
+    if pr.state == READY:
+        note, mark, state = "Ready to post", "✓", "ready"
+    elif pr.state == NOT_CHECKED:
+        note = "Posted by hand" if pr.platform in ("tiktok", "instagram") else "Automatic posting off: you post it"
+        mark, state = "–", "hand"
+    else:
+        problems = [c.message for c in pr.checks if not c.ok]
+        note, mark, state = (problems[0] if problems else "Needs work"), "!", "blocking"
+    text = LineLabel(note, "ReadyNote")
+    rl.addWidget(text, 1)
+    sign = QLabel(mark, objectName="ReadyMark")
+    set_prop(sign, "state", state)
+    rl.addWidget(sign)
+    row.setToolTip("\n".join(f"{'✓' if c.ok else '⚠'} {c.label}: {c.message}" for c in pr.checks) or pr.note
+                   or note)
+    row.setAccessibleName(f"{pr.label}: {note}")
+    return row
 
 
 # ====================================================================== ticket fields

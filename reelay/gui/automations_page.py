@@ -377,7 +377,7 @@ class AutomationsPage(QWidget):
             lay.addWidget(widget, 0, Qt.AlignHCenter)
         lay.addWidget(create, 0, Qt.AlignHCenter)
         lay.addSpacing(18)
-        section = QLabel("QUICK-START RECIPES")
+        section = QLabel("Quick-start recipes")
         section.setProperty("section", True)
         tip(section, "Ready-made rules: add one, then edit it to fit")
         lay.addWidget(section)

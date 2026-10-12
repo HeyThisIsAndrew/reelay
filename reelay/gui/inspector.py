@@ -28,7 +28,7 @@ class Inspector(QFrame):
         header = QWidget(objectName="InspectorHeader")
         hl = QHBoxLayout(header)
         hl.setContentsMargins(14, 6, 6, 6)
-        self.title = QLabel(title.upper(), objectName="InspectorTitle")
+        self.title = QLabel(objectName="InspectorTitle")
         close = QToolButton(objectName="InspectorClose")
         close.setText("✕")
         close.setCursor(Qt.PointingHandCursor)
@@ -40,9 +40,12 @@ class Inspector(QFrame):
         lay.addWidget(header)
         lay.addWidget(content, 1)
         self.content = content
+        self.set_title(title)
 
     def set_title(self, text: str) -> None:
-        self.title.setText(text.upper())
+        """A short heading ("2 selected"); empty for a single item, whose own title says what it is."""
+        self.title.setText(text)
+        self.title.setVisible(bool(text))
 
 
 class _Slide(QWidget):

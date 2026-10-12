@@ -385,6 +385,9 @@ class DownloadPage(QWidget):
         self.grid = self._build_grid()
         self.list_stack.addWidget(self.grid)
         ll.addWidget(self.list_stack, 1)
+        self.pager_row = QHBoxLayout()           # Previous · Page n of m · Next, centred under the videos
+        self.pager_row.setContentsMargins(0, 2, 0, 8)
+        ll.addLayout(self.pager_row)
 
         self.detail = DetailPanel(self.thumbs)
         self.detail.cover.setVisible(False)          # the player above shows the video
@@ -395,7 +398,7 @@ class DownloadPage(QWidget):
         self.player.message.connect(self._set_status)
         self._player_key: str | None = None
         self.media_pane = MediaPane(self.player, self.detail)
-        self.inspector = Inspector(self.media_pane, "Video")
+        self.inspector = Inspector(self.media_pane, "")
         self.inspector.closeRequested.connect(self.close_inspector)
         self.split = ContextualSplitter(list_area, self.inspector, self.store, "download", default_width=340,
                                         min_width=300)
@@ -423,8 +426,11 @@ class DownloadPage(QWidget):
         self.next_btn.clicked.connect(lambda: self.pager.set_page(self.pager.page + 1))
         self.page_size.currentIndexChanged.connect(self._on_page_size)
         self.pager.pageChanged.connect(self._sync_pages)
-        for w in (self.page_size, self.prev_btn, self.page_label, self.next_btn):
-            brow.addWidget(w)
+        brow.addWidget(self.page_size)
+        self.pager_row.addStretch(1)
+        for w in (self.prev_btn, self.page_label, self.next_btn):
+            self.pager_row.addWidget(w)
+        self.pager_row.addStretch(1)
         brow.addSpacing(10)
         self.status = muted("")
         tip(self.status, "What Reelay is doing, and what to do next")
@@ -610,10 +616,26 @@ class DownloadPage(QWidget):
     def _sync_pages(self) -> None:
         pages = self.pager.pages
         self.page_label.setText(f"Page {self.pager.page + 1} of {pages}")
+        self._sync_header_count()
         for w in (self.prev_btn, self.page_label, self.next_btn):
             w.setVisible(pages > 1)
         self.prev_btn.setEnabled(self.pager.page > 0)
         self.next_btn.setEnabled(self.pager.page < pages - 1)
+
+    def _sync_header_count(self) -> None:
+        """Next to the title: "213 videos · 180 downloaded", or, with more than one page, which ones this
+        page shows ("1–24 of 213 · 180 downloaded")."""
+        items = self.model.items()
+        if not items:
+            self.page_count.setText("")
+            return
+        done = f" · {sum(1 for i in items if i.is_downloaded)} downloaded"
+        total, size, page = self.pager.total, self.pager.size, self.pager.page
+        if size and total > size:
+            first = page * size + 1
+            self.page_count.setText(f"{first}–{min(total, first + size - 1)} of {total}{done}")
+        else:
+            self.page_count.setText(f"{len(items)} video{'s' if len(items) != 1 else ''}{done}")
 
     def _sync_filter_count(self) -> None:
         brand, product = self.products_filter.brand.currentData(), self.products_filter.product.currentData()
@@ -763,9 +785,7 @@ class DownloadPage(QWidget):
     def _update_counts(self) -> None:
         items = self.model.items()
         self.list_stack.setCurrentIndex(self._view_index() if items else 0)
-        self.page_count.setText(f"{len(items)} video{'s' if len(items) != 1 else ''}"
-                                + (f" · {sum(1 for i in items if i.is_downloaded)} downloaded" if items else "")
-                                if items else "")
+        self._sync_header_count()
         checked = len(self.model.checked_items())
         done = sum(1 for i in items if i.is_downloaded)
         pending = len(items) - done
@@ -800,7 +820,7 @@ class DownloadPage(QWidget):
         self.naming.set_example_item(items[0] if items else None)
         if len(items) == 1:
             self.detail.show_item(items[0], self.model.planned_filename(items[0]))
-            self.inspector.set_title("Video")
+            self.inspector.set_title("")
             self._load_player(items[0])
             self.split.reveal()
         elif len(items) > 1:

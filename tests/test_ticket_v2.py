@@ -408,6 +408,19 @@ def test_ticket_header_shows_ready_state_live(board, qtbot):
     qtbot.waitUntil(lambda: header.badge.text() == "READY", timeout=2000)
 
 
+def test_readiness_is_one_compact_row_per_platform(board, qtbot):
+    from PySide6.QtWidgets import QFrame, QLabel
+    _window, _store, b, _row, _answers = board
+    header = b.panel.readiness_header
+    rows = [header.rows.itemAt(i).widget() for i in range(header.rows.count())]
+    assert rows and all(isinstance(r, QFrame) and r.objectName() == "ReadyRow" for r in rows)
+    marks = {r.findChild(QLabel, "ReadyMark").text() for r in rows}
+    assert marks <= {"✓", "–", "!"}
+    for r in rows:                                   # one line each: the long detail is in the tooltip
+        note = r.findChild(QLabel, "ReadyNote")
+        assert not note.wordWrap() and r.toolTip()
+
+
 def test_gui_gate_asks_then_forces_only_on_yes(board, monkeypatch):
     from PySide6.QtWidgets import QMessageBox
 

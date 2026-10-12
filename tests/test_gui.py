@@ -409,7 +409,7 @@ def test_board_inspector_only_shows_with_a_selection(app_window, monkeypatch):
     sel.select(col.model.index(0), QItemSelectionModel.Select)
     sel.select(col.model.index(1), QItemSelectionModel.Select)
     assert board.split.is_open and board.side.currentWidget() is board.bulk
-    assert board.inspector.title.text() == "2 SELECTED"
+    assert board.inspector.title.text() == "2 selected"
     board.close_inspector()                                              # what Esc does
     assert not board.split.is_open and board.bulk_ids == []
 
@@ -450,7 +450,7 @@ def test_download_inspector_follows_the_row_selection(app_window, qtbot, monkeyp
     page = fetch_fake(window, qtbot, monkeypatch, make_items(3))
     assert not page.split.is_open
     page.table.selectRow(0)
-    assert page.split.is_open and page.inspector.title.text() == "VIDEO"
+    assert page.split.is_open and not page.inspector.title.isVisibleTo(page)
     page.close_inspector()
     assert not page.split.is_open and page.split.slide.isHidden()
     assert not page.table.selectionModel().hasSelection()
@@ -486,7 +486,7 @@ def test_each_profile_has_its_own_logo_and_colours(app_window, tmp_path):
     assert lydia_bg == theme.DEFAULT_CUSTOM[0]
     window.switch_profile(andrew)
     assert theme.P.bg_primary == "#101820" and theme.P.accent_color == "#f2aa4c"
-    assert window.tagline.text() == "capture, create, caffeinate" and window.tagline.isVisibleTo(window)
+    assert window.tagline.full_text() == "capture, create, caffeinate" and window.tagline.isVisibleTo(window)
     assert window.brand_strip.color == "#f2aa4c"
     window.switch_profile(store.get_profile(lydia.id))
     assert theme.P.bg_primary == lydia_bg and not window.tagline.isVisibleTo(window)

@@ -133,7 +133,7 @@ def test_rename_add_and_remove_from_the_board(board):
     window, store, b, rows, monkeypatch, QInputDialog = board
     monkeypatch.setattr(QInputDialog, "getText", lambda *a, **k: ("Ideas", True))
     b._rename_column("backlog")
-    assert b.columns["backlog"].title.text() == "IDEAS"
+    assert b.columns["backlog"].title.text() == "Ideas"
     monkeypatch.setattr(QInputDialog, "getText", lambda *a, **k: ("Filming", True))
     b._add_column("backlog")
     names = [c.name for c in b.column_config]
@@ -166,7 +166,7 @@ def test_edit_columns_dialog(board, monkeypatch):
     monkeypatch.setattr(ColumnsDialog, "result_columns", lambda self: (columns, []))
     b.edit_columns()
     assert [c.name for c in b.column_config] == ["Backlog", "New column", "Staging", "Published"]
-    assert b.columns["staging"].title.text() == "STAGING" and "Scheduled" not in [
+    assert b.columns["staging"].title.text() == "Staging" and "Scheduled" not in [
         col.title.text().title() for col in b.columns.values()]
 
 

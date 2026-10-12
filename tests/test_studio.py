@@ -121,7 +121,7 @@ def test_library_grid_is_the_default_and_shares_the_selection(app_window, qtbot,
     page.grid.checkToggled.emit(first)                           # the tick on a card
     assert len(page.model.checked_items()) == 1 and not page.split.is_open   # ticking never opens details
     page.grid.selectionModel().select(first, QItemSelectionModel.ClearAndSelect | QItemSelectionModel.Rows)
-    assert page.split.is_open and page.inspector.title.text() == "VIDEO"
+    assert page.split.is_open and not page.inspector.title.isVisibleTo(page)
     page.view_toggle.set_mode("list", emit=True)                 # same selection in the list
     assert page.list_stack.currentWidget() is page.table and page.table.selectionModel().hasSelection()
     assert store.get_setting("ui.view.library") == "list"
@@ -247,10 +247,14 @@ def test_library_pages(app_window, qtbot, monkeypatch):
     page.page_size.setCurrentIndex(page.page_size.findData(24))
     assert store.get_setting("ui.library.page_size") == "24"
     assert page.pager.rowCount() == 24 and page.pager.pages == 3 and page.page_label.text() == "Page 1 of 3"
+    assert page.page_count.text().startswith("1–24 of 60")             # which ones this page shows
+    assert page.pager_row.indexOf(page.prev_btn) >= 0 and page.pager_row.indexOf(page.next_btn) >= 0   # centred row
     assert not page.prev_btn.isEnabled() and page.next_btn.isEnabled()
     page.next_btn.click()
+    assert page.page_count.text().startswith("25–48 of 60")
     page.next_btn.click()
     assert page.pager.page == 2 and page.pager.rowCount() == 12 and not page.next_btn.isEnabled()
+    assert page.page_count.text().startswith("49–60 of 60")
     newest_on_last = page.model.item(page.pager.to_model_row(page.pager.index(0, 0)))
     assert newest_on_last.video_id == "5048"                      # newest first, 49th video starts page 3
     page.search.setPlainText("clip 1")                             # a new search starts at page 1

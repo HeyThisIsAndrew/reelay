@@ -187,6 +187,8 @@ class Collapsible(QWidget):
         self.button.setAutoRaise(True)
         self.button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self.button.setProperty("section", True)
+        from .theme import heading
+        title = heading(title)
         self._title = title
         if icon is not None:
             self.button.setIcon(icon)
@@ -382,3 +384,32 @@ class ProductFilter(QWidget):
         brand = self._brand_of.get(product_id)
         if brand is not None:
             self._fill_brands(brand, product_id)
+
+
+class LineLabel(QLabel):
+    """One line of text that ends in "…" when it doesn't fit (the full text is its tooltip), so a long name
+    or hint never makes its card taller than the others."""
+
+    def __init__(self, text: str = "", object_name: str = "CardLine", parent=None):
+        super().__init__(parent)
+        self.setObjectName(object_name)
+        self.setWordWrap(False)
+        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.setMinimumWidth(20)
+        self._full = ""
+        self.set_full(text)
+
+    def set_full(self, text: str) -> None:
+        self._full = text or ""
+        self.setToolTip(self._full if self._full else "")
+        self._elide()
+
+    def full_text(self) -> str:
+        return self._full
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._elide()
+
+    def _elide(self) -> None:
+        self.setText(self.fontMetrics().elidedText(self._full, Qt.ElideRight, max(self.width(), 20)))

@@ -460,7 +460,7 @@ class BoardColumn(QFrame):
         lay.setContentsMargins(10, 12, 10, 6)
         lay.setSpacing(6)
         head = QHBoxLayout()
-        title = QLabel(column.name.upper())
+        title = QLabel(column.name)
         title.setProperty("section", True)
         holds = [STEP_TIPS[s] for s in column.builtin]
         title.setToolTip((f"{column.name}: " + "; ".join(holds) if holds else
@@ -682,7 +682,7 @@ class BoardPage(QWidget):
         self.player.message.connect(self._status)
         self._player_row: int | None = None
         self.media_pane = MediaPane(self.player, self.side)
-        self.inspector = Inspector(self.media_pane, "Ticket")
+        self.inspector = Inspector(self.media_pane, "")
         self.inspector.closeRequested.connect(self.close_inspector)
         self.split = ContextualSplitter(cols, self.inspector, self.pipeline.store, "board", default_width=420)
         outer.addWidget(self.split, 1)
@@ -1234,7 +1234,7 @@ class BoardPage(QWidget):
         self.player.set_video(path, self.thumbs.cover(card.row.item), preview)
 
     def _show_card(self, card: Card) -> None:
-        self.inspector.set_title("Ticket")
+        self.inspector.set_title("")
         self.split.reveal()
         self._load_player(card)
         self.panel.show_card(card, self.pipeline.youtube_accounts(self.profile.id),

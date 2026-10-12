@@ -117,3 +117,35 @@ def test_download_sources_stay_two_by_two_or_one_column(accounts_page, qapp):
         for section in panel.sections.values():
             rows.setdefault(panel.grid.getItemPosition(panel.grid.indexOf(section))[0], []).append(section)
         assert panel._columns == expected and {len(r) for r in rows.values()} == {expected}
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("QUICK-START RECIPES", "Quick-start recipes"), ("YOUTUBE TITLE", "YouTube title"),
+    ("TIKTOK CAPTION", "TikTok caption"), ("SET ON EVERY SELECTED TICKET", "Set on every selected ticket"),
+    ("Backlog", "Backlog"), ("2 selected", "2 selected"), ("", ""), ("4/4", "4/4"), ("API TOKEN", "API token"),
+])
+def test_headings_are_sentence_case_with_brand_names_kept(text, expected):
+    from reelay.gui.theme import heading
+    assert heading(text) == expected
+
+
+def test_card_buttons_and_pills_meet_contrast_in_every_theme():
+    from reelay.gui import theme
+    palettes = [theme.THEMES[m] for m in ("light", "dark", "black")] + [theme.derive_custom("#1d2b3a", "#ff6a3d"),
+                                                                      theme.derive_custom("#fafaf7", "#2f6f4f")]
+    for p in palettes:
+        assert theme.contrast(p.success_ink, p.success_soft) >= 4.5, p.name
+        assert theme.contrast(p.warning_ink, p.warning_soft) >= 4.5, p.name
+        assert theme.contrast(p.text_secondary, p.bg_raised) >= 4.5, p.name
+
+
+def test_the_profile_tagline_sits_under_the_name(qapp, tmp_path):
+    from reelay.gui.app import create_window
+    from reelay.paths import db_path
+    from reelay.store import Store
+    from reelay.tokens import MemoryTokenStore
+    store = Store(db_path())
+    window = create_window(qapp, store, MemoryTokenStore())
+    assert window.tagline.parent() is window.profile_btn
+    window.close()
+    store.close()

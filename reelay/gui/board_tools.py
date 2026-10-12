@@ -28,7 +28,8 @@ def _label(text: str = "", prop: str | None = None) -> QLabel:
 
 
 def _section(text: str, hint: str) -> QLabel:
-    lab = QLabel(text)
+    from .theme import heading
+    lab = QLabel(heading(text))
     lab.setProperty("section", True)
     return tip(lab, hint)
 

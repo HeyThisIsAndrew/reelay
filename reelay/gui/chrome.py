@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (QButtonGroup, QFrame, QHBoxLayout, QLabel, QPushB
                                QWidget)
 
 from . import icons, theme
-from .theme import set_prop
+from .theme import heading, set_prop
 from .tips import tip
 
 
@@ -60,7 +60,7 @@ class UpNext(QFrame):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(10, 8, 10, 8)
         lay.setSpacing(1)
-        self.heading = QLabel("UP NEXT", objectName="UpNextHeading")
+        self.heading = QLabel("Up next", objectName="UpNextHeading")
         self.text = QLabel(objectName="UpNextText")
         self.text.setWordWrap(True)
         lay.addWidget(self.heading)
@@ -120,7 +120,7 @@ class Popover(QWidget):
         self.body.setSpacing(10)
 
     def add_section(self, title: str, hint: str, *widgets: QWidget) -> None:
-        label = QLabel(title.upper())
+        label = QLabel(heading(title))
         label.setProperty("section", True)
         tip(label, hint)
         self.body.addWidget(label)
