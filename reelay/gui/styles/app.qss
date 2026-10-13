@@ -9,13 +9,16 @@ QMainWindow, QDialog { background: {bg_primary}; }
 QWidget { color: {text_primary}; }
 QWidget#Page, QWidget#TopBar, QWidget#BottomBar { background: {bg_primary}; }
 QWidget#Sidebar { background: {bg_surface}; border-right: 1px solid {divider}; }
-QWidget#ListArea, QFrame#Card { background: {bg_surface}; border: 1px solid {divider}; border-radius: {radius_card}px; }
+QFrame#Card { background: {bg_surface}; border: 1px solid {divider}; border-radius: {radius_card}px; }
+QWidget#ListArea { background: {bg_well}; border: 1px solid {divider}; border-radius: {radius_card}px; }
 QWidget#CardBody { background: transparent; }
 QFrame#Card QFrame#Card { background: {bg_raised}; }
 QFrame#SelectionStrip { background: {bg_raised}; border: 1px solid {border}; border-radius: {radius}px; }
 QWidget#DetailPanel, QScrollArea#DetailScroll, QWidget#DetailBody { background: {bg_surface}; }
 QFrame#DetailFrame { background: {bg_surface}; border: 1px solid {divider}; border-radius: {radius_card}px; }
-QFrame#BoardColumn { background: {bg_surface}; border: 1px solid {divider}; border-radius: {radius_card}px; }
+QFrame#BoardColumn { background: {bg_well}; border: 1px solid {divider}; border-radius: {radius_card}px; }
+QLabel#ColumnCount { background: {card_fill}; color: {text_secondary}; border: 1px solid {card_edge};
+                     border-radius: 9px; padding: 1px 8px; font-size: {font_xs}pt; font-weight: 600; }
 
 /* The contextual inspector (right-hand panel) and its header */
 QFrame#Inspector { background: {bg_surface}; border: 1px solid {divider}; border-radius: {radius_card}px; }
@@ -238,3 +241,7 @@ QLabel#ReadyNote { color: {text_muted}; font-size: {font_sm}pt; }
 QLabel#ReadyMark { color: {text_muted}; font-size: {font_sm}pt; font-weight: 700; }
 QLabel#ReadyMark[state="ready"] { color: {success_ink}; }
 QLabel#ReadyMark[state="blocking"] { color: {warning_ink}; }
+
+/* Side panel title row: the video's column as a quiet pill beside its title */
+QLabel#StagePill { background: {bg_raised}; color: {text_secondary}; border: 1px solid {divider}; border-radius: 9px;
+                   padding: 2px 9px; font-size: {font_xs}pt; font-weight: 600; }

@@ -66,6 +66,28 @@ class Palette:
     def accent_ring(self) -> str:      # hover borders
         return mix(self.bg_surface, self.accent_color, 0.55)
 
+    # Depth: board columns and the Library's grid are recessed wells; cards sit on them a step brighter
+    # (dark themes) or white with a soft shadow line (light themes), with a crisper hairline.
+    @property
+    def bg_well(self) -> str:
+        return mix(self.bg_primary, self.bg_raised if self.scheme == "light" else self.bg_surface, 0.5)
+
+    @property
+    def card_fill(self) -> str:
+        return self.bg_surface if self.scheme == "light" else self.bg_raised
+
+    @property
+    def card_edge(self) -> str:
+        return mix(self.divider, self.border, 0.5)
+
+    @property
+    def card_highlight(self) -> str:        # dark themes: a faint light along a card's top edge
+        return mix(self.card_fill, self.text_primary, 0.16)
+
+    @property
+    def card_shadow(self) -> str:           # light themes: a soft line under a card
+        return mix(self.bg_well, self.text_primary, 0.10)
+
     # Tinted status pills: a soft fill in the status colour, with text in that colour made readable on it
     @property
     def success_soft(self) -> str:
@@ -257,6 +279,7 @@ def _icon(kind: str, color: str) -> str:
 
 def tokens_for(p: Palette, icons: bool = True) -> dict[str, object]:
     tokens: dict[str, object] = asdict(p)
+    tokens.update(bg_well=p.bg_well, card_fill=p.card_fill, card_edge=p.card_edge)
     tokens.update(accent_soft=p.accent_soft, accent_ring=p.accent_ring, success_soft=p.success_soft,
                   success_ink=p.success_ink, warning_soft=p.warning_soft, warning_ink=p.warning_ink)
     tokens.update(font_xs=BASE_PT - 2, font_sm=BASE_PT - 1, font_pt=BASE_PT, font_lg=BASE_PT + 1,

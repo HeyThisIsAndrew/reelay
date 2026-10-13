@@ -469,8 +469,7 @@ class BoardColumn(QFrame):
         title.setContextMenuPolicy(Qt.CustomContextMenu)
         title.customContextMenuRequested.connect(lambda pos: self._menu(title.mapToGlobal(pos)))
         self.title = title
-        self.count = QLabel("0")
-        self.count.setProperty("faint", True)
+        self.count = QLabel("0", objectName="ColumnCount")     # a small pill, like the website draws it
         head.addWidget(title)
         head.addStretch()
         head.addWidget(self.count)

@@ -9,7 +9,7 @@ so the renderings can follow it.
 
 - **Accounts** (`AccountsScene.astro`) now matches the app: six equal cards (3 × 2, 2 × 3, 1 × 6), Snapchat as a
   "Posted by hand" strip, "N of 6 connected", one action per card plus YouTube's quiet "Advanced Setup…". Two
-  small additions in the app the scene can show: a small "?" (Learn more) beside each status pill, and a
+  small additions in the app the scene can show: a small "?" (Learn more) beside each card's name, and a
   "Manage…" link on the status line when one account is connected (several accounts show "3 connected" with a
   Manage… button).
 - **Section headings are sentence case**, semibold, secondary colour: Board columns read "Backlog",

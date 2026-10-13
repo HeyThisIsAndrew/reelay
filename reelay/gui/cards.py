@@ -16,7 +16,7 @@ from __future__ import annotations
 import time
 
 from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPen, QPixmap
+from PySide6.QtGui import QBrush, QColor, QFont, QFontMetrics, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import QAbstractItemView, QListView, QStyle, QStyledItemDelegate
 
 from ..models import Status, VideoItem
@@ -156,15 +156,27 @@ def draw_pill(p: QPainter, text: str, anchor: QPointF, align: Qt.AlignmentFlag, 
 
 
 def draw_frame(p: QPainter, rect: QRectF, hover: float, selected: bool) -> QPainterPath:
-    """The card body: surface, hairline, accent glow on hover, accent ring when selected."""
+    """The card body: a card a step brighter than its well (white with a soft shadow line in light themes),
+    a crisp hairline, a faint top highlight in dark themes, accent glow on hover, accent ring when selected."""
     pal = theme.P
     path = rounded(rect, RADIUS)
-    p.fillPath(path, QColor(pal.bg_raised if hover < 0.5 else pal.bg_hover))
+    dark = pal.scheme != "light"
+    if not dark:
+        p.fillPath(rounded(rect.translated(0, 1), RADIUS), QColor(pal.card_shadow))
+    p.fillPath(path, QColor(pal.card_fill if hover < 0.5 else pal.bg_hover))
+    if dark and not selected:
+        glint = QColor(pal.card_highlight)
+        fade = QLinearGradient(rect.topLeft(), QPointF(rect.left(), rect.top() + min(28.0, rect.height() / 3)))
+        fade.setColorAt(0.0, glint)
+        glint.setAlphaF(0.0)
+        fade.setColorAt(1.0, glint)
+        p.setPen(QPen(QBrush(fade), 1))
+        p.drawPath(rounded(rect.adjusted(1.5, 1.5, -1.5, -1.5), RADIUS - 1))
     if selected:
         p.setPen(QPen(QColor(pal.accent_color), 2))
         p.drawPath(rounded(rect.adjusted(1, 1, -1, -1), RADIUS - 1))
     else:
-        base, glow = QColor(pal.divider), QColor(pal.accent_ring)
+        base, glow = QColor(pal.card_edge), QColor(pal.accent_ring)
         mixed = QColor.fromRgbF(base.redF() + (glow.redF() - base.redF()) * hover,
                                 base.greenF() + (glow.greenF() - base.greenF()) * hover,
                                 base.blueF() + (glow.blueF() - base.blueF()) * hover)

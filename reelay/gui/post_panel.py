@@ -217,28 +217,37 @@ class PostPanel(QFrame):
         lay.setContentsMargins(18, 18, 18, 18)
         lay.setSpacing(6)
 
+        # Title block: the title with its column as a pill on the right, the facts under it. With the player
+        # above (no cover), it lines up exactly with the readiness card below.
         head = QHBoxLayout()
+        head.setSpacing(0)
         self.cover = CoverView()
         self.cover.setFixedSize(72, 128)
         head.addWidget(self.cover, 0, Qt.AlignTop)
+        self.cover_gap = QWidget()
+        self.cover_gap.setFixedWidth(12)
+        head.addWidget(self.cover_gap)
         hv = QVBoxLayout()
+        hv.setSpacing(3)
+        title_row = QHBoxLayout()
+        title_row.setSpacing(10)
         self.hook = QLabel(objectName="CommandTitle")
         self.hook.setWordWrap(True)
+        title_row.addWidget(self.hook, 1)
+        self.stage_label = QLabel(objectName="StagePill")
+        tip(self.stage_label, "The Board column this video is in")
+        title_row.addWidget(self.stage_label, 0, Qt.AlignTop)
+        hv.addLayout(title_row)
         self.meta = QLabel()
         self.meta.setProperty("muted", True)
         self.meta.setWordWrap(True)
-        self.stage_label = QLabel()
-        self.stage_label.setProperty("faint", True)
-        hv.addWidget(self.hook)
         hv.addWidget(self.meta)
-        hv.addWidget(self.stage_label)
         hv.addStretch()
-        head.addSpacing(10)
         head.addLayout(hv, 1)
         lay.addLayout(head)
 
         # ---- is it ready to leave the building?
-        lay.addSpacing(8)
+        lay.addSpacing(10)
         self.readiness_header = ReadinessHeader()
         lay.addWidget(self.readiness_header)
 
@@ -454,6 +463,7 @@ class PostPanel(QFrame):
     def use_player(self, on: bool = True) -> None:
         """The inspector shows the video above this panel, so the small cover isn't needed."""
         self.cover.setVisible(not on)
+        self.cover_gap.setVisible(not on)
 
     def _refresh_video_summary(self) -> None:
         self.video_section.set_summary(self.video_tools.summary() if self.card else "")
@@ -500,7 +510,7 @@ class PostPanel(QFrame):
                 f"{fmt_count(item.view_count)} views on {item.platform}" if item.view_count is not None else item.platform]
         self.meta.setText(" · ".join(b for b in bits if b and b != "—"))
         name = self.stage_name(card.row.stage) if self.stage_name else Stage.LABELS.get(card.row.stage, card.row.stage)
-        self.stage_label.setText(f"In {name}")
+        self.stage_label.setText(name)
 
         original = self.original_path_for(card.row) if self.original_path_for else None
         if not same or original != self.video_tools.original:

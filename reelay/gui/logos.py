@@ -7,8 +7,9 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtCore import QByteArray, QPointF, QRectF, Qt
 from PySide6.QtGui import QBrush, QColor, QFont, QIcon, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap
+from PySide6.QtSvg import QSvgRenderer
 
 RATIO = 2
 
@@ -32,6 +33,30 @@ def _text(p: QPainter, rect: QRectF, text: str, color: str, scale: float, bold: 
     p.drawText(rect, Qt.AlignCenter, text)
 
 
+# Vector glyphs on a 24 x 24 grid (the same paths the website draws), filled in each platform's colours.
+TIKTOK_NOTE = ("M14.2 3h3c.2 1.9 1.5 3.4 3.4 3.6v3.1a7.1 7.1 0 0 1-3.4-1v6.2a5.6 5.6 0 1 1-5.6-5.6c.3 0 .6 0 "
+               ".9.1v3.2a2.5 2.5 0 1 0 1.7 2.3z")
+THREADS_AT = ("M16.8 11.1a6.6 6.6 0 0 0-.3-.1c-.2-3-1.8-4.7-4.6-4.7-1.7 0-3.1.7-3.9 2l1.5 1c.6-.9 1.6-1.1 2.4-1.1 1 "
+              "0 1.7.3 2.1.9.3.4.5 1 .6 1.7a10 10 0 0 0-2.3-.1c-2.3.1-3.8 1.5-3.7 3.4.1 1 .6 1.8 1.4 2.3.7.5 1.6.7 "
+              "2.6.6 1.3-.1 2.3-.6 3-1.4.5-.7.9-1.5 1-2.6.6.4 1.1.9 1.3 1.5.4 1 .4 2.6-.9 3.9-1.2 1.2-2.6 1.7-4.8 "
+              "1.7-2.4 0-4.2-.8-5.4-2.3-1.1-1.4-1.7-3.4-1.7-6s.6-4.6 1.7-6c1.2-1.5 3-2.3 5.4-2.3 2.4 0 4.3.8 5.5 "
+              "2.3.6.7 1.1 1.7 1.4 2.8l1.7-.5c-.4-1.4-1-2.5-1.8-3.5C17.5 1.1 15.2.1 12.2.1h-.1C9.2.1 6.9 1.1 5.4 3c"
+              "-1.4 1.7-2.1 4.1-2.1 7.1s.7 5.4 2.1 7.1c1.5 1.9 3.8 2.9 6.7 2.9h.1c2.6 0 4.4-.7 5.9-2.2 2-2 1.9-4.5 "
+              "1.3-6-.5-1.1-1.4-2-2.6-2.6zm-4.5 4.4c-1 .1-2.1-.4-2.2-1.4 0-.7.5-1.5 2.2-1.6h.6c.6 0 1.2.1 1.8.2-.2 "
+              "2.4-1.3 2.7-2.4 2.8z")
+BLUESKY_BUTTERFLY = ("M12 11.2C10.7 8.6 7.2 4 4.6 3.6 3 3.4 2.6 4.6 2.6 6c0 1.1.6 5 1 5.6.9 1.6 3 2 4.7 1.6-3 .5"
+                     "-4.1 2.3-2.4 4.1 3 3.1 4.6-.7 5.4-2.6l.7-1.7.7 1.7c.8 1.9 2.4 5.7 5.4 2.6 1.7-1.8.6-3.6-2.4"
+                     "-4.1 1.7.4 3.8 0 4.7-1.6.4-.6 1-4.5 1-5.6 0-1.4-.4-2.6-2-2.4-2.6.4-6.1 5-7.4 7.6z")
+FACEBOOK_MARK = ("M12 2a10 10 0 0 0-1.6 19.9v-7H7.9V12h2.5V9.8c0-2.5 1.5-3.9 3.8-3.9 1.1 0 2.2.2 2.2.2v2.5h-1.3c-1.2 "
+                 "0-1.6.8-1.6 1.6V12h2.8l-.4 2.9h-2.3v7A10 10 0 0 0 12 2z")
+
+
+def _svg(p: QPainter, rect: QRectF, body: str, view: str = "0 0 24 24") -> None:
+    """Draw 24 x 24 SVG markup (paths with their own fills) into `rect`, as crisp vectors."""
+    svg = f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{view}">{body}</svg>'
+    QSvgRenderer(QByteArray(svg.encode())).render(p, rect)
+
+
 def _youtube(p: QPainter, s: float) -> None:
     body = QRectF(0, s * 0.18, s, s * 0.64)
     p.setPen(Qt.NoPen)
@@ -49,9 +74,10 @@ def _tiktok(p: QPainter, s: float) -> None:
     p.setPen(Qt.NoPen)
     p.setBrush(QColor("#111111"))
     p.drawRoundedRect(QRectF(0, 0, s, s), s * 0.24, s * 0.24)
-    r = QRectF(0, 0, s, s)
-    for dx, color in ((-s * 0.04, "#25F4EE"), (s * 0.04, "#FE2C55"), (0, "#FFFFFF")):
-        _text(p, r.translated(dx, 0), "♪", color, 0.72)
+    inner = QRectF(s * 0.16, s * 0.16, s * 0.68, s * 0.68)
+    shift = s * 0.035                                        # the cyan and red echoes behind the white note
+    for dx, dy, color in ((-shift, -shift, "#25F4EE"), (shift, shift, "#FE2C55"), (0, 0, "#FFFFFF")):
+        _svg(p, inner.translated(dx, dy), f'<path fill="{color}" d="{TIKTOK_NOTE}"/>')
 
 
 def _instagram(p: QPainter, s: float) -> None:
@@ -74,26 +100,22 @@ def _instagram(p: QPainter, s: float) -> None:
 
 
 def _bluesky(p: QPainter, s: float) -> None:
-    p.setPen(Qt.NoPen)
-    p.setBrush(QColor("#1185FE"))
-    for sign in (-1, 1):   # two wings, upper and lower, on each side
-        cx = s * 0.5 + sign * s * 0.2
-        p.drawEllipse(QPointF(cx, s * 0.38), s * 0.24, s * 0.2)
-        p.drawEllipse(QPointF(s * 0.5 + sign * s * 0.15, s * 0.66), s * 0.15, s * 0.15)
+    _svg(p, QRectF(0, s * 0.02, s, s), f'<path fill="#1185FE" d="{BLUESKY_BUTTERFLY}"/>', "1.6 2.6 21 21")
 
 
 def _threads(p: QPainter, s: float) -> None:
     p.setPen(Qt.NoPen)
     p.setBrush(QColor("#111111"))
     p.drawRoundedRect(QRectF(0, 0, s, s), s * 0.24, s * 0.24)
-    _text(p, QRectF(0, -s * 0.04, s, s), "@", "#FFFFFF", 0.78)
+    # The ribbon spans y 0.1–20.1 of its grid: a viewBox centred on it keeps it centred in the badge.
+    _svg(p, QRectF(s * 0.2, s * 0.2, s * 0.6, s * 0.6), f'<path fill="#FFFFFF" d="{THREADS_AT}"/>',
+         "0.9 -0.9 22 22")
 
 
 def _facebook(p: QPainter, s: float) -> None:
-    p.setPen(Qt.NoPen)
-    p.setBrush(QColor("#0866FF"))
-    p.drawEllipse(QRectF(0, 0, s, s))
-    _text(p, QRectF(s * 0.06, s * 0.1, s, s), "f", "#FFFFFF", 0.85)
+    # The blue mark has the "f" cut out of it; a white disc behind shows the "f" in white.
+    _svg(p, QRectF(0, 0, s, s), f'<circle cx="12" cy="12" r="9.4" fill="#FFFFFF"/>'
+                                f'<path fill="#0866FF" d="{FACEBOOK_MARK}"/>')
 
 
 def _snapchat(p: QPainter, s: float) -> None:
