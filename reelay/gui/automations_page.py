@@ -369,12 +369,20 @@ class AutomationsPage(QWidget):
                       "do shows under Activity.")
         body.setAlignment(Qt.AlignCenter)
         body.setMaximumWidth(620)
+        self.empty_body = body
         create = tip(QPushButton("Create Rule"), "Start a rule from scratch")
         set_prop(create, "primary")
         create.clicked.connect(self.new_rule)
         self.create_btn = create
-        for widget in (mark, title, body):
+        for widget in (mark, title):
             lay.addWidget(widget, 0, Qt.AlignHCenter)
+        # centred by stretches, not an alignment flag: an aligned word-wrapped label is sized to its one-line
+        # hint and gets too little height for its lines, so the text was cut off
+        row = QHBoxLayout()
+        row.addStretch(1)
+        row.addWidget(body, 100)
+        row.addStretch(1)
+        lay.addLayout(row)
         lay.addWidget(create, 0, Qt.AlignHCenter)
         lay.addSpacing(18)
         section = QLabel("Quick-start recipes")
@@ -393,6 +401,7 @@ class AutomationsPage(QWidget):
             cl.setSpacing(8)
             cl.addWidget(QLabel(name, objectName="DetailTitle"))
             text = _muted(desc)
+            text.setAlignment(Qt.AlignLeft | Qt.AlignTop)     # short descriptions sit under the title, not mid-card
             cl.addWidget(text, 1)
             add = tip(QPushButton("Add Recipe"), f"Add “{name}”. It starts with videos added from now on.")
             add.clicked.connect(lambda _=False, k=key: self.add_recipe(k))

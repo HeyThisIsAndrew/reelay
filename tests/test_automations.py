@@ -210,3 +210,32 @@ def test_preview_says_what_a_rule_would_do_without_doing_it(world):
     pv = R.preview(w.pipeline, moved, vid)
     assert not pv.trigger_matches and "moved to" in pv.trigger_note
     assert "Tue" in dict(pv.actions)["Schedule"]
+
+
+def test_empty_state_text_is_never_cut_off(qtbot, tmp_path):
+    """The no-rules message wraps across its full width and gets the height its lines need (it was squeezed
+    to a sliver when the label was centred by the layout)."""
+    from PySide6.QtWidgets import QApplication
+
+    from reelay.gui.app import create_window
+    from reelay.paths import db_path
+    from reelay.store import Store
+    from reelay.tokens import MemoryTokenStore
+    store = Store(db_path())
+    profile = store.create_profile("Be Unconventional", tmp_path / "lib")
+    store.set_active_profile(profile.id)
+    window = create_window(QApplication.instance(), store, MemoryTokenStore())
+    qtbot.addWidget(window)
+    window.resize(1440, 900)
+    window.show()
+    window.go("automations")
+    page = window.automations_page
+    for width in (1440, 1000, 760):
+        window.resize(width, 900)
+        QApplication.processEvents()
+        body = page.empty_body
+        assert body.isVisible()
+        assert body.width() >= min(600, page.empty.width() - 40)
+        assert body.height() >= body.heightForWidth(body.width())
+    window.close()
+    store.close()
