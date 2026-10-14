@@ -36,7 +36,7 @@ class Inspector(QFrame):
         close.clicked.connect(self.closeRequested.emit)
         self.close_btn = close
         hl.addWidget(self.title, 1)
-        hl.addWidget(close)
+        hl.addWidget(close, 0, Qt.AlignRight)     # stays at the right edge when the title is hidden
         lay.addWidget(header)
         lay.addWidget(content, 1)
         self.content = content

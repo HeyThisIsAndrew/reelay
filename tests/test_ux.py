@@ -371,3 +371,43 @@ def test_board_search_and_hashtag_filter(ui, qtbot):
     qtbot.waitUntil(lambda: [c.id for c in col.model.cards] == [ids[items[2].key]], timeout=2000)
     b.search.clear()
     qtbot.waitUntil(lambda: col.model.rowCount() == 3, timeout=2000)
+
+
+# ------------------------------------------------------------------ platform tabs in the Library
+def _list(window, qtbot, monkeypatch, items, url):
+    import reelay.gui.workers as workers
+    monkeypatch.setattr(workers, "list_videos", lambda u, opts, limit=None: ("x", [VideoItem(**i.__dict__)
+                                                                                   for i in items]))
+    page = window.download
+    page.url.setText(url)
+    page._fetch()
+    qtbot.waitUntil(lambda: page.fetch_btn.isEnabled() and page.model.rowCount() >= len(items), timeout=5000)
+    return page
+
+
+def test_library_platform_tabs_switch_between_platforms(ui, qtbot, monkeypatch):
+    window, _store, _ = ui
+    window.go("download")
+    tiktok = [VideoItem(platform="TikTok", video_id=str(700 + i), url=f"https://www.tiktok.com/@x/video/{700 + i}",
+                        description=f"tiktok {i}", upload_date="20261001") for i in range(3)]
+    page = _list(window, qtbot, monkeypatch, tiktok, "https://www.tiktok.com/@x")
+    page._refresh_tags()
+    assert not page.platform_tabs.isVisibleTo(page)                    # one platform: nothing to switch between
+    youtube = [VideoItem(platform="YouTube", video_id=f"yt{i}", url=f"https://www.youtube.com/watch?v=yt{i}",
+                         description=f"youtube {i}", upload_date="20261002") for i in range(2)]
+    page = _list(window, qtbot, monkeypatch, youtube, "https://www.youtube.com/@x")
+    page._refresh_tags()
+    tabs = page.platform_tabs
+    assert tabs.isVisibleTo(page)
+    labels = [tabs.tabText(i) for i in range(tabs.count())]
+    assert labels[0].startswith("All") and any(t.startswith("TikTok") and "3" in t for t in labels) \
+        and any(t.startswith("YouTube") and "2" in t for t in labels)
+    assert page.current_platform() == "youtube"                       # just listed YouTube: its tab opens
+    assert page.pager.total == 2
+    page.select_all()
+    assert {i.platform for i in page.model.items() if i.checked} == {"YouTube"}   # Select All: only this tab
+    tabs.setCurrentIndex(next(i for i, t in enumerate(labels) if t.startswith("TikTok")))
+    assert page.current_platform() == "tiktok" and page.pager.total == 3
+    tabs.setCurrentIndex(0)
+    assert page.current_platform() == "" and page.pager.total == 5
+    assert all(tabs.tabToolTip(i) for i in range(tabs.count()))

@@ -8,11 +8,11 @@ from dataclasses import replace
 from pathlib import Path
 
 from PySide6.QtCore import QSettings, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QDesktopServices, QKeySequence, QShortcut
+from PySide6.QtGui import QDesktopServices, QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (QApplication, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
                                QFrame, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QMenu,
                                QMessageBox, QProgressBar, QPushButton, QSlider, QStackedWidget,
-                               QTableView, QToolButton, QVBoxLayout, QWidget)
+                               QTabBar, QTableView, QToolButton, QVBoxLayout, QWidget)
 
 from .. import APP_NAME
 from ..downloader import QUALITY_BEST, QUALITY_LABELS
@@ -319,6 +319,16 @@ class DownloadPage(QWidget):
                                         "product (TikTok Shop)", self.products_filter)
         self.filter_popover.add_section("Sort by", "The order videos are shown in", self.sort_box)
 
+        # ---- platform tabs: All · TikTok · YouTube…, shown once the list holds more than one platform
+        self.platform_tabs = QTabBar(objectName="PlatformTabs")
+        self.platform_tabs.setDrawBase(False)
+        self.platform_tabs.setExpanding(False)
+        self.platform_tabs.setDocumentMode(True)
+        self.platform_tabs.setIconSize(icons.size(16))
+        tip(self.platform_tabs, "Switch between the platforms your videos came from")
+        self.platform_tabs.setVisible(False)
+        self._platform_wanted = ""          # the platform just listed: its tab opens once it's in the list
+
         # ---- selection strip: what will download, and the buttons to change it
         strip = QFrame(objectName="SelectionStrip")
         sl = QHBoxLayout(strip)
@@ -329,8 +339,9 @@ class DownloadPage(QWidget):
         tip(self.selection_hint, "Ticked videos download when you click Download (bottom right)")
         sl.addWidget(self.selection_hint, 1)
         self.select_all_btn = QPushButton("Select All")
-        tip(self.select_all_btn, "Tick every video in the list for downloading (when you've searched or picked a "
-                                 "hashtag, only the videos shown). Videos already downloaded are skipped.")
+        tip(self.select_all_btn, "Tick every video in the list for downloading (when you've searched, filtered or "
+                                 "picked a platform tab, only the videos shown). Videos already downloaded are "
+                                 "skipped.")
         sl.addWidget(self.select_all_btn)
         self.unselect_all_btn = QPushButton("Unselect All")
         tip(self.unselect_all_btn, "Untick every video, so nothing will download until you choose again")
@@ -340,6 +351,7 @@ class DownloadPage(QWidget):
         tip(self.select_btn, "More ways to select: only the newest few, only what your search shows, or the "
                              "highlighted videos; and renaming files")
         sl.addWidget(self.select_btn)
+        ll.addWidget(self.platform_tabs)
         ll.addWidget(strip)
 
         self.table = VideoTable(self._toggle_selected)
@@ -680,6 +692,7 @@ class DownloadPage(QWidget):
         self.search.textChangedTo.connect(lambda text: (self.proxy.set_query(text), self.pager.set_page(0),
                                                         self._update_counts()))
         self.tag_filter.currentIndexChanged.connect(self._on_tag_filter)
+        self.platform_tabs.currentChanged.connect(lambda _i: self._on_platform_tab())
         self.products_filter.changed.connect(self._on_product_filter)
         self.show_filter.currentIndexChanged.connect(self._on_show_filter)
         self.sort_box.currentIndexChanged.connect(self._apply_sort)
@@ -1103,7 +1116,10 @@ class DownloadPage(QWidget):
             return
         self.fetched = items
         self.sources = urls
+        listed = {(i.platform or "").lower() for i in items}
+        self._platform_wanted = listed.pop() if len(listed) == 1 else ""   # open the tab of what was listed
         self.reload()
+        self._refresh_platforms()
         held = [i for i in self.model.items() if not i.is_downloaded and not downloadable_by_default(i)]
         if held:  # private / scheduled YouTube videos need the owner's login cookies: never preselected
             self.model.set_checked([i.key for i in held], False)
@@ -1198,7 +1214,7 @@ class DownloadPage(QWidget):
         self.model.set_checked([i.key for i in shown], True)
         n = sum(1 for i in shown if not i.is_downloaded)
         self._set_status(f"Selected {n} video{'s' if n != 1 else ''}" +
-                         (" (the ones shown by your search or hashtag)." if self.proxy.filtering else ".")
+                         (" (only the videos your search, filters or platform tab show)." if self.proxy.filtering else ".")
                          if n else "Every video shown is already downloaded.")
 
     def unselect_all(self) -> None:
@@ -1206,9 +1222,51 @@ class DownloadPage(QWidget):
         self._set_status("Nothing selected.")
 
     # ================================================================ hashtags (categories)
+    # ================================================================ platform tabs
+    def current_platform(self) -> str:
+        """The open platform tab: "" for All, else "tiktok", "youtube"…"""
+        index = self.platform_tabs.currentIndex()
+        return (self.platform_tabs.tabData(index) or "") if index >= 0 else ""
+
+    def _refresh_platforms(self) -> None:
+        """One tab per platform in the list (with how many videos came from it), after All. Hidden while there's
+        only one platform. Keeps the open tab, or opens the platform that was just listed."""
+        from .logos import platform_pixmap
+        found: dict[str, list] = {}
+        for item in self.model.items():
+            label = item.platform or "Other"
+            found.setdefault(label.lower(), [label, 0])[1] += 1
+        wanted = [("", f"All  {sum(n for _l, n in found.values())}")] + \
+                 [(key, f"{label}  {n}") for key, (label, n) in sorted(found.items(), key=lambda kv: -kv[1][1])]
+        current = self._platform_wanted if self._platform_wanted in found else self.current_platform()
+        self._platform_wanted = ""
+        tabs = self.platform_tabs
+        tabs.blockSignals(True)
+        if [(tabs.tabData(i), tabs.tabText(i)) for i in range(tabs.count())] != wanted:
+            while tabs.count():
+                tabs.removeTab(0)
+            for key, text in wanted:
+                i = tabs.addTab(text)
+                tabs.setTabData(i, key)
+                if key:
+                    tabs.setTabIcon(i, QIcon(platform_pixmap(key, 32)))
+                tabs.setTabToolTip(i, f"Show only the videos that came from {found[key][0]}" if key
+                                   else "Show the videos from every platform")
+        tabs.setCurrentIndex(next((i for i in range(tabs.count()) if tabs.tabData(i) == current), 0))
+        tabs.blockSignals(False)
+        tabs.setVisible(len(found) > 1)
+        if self.current_platform() != self.proxy._platform:
+            self._on_platform_tab()
+
+    def _on_platform_tab(self) -> None:
+        self.proxy.set_platform(self.current_platform())
+        self.pager.set_page(0)
+        self._update_counts()
+
     def _refresh_tags(self) -> None:
         """Rebuild the hashtag list from the videos on the page, keeping the choice."""
         from ..tags import counts
+        self._refresh_platforms()
         current = self.tag_filter.currentData() or ""
         found = counts(i.hashtags for i in self.model.items())
         wanted = [("", "All hashtags")] + [(t, f"#{t}  ({n})") for t, n in found]

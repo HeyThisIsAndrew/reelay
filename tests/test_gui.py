@@ -517,3 +517,21 @@ def test_profile_dialog_matches_logo_colours_and_previews(app_window, tmp_path, 
     assert theme.luminance(brand.background) < 0.04                  # its black
     assert use_custom                                                # picking colours turns Custom on
     assert not dialog.warning.isVisible()
+
+
+def test_inspector_close_button_sits_at_the_right_edge(qtbot):
+    """With no title (a single video), the ✕ still hugs the panel's right edge instead of centring itself."""
+    from PySide6.QtWidgets import QLabel
+
+    from reelay.gui.inspector import Inspector
+    panel = Inspector(QLabel("content"), "")
+    qtbot.addWidget(panel)
+    panel.resize(420, 300)
+    panel.show()
+    qtbot.waitExposed(panel)
+    for title in ("", "2 selected"):
+        panel.set_title(title)
+        panel.layout().activate()
+        panel.close_btn.parentWidget().layout().activate()
+        right = panel.close_btn.mapTo(panel, panel.close_btn.rect().topRight()).x()
+        assert right >= panel.width() - 16, (title, right)
