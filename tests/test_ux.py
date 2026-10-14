@@ -245,8 +245,8 @@ def test_help_is_in_the_sidebar_and_works_offline(ui):
     window.go("download")
     window.nav_buttons["help"].click()
     assert window.stack.currentWidget() is window.help_page
-    text = window.help_page.browser.toPlainText()
-    assert "Reelay Help" in text and "Videos come in" in text and "Sign in with Google" in text
+    assert window.help_page.current is window.help_page.home
+    assert len(window.help_page.home.cards) == 6
     assert store.get_setting("last_page") == "download"                       # Help never becomes the start page
 
 

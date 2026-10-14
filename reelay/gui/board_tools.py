@@ -366,7 +366,7 @@ class ArchivedDialog(QDialog):
         self.restored = 0
         lay = QVBoxLayout(self)
         lay.setContentsMargins(18, 14, 18, 12)
-        lay.addWidget(_label("Archived videos are hidden from the Board and the Download page. Their files, "
+        lay.addWidget(_label("Archived videos are hidden from the Board and the Library. Their files, "
                              "tickets and history are kept.", "muted"))
         self.table = QTableWidget(0, 2)
         self.table.setHorizontalHeaderLabels(["VIDEO", "ARCHIVED"])

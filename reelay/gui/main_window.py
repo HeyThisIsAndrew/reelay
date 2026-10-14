@@ -82,7 +82,8 @@ class MainWindow(QMainWindow):
         self.board = BoardPage(self.pipeline, self.uploads, self.thumbs)
         self.accounts_page = AccountsPage(store, self.accounts)
         self.settings_page = SettingsPage(store, services)
-        self.help_page = HelpPage()
+        self.help_page = HelpPage(store)
+        self.help_page.navigate.connect(self.go)          # "Take me there" in the Help Center
         from .automations_page import AutomationsPage
         self.automations_page = AutomationsPage(self.pipeline)
         self.pages = {"download": self.download, "board": self.board, "automations": self.automations_page,

@@ -65,6 +65,11 @@ PATHS: dict[str, str] = {
     "link": '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3'
             'a4 4 0 0 0 5.7 5.7l1-1"/>',
     "warning": '<path d="M12 4l9 16H3z"/><path d="M12 10v4.5M12 17.3v.1"/>',
+    # the Help Center's topics
+    "flag": '<path d="M6 21V4"/><path d="M6 4.5h11l-2.2 4 2.2 4H6"/>',
+    "send": '<path d="M20.5 3.5L3.5 10.5l7 2.8 2.8 7z"/><path d="M10.5 13.3l10-9.8"/>',
+    "person": '<circle cx="12" cy="8.5" r="3.6"/><path d="M5 20c.9-3.7 3.7-5.6 7-5.6s6.1 1.9 7 5.6"/>',
+    "shield": '<path d="M12 3l7.5 3v5.2c0 4.5-3.1 8.3-7.5 9.6-4.4-1.3-7.5-5.1-7.5-9.6V6z"/><path d="M9 12l2.2 2.2 4-4.2"/>',
 }
 
 _cache: dict[tuple[str, str, int, float], QPixmap] = {}

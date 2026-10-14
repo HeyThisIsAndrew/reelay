@@ -18,7 +18,7 @@ from reelay import __version__  # noqa: E402
 
 datas = [
     (str(ROOT / "packaging" / "assets" / "icon.png"), "packaging/assets"),
-    (str(ROOT / "reelay" / "gui" / "help.md"), "reelay/gui"),
+    (str(ROOT / "reelay" / "gui" / "help_shots"), "reelay/gui/help_shots"),   # the Help Center's pictures
     (str(ROOT / "reelay" / "gui" / "styles" / "app.qss"), "reelay/gui/styles"),
 ]
 binaries = []

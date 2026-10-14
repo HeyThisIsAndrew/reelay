@@ -88,6 +88,15 @@ class Palette:
     def card_shadow(self) -> str:           # light themes: a soft line under a card
         return mix(self.bg_well, self.text_primary, 0.10)
 
+    # The Help Center's numbered markers: one blue that shows on any screenshot, in every theme
+    @property
+    def marker(self) -> str:
+        return "#2563eb"
+
+    @property
+    def marker_ink(self) -> str:            # white numerals on the marker: 5.2:1
+        return "#ffffff"
+
     # Tinted status pills: a soft fill in the status colour, with text in that colour made readable on it
     @property
     def success_soft(self) -> str:
@@ -279,7 +288,8 @@ def _icon(kind: str, color: str) -> str:
 
 def tokens_for(p: Palette, icons: bool = True) -> dict[str, object]:
     tokens: dict[str, object] = asdict(p)
-    tokens.update(bg_well=p.bg_well, card_fill=p.card_fill, card_edge=p.card_edge)
+    tokens.update(bg_well=p.bg_well, card_fill=p.card_fill, card_edge=p.card_edge, marker=p.marker,
+                  marker_ink=p.marker_ink)
     tokens.update(accent_soft=p.accent_soft, accent_ring=p.accent_ring, success_soft=p.success_soft,
                   success_ink=p.success_ink, warning_soft=p.warning_soft, warning_ink=p.warning_ink)
     tokens.update(font_xs=BASE_PT - 2, font_sm=BASE_PT - 1, font_pt=BASE_PT, font_lg=BASE_PT + 1,

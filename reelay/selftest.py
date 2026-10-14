@@ -113,10 +113,8 @@ def run() -> int:
         return "serves OpenAPI 3.1"
 
     def help_page():
-        from .gui.help_page import HELP_FILE
-        text = HELP_FILE.read_text(encoding="utf-8")
-        assert text.startswith("# Reelay Help"), "help.md is missing or damaged"
-        return f"{len(text.splitlines())} lines, offline"
+        from .gui.help_page import selftest
+        return selftest() + ", offline"
 
     for name, fn in (("yt-dlp", ytdlp), ("TikTok impersonation", impersonation), ("ffmpeg", ffmpeg),
                      ("Caption burning", captions), ("Keychain", keychain), ("Database", database),

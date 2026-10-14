@@ -250,3 +250,46 @@ QLabel#ReadyMark[state="blocking"] { color: {warning_ink}; }
 /* Side panel title row: the video's column as a quiet pill beside its title */
 QLabel#StagePill { background: {bg_raised}; color: {text_secondary}; border: 1px solid {divider}; border-radius: 9px;
                    padding: 2px 9px; font-size: {font_xs}pt; font-weight: 600; }
+
+/* ---- Help Center */
+QFrame#HelpHero { background: {card_fill}; border: 1px solid {card_edge}; border-radius: {radius_card}px; }
+QLabel#HelpHeroTitle { font-size: {font_h1}pt; }
+QLabel#HelpKicker { color: {text_secondary}; font-size: {font_sm}pt; font-weight: 600; }
+QLabel#HelpStepTitle { font-size: {font_h1}pt; font-weight: 700; }
+QLabel#HelpProgress, QLabel#HelpCrumb { color: {text_secondary}; font-weight: 600; }
+QPushButton#HelpCard { text-align: left; background: {card_fill}; border: 1px solid {card_edge};
+                       border-radius: {radius_card}px; padding: 0; }
+QPushButton#HelpCard:hover { background: {bg_hover}; }
+QPushButton#HelpCard:focus { border: 2px solid {accent_color}; }
+QPushButton#HelpResult { text-align: left; background: {card_fill}; border: 1px solid {card_edge};
+                         border-radius: {radius}px; padding: 9px 14px; }
+QPushButton#HelpResult:hover { background: {bg_hover}; }
+QPushButton#HelpResult:focus { border-color: {accent_color}; }
+QPushButton#HelpBack { background: transparent; border: none; padding: 4px 2px; color: {text_secondary};
+                       font-weight: 600; }
+QPushButton#HelpBack:hover, QPushButton#HelpBack:focus { color: {text_primary}; }
+QPushButton#TourChip { background: transparent; border: 1px solid {divider}; border-radius: 13px; padding: 4px 11px;
+                       color: {text_secondary}; font-size: {font_sm}pt; }
+QPushButton#TourChip:hover { color: {text_primary}; border-color: {border}; }
+QPushButton#TourChip:checked { background: {accent_color}; color: {on_accent}; border-color: {accent_color};
+                               font-weight: 600; }
+QPushButton#TourChip:focus { border: 2px solid {accent_ring}; }
+QPushButton#HelpNav { text-align: left; background: transparent; border: none; border-radius: {radius}px;
+                      padding: 7px 10px; color: {text_secondary}; }
+QPushButton#HelpNav:hover { color: {text_primary}; background: {bg_hover}; }
+QPushButton#HelpNav:checked { background: {bg_hover}; color: {text_primary}; font-weight: 600; }
+QPushButton#HelpNav:focus { border: 2px solid {accent_ring}; }
+QPushButton#HelpLink { background: transparent; border: none; border-bottom: 1px solid {divider}; border-radius: 0;
+                       padding: 3px 0; color: {text_primary}; font-weight: 600; }
+QPushButton#HelpLink:hover { border-bottom-color: {text_primary}; }
+QPushButton#HelpLink:focus { border-bottom: 2px solid {accent_color}; }
+QToolButton#HelpDetail { background: transparent; border: none; padding: 4px 0; color: {text_primary};
+                         font-weight: 600; }
+QToolButton#HelpDetail:focus { color: {text_primary}; border-bottom: 2px solid {accent_ring}; }
+QLabel#HelpNum { background: {bg_raised}; color: {text_secondary}; border-radius: 11px; font-weight: 700;
+                 font-size: {font_sm}pt; }
+QLabel#HelpNum[marked="true"] { background: {marker}; color: {marker_ink}; }
+QFrame#HelpCallout { background: {bg_raised}; border-radius: {radius}px; }
+QFrame#HelpDiagram { background: {card_fill}; border: 1px solid {card_edge}; border-radius: {radius_card}px; }
+QFrame#HelpPlace { background: {bg_raised}; border-radius: {radius}px; }
+QStackedWidget#HelpStack QPushButton:focus { border-color: {accent_color}; }
