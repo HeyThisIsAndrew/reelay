@@ -196,4 +196,6 @@ class MediaPane(QWidget):
         super().resizeEvent(event)
         stage = getattr(self.player, "stage", None)
         if stage is not None:
-            stage.setFixedHeight(int(min(self.width() * 9 / 16, self.height() * 0.48)))
+            target_h = int(min(self.width() * 9 / 16, self.height() * 0.48))
+            if stage.height() != target_h:
+                stage.setFixedHeight(target_h)

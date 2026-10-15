@@ -1531,6 +1531,7 @@ class DownloadPage(QWidget):
         if self.details_worker:
             self.details_worker.wait(3000)
         if self.products_worker:
+            self.products_worker.stop()
             self.products_worker.wait(3000)
         if self._save_timer.isActive():
             self._save_timer.stop()

@@ -17,7 +17,7 @@ from __future__ import annotations
 import html
 from datetime import datetime, timezone
 
-from PySide6.QtCore import QDateTime, Qt, Signal
+from PySide6.QtCore import QDateTime, QEvent, Qt, Signal
 from PySide6.QtWidgets import (QComboBox, QDateEdit, QDateTimeEdit, QDialog, QDialogButtonBox,
                                QFileDialog, QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QPlainTextEdit, QPushButton,
                                QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
@@ -684,10 +684,11 @@ class PlatformPicker(QWidget):
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
-        n = len(self.chips)
-        even = [c for c in range(n, 0, -1) if n % c == 0]        # rows that fill evenly: 6, 3, 2, 1
-        fits = [c for c in even if self.width() // c >= self.CHIP_MIN]
-        self._arrange(fits[0] if fits else even[-2] if len(even) > 1 else 1)
+        w = self.width()
+        if w <= 0:
+            return
+        cols = 3 if w >= 3 * self.CHIP_MIN + 20 else 2 if w >= 2 * self.CHIP_MIN else 1
+        self._arrange(cols)
 
 
 class _StatusLabel(LineLabel):
@@ -804,7 +805,6 @@ class PlatformSection(QFrame):
         self.toggle.setText(f"{self.label} {'▾' if on else '▸'}")
 
     def eventFilter(self, obj, event) -> bool:  # noqa: N802
-        from PySide6.QtCore import QEvent
         if obj is self.header and event.type() == QEvent.MouseButtonRelease and event.button() == Qt.LeftButton:
             self.toggle.toggle()            # the whole header line folds, not only the name
             return True

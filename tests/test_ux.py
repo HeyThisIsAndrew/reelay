@@ -258,6 +258,7 @@ def _list_videos(window, qtbot, monkeypatch, n=4):
              for i in range(n)]
     monkeypatch.setattr(workers, "list_videos", lambda url, opts, limit=None: ("x", [VideoItem(**i.__dict__)
                                                                                    for i in items]))
+    monkeypatch.setattr("reelay.products.tiktok_products", lambda *a, **k: [])
     page = window.download
     page.url.setText("https://www.tiktok.com/@livingood.lifestyle")
     page._fetch()

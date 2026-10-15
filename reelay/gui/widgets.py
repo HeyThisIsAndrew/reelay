@@ -327,8 +327,9 @@ class Collapsible(QWidget):
     def _fit_summary(self) -> None:
         text = getattr(self, "_summary_text", "")
         width = max(self.summary.width(), 40)
-        self.summary.setText(QFontMetrics(self.summary.font()).elidedText(text, Qt.ElideRight, width))
-        self.summary.setToolTip(text)
+        elided = QFontMetrics(self.summary.font()).elidedText(text, Qt.ElideRight, width)
+        if elided != self.summary.text():
+            self.summary.setText(elided)
 
     def set_summary(self, text: str, danger: bool = False) -> None:
         self._summary_text = text
@@ -501,4 +502,6 @@ class LineLabel(QLabel):
         self._elide()
 
     def _elide(self) -> None:
-        self.setText(self.fontMetrics().elidedText(self._full, Qt.ElideRight, max(self.width(), 20)))
+        elided = self.fontMetrics().elidedText(self._full, Qt.ElideRight, max(self.width(), 20))
+        if elided != self.text():
+            self.setText(elided)
