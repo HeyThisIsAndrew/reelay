@@ -64,8 +64,9 @@ QLabel[muted="true"] { color: {text_secondary}; }
 QLabel[faint="true"] { color: {text_muted}; }
 QLabel[danger="true"] { color: {danger}; }
 QLabel[success="true"] { color: {success}; }
-QLabel[badge="ready"] { color: {on_badge}; background: {success}; border-radius: 9px; padding: 2px 10px;
-                        font-weight: 700; letter-spacing: 0.5px; }
+/* Status colours have one meaning each (theme.py): ready is the normal state, so it's neutral */
+QLabel[badge="ready"] { color: {text_primary}; background: {bg_raised}; border: 1px solid {border}; border-radius: 9px;
+                        padding: 1px 9px; font-weight: 700; letter-spacing: 0.5px; }
 QLabel[badge="not_ready"] { color: {on_badge}; background: {danger}; border-radius: 9px; padding: 2px 10px;
                             font-weight: 700; letter-spacing: 0.5px; }
 QLabel[section="true"] { color: {text_secondary}; font-size: {font_sm}pt; font-weight: 600; padding-top: 6px; }
@@ -244,8 +245,8 @@ QFrame#ReadyRow { border: none; border-top: 1px solid {divider}; }
 QLabel#ReadyName { font-size: {font_sm}pt; font-weight: 600; }
 QLabel#ReadyNote { color: {text_muted}; font-size: {font_sm}pt; }
 QLabel#ReadyMark { color: {text_muted}; font-size: {font_sm}pt; font-weight: 700; }
-QLabel#ReadyMark[state="ready"] { color: {success_ink}; }
-QLabel#ReadyMark[state="blocking"] { color: {warning_ink}; }
+QLabel#ReadyMark[state="ready"] { color: {text_primary}; }
+QLabel#ReadyMark[state="blocking"] { color: {danger}; }
 
 /* Side panel title row: the video's column as a quiet pill beside its title */
 QLabel#StagePill { background: {bg_raised}; color: {text_secondary}; border: 1px solid {divider}; border-radius: 9px;

@@ -85,8 +85,7 @@ class ReadinessRing(QWidget):
         p.setPen(QPen(QColor(theme.P.bg_pressed), 4))
         p.drawEllipse(r)
         if self.total:
-            done = self.ready == self.total
-            pen = QPen(QColor(theme.P.success if done else theme.P.accent_color), 4)
+            pen = QPen(QColor(theme.P.accent_color), 4)     # progress: the theme's accent (green means live)
             pen.setCapStyle(Qt.RoundCap)
             p.setPen(pen)
             p.drawArc(r, 90 * 16, -int(360 * 16 * self.ready / self.total))

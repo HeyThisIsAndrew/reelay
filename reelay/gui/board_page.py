@@ -341,8 +341,9 @@ class CardDelegate(QStyledItemDelegate):
     def _draw_platforms(painter: QPainter, card: Card, x: int, y: int, size: int = CARD_LOGO_SIZE,
                         width: int | None = None) -> None:
         """The coverage map: every platform in a fixed order, so the eye learns the
-        positions. Published = green ✓, scheduled = blue clock, ready = amber dot,
-        needs work = red !, not going there = a faint logo with no badge."""
+        positions. Published = green ✓, scheduled = blue clock, ready = a plain neutral dot (the normal
+        state), needs work = red !, not going there = a faint logo with no badge. Glyphs use an ink that
+        reads at 3:1 or more on their badge."""
         from ..coverage import NEEDS_WORK, NOT_APPLICABLE, PUBLISHED, READY, SCHEDULED
         from .logos import platform_pixmap
         p = theme.P
@@ -356,7 +357,7 @@ class CardDelegate(QStyledItemDelegate):
                 painter.setOpacity(0.22)
             painter.drawPixmap(x, y, platform_pixmap(name, size))
             painter.restore()
-            color = {PUBLISHED: p.success, SCHEDULED: p.info, READY: p.warning,
+            color = {PUBLISHED: p.success, SCHEDULED: p.info, READY: p.text_secondary,
                      NEEDS_WORK: p.danger}.get(c.state)
             if color:
                 d = 11.0
@@ -364,9 +365,9 @@ class CardDelegate(QStyledItemDelegate):
                 painter.setPen(QPen(QColor(p.bg_raised), 1.5))
                 painter.setBrush(QColor(color))
                 painter.drawEllipse(badge)
-                white = QPen(QColor(Qt.white), 1.4)   # glyphs on the coloured badges
-                white.setCapStyle(Qt.RoundCap)
-                painter.setPen(white)
+                ink = QPen(QColor(p.ink_on(color)), 1.4)   # glyphs on the coloured badges
+                ink.setCapStyle(Qt.RoundCap)
+                painter.setPen(ink)
                 cx, cy = badge.center().x(), badge.center().y()
                 if c.state == PUBLISHED:
                     painter.drawPolyline([QPointF(cx - 2.6, cy + 0.1), QPointF(cx - 0.7, cy + 2.0),
@@ -383,7 +384,7 @@ class CardDelegate(QStyledItemDelegate):
     def _status(card: Card) -> tuple[str, str]:
         p, post, item = theme.P, card.post, card.row.item
         held = [d for d in card.dispatches if d.status == "interrupted"]
-        if held:
+        if held:                                    # waiting for your decision: amber
             names = ", ".join(Platform.LABELS.get(d.platform, d.platform) for d in held)
             return f"⚠ Interrupted on {names}: open to decide", p.danger
         if card.search_hit is not None and card.search_hit.spoken:   # found by what was said in the video
@@ -400,7 +401,7 @@ class CardDelegate(QStyledItemDelegate):
         if post and post.status == PostStatus.SCHEDULED:
             if post.error:
                 return "⚠ Still private on YouTube", p.danger
-            return f"Goes live {local_text(post.publish_at)}", p.text_primary
+            return f"Goes live {local_text(post.publish_at)}", p.info_text
         if post and post.status == PostStatus.PUBLISHED:
             return f"Live on {card.account.display_name}" if card.account else "Live on YouTube", p.success
         going = [s for s in card.platform_states.values() if s.target]
@@ -419,7 +420,8 @@ class CardDelegate(QStyledItemDelegate):
         readiness = card.readiness
         if readiness is not None and readiness.blocking:
             names = ", ".join(Platform.LABELS.get(n, n) for n in readiness.blocking)
-            return (f"⚠ Not ready for {names}" if readiness.ready else f"⚠ NOT READY · {names}"), p.danger
+            # Ready somewhere else, or nowhere yet: the same words either way, in sentence case
+            return (f"⚠ Not ready for {names}" if readiness.ready else f"⚠ Not ready · {names}"), p.danger
         to_fix = coverage_needs_work(card.coverage)
         if to_fix:
             return f"⚠ Needs work: {', '.join(Platform.LABELS.get(n, n) for n in to_fix)}", p.danger
@@ -676,7 +678,7 @@ class BoardPage(QWidget):
         self.side.addWidget(self.panel)
         self.side.addWidget(self.bulk)
         # The ticket only takes room while a card is selected; otherwise the columns get the whole width.
-        # The Command Center: the video on top, the ticket under it.
+        # The side panel: the video on top, the ticket under it.
         self.player = PlayerWidget()
         self.player.message.connect(self._status)
         self._player_row: int | None = None

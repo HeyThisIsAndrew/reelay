@@ -116,8 +116,8 @@ TOUR: tuple[TourStep, ...] = (
                          "selected card on the Board."),
         (Step("The ring counts the platforms that are ready. Each row: **✓** ready, **–** you post it by hand, "
               "**!** something to fix, with the note saying what.", "ready"),
-         Step("On the card, each logo has a badge: green published, blue scheduled, amber ready, red needs "
-              "work.", "card"),
+         Step("On the card, each logo has a badge: green published, blue scheduled, a plain dot ready, red "
+              "needs work. Amber means it's waiting for you to decide.", "card"),
          Step("Hover a row or a card to see every check.")),
         "Fix anything marked !, then choose where the video goes.",
         go="board", go_label="Open the Board", short="Readiness"),
@@ -311,7 +311,7 @@ BOARD = Category("board", "Board & preparing posts", "Turn videos into ready-to-
     Guide("board-readiness", "Readiness", "Know what still needs work before you post.",
           Visual("ticket", "A ticket's readiness ring and platform rows beside the selected card."),
           (Step("The ring counts the ready platforms. **✓** ready, **–** posted by hand, **!** needs work.", "ready"),
-           Step("Card badges: green published, blue scheduled, amber ready, red needs work.", "card"),
+           Step("Card badges: green published, blue scheduled, a plain dot ready, red needs work.", "card"),
            Step("Hover a row for every check behind it.")),
           "A ticket can go when at least one of its platforms is ready. Platforms you post by hand never block.",
           (Detail("What's checked", (
