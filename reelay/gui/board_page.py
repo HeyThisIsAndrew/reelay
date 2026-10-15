@@ -728,7 +728,8 @@ class BoardPage(QWidget):
         self.approval_text = QLabel(objectName="ApprovalBarText")
         self.approval_text.setWordWrap(True)
         bar.addWidget(self.approval_text, 1)
-        review = QPushButton("Review…")
+        review = tip(QPushButton("Review…"), "Open Approvals on this video's request: see what it would do, "
+                                            "then approve or reject it")
         review.clicked.connect(lambda: self.open_approvals(self.selected_id))
         bar.addWidget(review)
         self.approval_bar.hide()
