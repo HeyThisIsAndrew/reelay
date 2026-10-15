@@ -416,7 +416,14 @@ class CardDelegate(QStyledItemDelegate):
             live = sum(1 for s in going if s.state == "published")
             if live == len(going):
                 return f"✓ Live on {'all ' + str(live) if live > 1 else Platform.LABELS[going[0].platform]}", p.success
-            return short_summary(card.coverage), (p.danger if coverage_needs_work(card.coverage) else p.text_secondary)
+            scheduled = any(s.state in ("scheduled", "sending") for s in going)
+            return short_summary(card.coverage), (p.danger if coverage_needs_work(card.coverage) else
+                                                  p.info_text if scheduled else p.text_secondary)
+        # One post on its way (a single platform): when it goes live. Two or more are listed above.
+        on_the_way = [d for d in card.dispatches if d.status in ("pending", "scheduled", "dispatching")]
+        if on_the_way:
+            when = min((d.publish_at or d.due_at) for d in on_the_way)
+            return f"Goes live {local_text(when)}", p.info_text
         if card.row.stage == Stage.PUBLISHED:
             return "Posted outside Reelay", p.text_secondary
         if post and post.status == PostStatus.FAILED:
@@ -436,6 +443,8 @@ class CardDelegate(QStyledItemDelegate):
                 when = f" · {local_text(post.publish_at)}" if post.publish_at else ""
                 return f"✓ Ready · {card.account.display_name}{when}", p.text_secondary
             return "✓ Ready · pick a channel", p.text_secondary
+        if card.row.stage == Stage.SCHEDULED:      # moved there by hand, nothing actually scheduled: say so
+            return "Nothing scheduled yet: schedule it, or move it back", p.warning_text
         return "✓ Ready · not started", p.text_muted
 
 

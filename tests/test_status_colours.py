@@ -50,3 +50,27 @@ def test_the_coverage_badges_keep_amber_for_decisions():
     from reelay.gui.board_page import CardDelegate
     source = inspect.getsource(CardDelegate._draw_platforms)
     assert "READY: p.text_secondary" in source and "p.warning" not in source
+
+
+def test_a_single_post_on_its_way_says_when(world):
+    """One platform scheduled (here Bluesky) used to fall through to "✓ Ready · not started"."""
+    from datetime import datetime, timedelta, timezone
+
+    from reelay.gui.board_page import CardDelegate
+    from reelay.models import Dispatch, Stage
+    from reelay.pipeline import utc_iso
+    row = world.rows[0]
+    when = utc_iso(datetime.now(timezone.utc) + timedelta(days=3))
+    post = world.pipeline.ensure_post(row)
+    world.store.schedule_post(post, [Dispatch(video_row=row, platform="bluesky", due_at=when, publish_at=when)],
+                              Stage.SCHEDULED)
+    text, color = CardDelegate._status(world.pipeline.card(row))
+    assert text.startswith("Goes live") and color == theme.P.info_text
+
+
+def test_scheduled_with_nothing_scheduled_says_so(world):
+    from reelay.gui.board_page import CardDelegate
+    from reelay.models import Stage
+    world.store.set_stage([world.rows[1]], Stage.SCHEDULED)          # dragged there, nothing scheduled
+    text, color = CardDelegate._status(world.pipeline.card(world.rows[1]))
+    assert text == "Nothing scheduled yet: schedule it, or move it back" and color == theme.P.warning_text
