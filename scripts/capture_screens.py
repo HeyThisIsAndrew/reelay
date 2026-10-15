@@ -484,19 +484,23 @@ def capture_help(app, theme: str, store, window, rows: list[int], out: Path) -> 
     card_rect = col.view.visualRect(idx)
     card = frac(QRect(col.view.viewport().mapTo(window, card_rect.topLeft()), card_rect.size()))
     save("ticket", window.grab(), {
-        "card": card, "ready": at(panel.readiness_header), "platforms": at(panel.platforms_section),
+        "card": card, "ready": at(panel.readiness_header), "platforms": at(panel.picker),
         "save": at(panel.save_btn), "post": at(panel.upload_btn), "close": at(board.inspector.close_btn)})
     scroll_to(panel.fill_btn)
-    section = panel.copy_sections["youtube"]
+    section = panel.sections["youtube"]
     copy = next((b for b in section.findChildren(QPushButton) if b.text() == "Copy"), section)
     save("ticket-copy", window.grab(), {"card": card, "fill": at(panel.fill_btn), "caption": at(section),
                                         "copy": at(copy)})
-    scroll_to(panel.platforms_section)
-    row = panel.platform_rows["tiktok"]
-    save("ticket-platforms", window.grab(), {
-        "platforms": at(panel.platforms_section), "youtube": at(panel.platform_rows["youtube"]),
-        "tiktok": at(row), "publish": at(row.handoff_btn) if row.handoff_btn.isVisible() else at(row),
-        "post": at(panel.upload_btn)})
+    youtube_open = panel.sections["youtube"].expanded
+    panel.sections["youtube"].set_expanded(False)        # folded, so TikTok's header and its menu fit below
+    settle(0.3)
+    scroll_to(panel.picker)
+    tiktok = panel.sections["tiktok"]                    # its ⋯ menu open, at Publish…
+    pix, pos = with_menu(tiktok.menu_btn.menu(), tiktok.menu_btn)
+    save("ticket-platforms", pix, {
+        "platforms": at(panel.picker), "youtube": at(panel.platform_boxes["youtube"]), "tiktok": at(tiktok.header),
+        **menu_marks(tiktok.menu_btn.menu(), pos, {"publish": "Publish…"}), "post": at(panel.upload_btn)})
+    panel.sections["youtube"].set_expanded(youtube_open)
     panel.details.toggle.setChecked(True)                 # open: the transcript, cover and topic fields show
     settle(0.5)
     scroll_to(panel.details, 16)

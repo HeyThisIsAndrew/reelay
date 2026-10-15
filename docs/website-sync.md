@@ -43,8 +43,8 @@ so the renderings can follow it.
 6. **Board cards**: each shows a "Short · 1080p" (or Long-form) badge on the cover, a date · views line, the
    platform marks with status dots, and a status line such as "Ready · pick a channel" or "Ready · not
    started". Replace "Needs copy for 3 platforms" / "Live on 4 platforms" style text with the app's wording.
-7. **Side panel**: the app also has a **Platforms** section (Not posting / Preparing / Scheduled / Posted per
-   platform) and **Save Changes** / **Publish Now** at the bottom; readiness is the compact rows described
+7. **Side panel**: the app also has a **Posting to** row of platform chips (ticked = going), one caption box per
+   ticked platform whose header shows its status and a ⋯ menu, and **Save Changes** / **Publish Now** at the bottom; readiness is the compact rows described
    above.
 8. **Sidebar profile**: name with the tagline under it on one line (the scene's "Travel, slowly" is right in
    shape; it comes from the profile's branding).

@@ -1366,10 +1366,15 @@ class BoardPage(QWidget):
             return
         self.panel.show_errors([])
 
-    def _mark_platform(self, row_id: int, platform: str, state: str, when) -> None:
+    def _mark_platform(self, row_id: int, platform: str, state: str, when, url: str = "", note: str = "") -> None:
+        from ..handoff import check_post_url
+        problem = check_post_url(platform, url)          # the same check as Prepare to Publish's pasted link
+        if problem:
+            QMessageBox.warning(self, "Mark as Posted", problem)
+            return
         before = self.store.get_video(row_id).stage
         try:
-            self.pipeline.set_platform_state(row_id, platform, state, when)
+            self.pipeline.set_platform_state(row_id, platform, state, when, url=(url or "").strip(), note=note)
         except PipelineError as exc:
             self.panel.show_errors(exc.problems)
             self.reload()

@@ -253,6 +253,30 @@ QLabel#ReadyMark { color: {text_muted}; font-size: {font_sm}pt; font-weight: 700
 QLabel#ReadyMark[state="ready"] { color: {text_primary}; }
 QLabel#ReadyMark[state="blocking"] { color: {danger}; }
 
+/* Ticket: "Posting to" chips, then one caption card per ticked platform */
+QToolButton#PlatformChip { background: transparent; color: {text_secondary}; border: 1px solid {divider};
+                           border-radius: {radius}px; padding: 5px 8px; font-size: {font_sm}pt; text-align: left; }
+QToolButton#PlatformChip:hover { background: {bg_hover}; color: {text_primary}; }
+QToolButton#PlatformChip:checked { background: {accent_soft}; color: {text_primary}; border-color: {accent_ring};
+                                   font-weight: 600; }
+QToolButton#PlatformChip:focus { border-color: {accent_color}; }
+QToolButton#PlatformChip:disabled { color: {text_muted}; background: transparent; }
+QToolButton#PlatformChip:checked:disabled { background: {bg_raised}; border-color: {divider}; }
+QFrame#PlatformCopy { background: {card_fill}; border: 1px solid {card_edge}; border-radius: {radius_card}px; }
+QFrame#PlatformCopyHeader { background: transparent; border: none; }
+QToolButton#PlatformCopyToggle { background: transparent; border: none; padding: 3px 0px; font-weight: 600;
+                                 font-size: {font_pt}pt; color: {text_primary}; }
+QToolButton#PlatformCopyToggle:focus { color: {accent_color}; }
+QLabel#PlatformStatus { color: {text_secondary}; font-size: {font_sm}pt; }
+QLabel#PlatformStatus[success="true"] { color: {success}; }
+QLabel#PlatformStatus[danger="true"] { color: {danger}; }
+QLabel#PlatformLink, QLabel#PlatformCount { color: {text_muted}; font-size: {font_sm}pt; }
+QLabel#PlatformCount[danger="true"] { color: {danger}; }
+QToolButton#PlatformMenu { background: transparent; border: 1px solid transparent; border-radius: {radius}px;
+                           padding: 0px 4px; font-size: {font_pt}pt; font-weight: 700; color: {text_secondary}; }
+QToolButton#PlatformMenu:hover, QToolButton#PlatformMenu:focus { background: {bg_hover}; border-color: {divider};
+                                                                  color: {text_primary}; }
+
 /* Side panel title row: the video's column as a quiet pill beside its title */
 QLabel#StagePill { background: {bg_raised}; color: {text_secondary}; border: 1px solid {divider}; border-radius: 9px;
                    padding: 2px 9px; font-size: {font_xs}pt; font-weight: 600; }

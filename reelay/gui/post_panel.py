@@ -1,12 +1,14 @@
 """Right-hand panel on the Board: the video's ticket.
 
-Copy blocks hold ready-to-paste text for every platform (YouTube title,
-description and tags; TikTok, Instagram, Bluesky, Threads and Facebook copy;
-shared hashtags), each with a Copy button and a live count using that
-platform's own rules. Over-limit text is reported, never cut.
+"Posting to" is one row of chips, one per platform: ticked means the video is
+going there. Each ticked platform gets one PlatformSection (the same widget
+for every platform, built from platform_specs) holding its ready-to-paste
+copy, a live count using that platform's own rules, and a ⋯ menu to mark it
+Scheduled or Posted or hand it off. Over-limit text is reported, never cut.
+Shared hashtags sit under the platforms.
 
-Below that, Auto-post offers only the platforms Reelay may post to on its own
-(YouTube, plus any turned on with REELAY_PUBLISH_<PLATFORM>).
+Below that, Post automatically offers only the platforms Reelay may post to on
+its own (YouTube, plus any turned on with REELAY_PUBLISH_<PLATFORM>).
 """
 
 from __future__ import annotations
@@ -17,36 +19,23 @@ from datetime import datetime, timedelta
 from PySide6.QtCore import QDateTime, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QGuiApplication
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDateTimeEdit, QFrame, QHBoxLayout, QLabel, QLineEdit,
-                               QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QSizePolicy,
+                               QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QSizePolicy,
                                QStackedWidget, QVBoxLayout, QWidget)
 
-from ..models import MANUAL_PLATFORMS, Account, Platform, Post, PostStatus, Privacy, Stage
+from ..models import Account, Platform, Post, PostStatus, Privacy, Stage
 from ..pipeline import Card
-from ..platform_text import (BLUESKY_MAX_BYTES, BLUESKY_MAX_GRAPHEMES, FACEBOOK_MAX_CHARS, INSTAGRAM_MAX_CHARS,
-                             INSTAGRAM_MAX_HASHTAGS, THREADS_MAX_CHARS, TIKTOK_MAX_CHARS, grapheme_count,
-                             hashtag_count, resolve_text, threads_length)
-from ..publishing import DESCRIPTION_MAX_BYTES, TAGS_MAX_CHARS, TITLE_MAX, default_post, parse_utc, to_utc_iso
+from ..platform_specs import COPY_FIELDS, FIELD_LIMITS, SHARED_FIELDS, SPECS, TICKET, WHEN_ON, count, platform_of_field
+from ..platform_text import BLUESKY_MAX_BYTES, INSTAGRAM_MAX_HASHTAGS, hashtag_count, resolve_text
+from ..publishing import default_post, parse_utc, to_utc_iso
 from ..text import clock, local_text, short_title  # noqa: F401 (re-exported)
 from .detail_panel import CoverView
 from .table_model import fmt_count, fmt_date, fmt_duration
 from .theme import set_prop
 from .tips import tip
 from .thumbnails import ThumbnailCache
-from .logos import platform_icon
-from .ticket_widgets import PlatformRow, PublishingHistory, ReadinessHeader, TicketDetails
+from .ticket_widgets import PlatformPicker, PlatformSection, PublishingHistory, ReadinessHeader, TicketDetails
 from .video_widgets import VideoTools
 from .widgets import Collapsible
-
-# Copy sections in the ticket: (platform for the logo, title, copy blocks).
-COPY_SECTIONS = [
-    ("youtube", "YOUTUBE", ("title", "description", "tags")),
-    ("tiktok", "TIKTOK", ("tiktok_text",)),
-    ("instagram", "INSTAGRAM", ("instagram_text",)),
-    ("bluesky", "BLUESKY", ("bluesky_text",)),
-    ("threads", "THREADS", ("threads_text",)),
-    ("facebook", "FACEBOOK", ("facebook_text",)),
-    (None, "HASHTAGS (ALL PLATFORMS)", ("hashtags",)),
-]
 
 PRIVACY_LABELS = {Privacy.PUBLIC: "Public", Privacy.UNLISTED: "Unlisted", Privacy.PRIVATE: "Private"}
 
@@ -58,16 +47,12 @@ def _section(text: str) -> QLabel:
     return lab
 
 
-def _count(used: int, limit: int, unit: str = "") -> tuple[str, bool]:
-    return f"{used:,}/{limit:,}{unit}", used > limit
-
-
-# Copy blocks: key → (label, multi-line, placeholder). Keys are Post fields,
-# except "tags" (a list, edited as comma-separated text).
+# Copy blocks: key → (label, multi-line, placeholder). Keys are Post fields (platform_specs.COPY_FIELDS),
+# except "tags" (a list, edited as comma-separated text). Which platform each belongs to is in platform_specs.
 BLOCKS: list[tuple[str, str, bool, str]] = [
-    ("title", "YOUTUBE TITLE", False, "The video's title on YouTube"),
-    ("description", "YOUTUBE DESCRIPTION", True, "What viewers read under the video"),
-    ("tags", "YOUTUBE TAGS", False, "Search words, separated by commas"),
+    ("title", "TITLE", False, "The video's title on YouTube"),           # inside the YouTube section, so no prefix
+    ("description", "DESCRIPTION", True, "What viewers read under the video"),
+    ("tags", "TAGS", False, "Search words, separated by commas"),
     ("tiktok_text", "TIKTOK CAPTION", True, "Leave empty to use the YouTube description"),
     ("instagram_text", "INSTAGRAM CAPTION", True, "Leave empty to use the YouTube description"),
     ("bluesky_text", "BLUESKY POST", True, "Leave empty to use the title (and the description, if it fits)"),
@@ -92,13 +77,16 @@ BLOCK_TIPS = {
 
 
 class CopyBlock(QWidget):
-    """Label + live count + Copy button over an editor."""
+    """Label + live count + Copy button over an editor. `compact`: the block is
+    its platform's only one, so the section's header already names it and shows
+    its count; the block keeps just its editor with Assist and Copy under it."""
 
-    def __init__(self, key: str, label: str, multiline: bool, placeholder: str, on_copy, on_change, on_assist=None):
+    def __init__(self, key: str, label: str, multiline: bool, placeholder: str, on_copy, on_change, on_assist=None,
+                 compact: bool = False):
         super().__init__()
         self.key = key
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(0, 4, 0, 0)
+        lay.setContentsMargins(0, 0 if compact else 4, 0, 0)
         lay.setSpacing(4)
         head = QHBoxLayout()
         title = tip(_section(label), BLOCK_TIPS.get(key, ""))
@@ -108,6 +96,8 @@ class CopyBlock(QWidget):
         self.counter = QLabel()
         self.counter.setProperty("faint", True)
         head.addWidget(self.counter)
+        title.setVisible(not compact)
+        self.counter.setVisible(not compact)
         self.copy_btn = QPushButton("Copy")
         set_prop(self.copy_btn, "flat")
         tip(self.copy_btn, "Copy this text so you can paste it into the app or website")
@@ -125,7 +115,8 @@ class CopyBlock(QWidget):
             self.assist_btn.setMenu(menu)
             head.addWidget(self.assist_btn)
         head.addWidget(self.copy_btn)
-        lay.addLayout(head)
+        if not compact:
+            lay.addLayout(head)
         if multiline:
             self.editor = QPlainTextEdit()
             self.editor.setFixedHeight(110 if key == "description" else 72)
@@ -138,6 +129,9 @@ class CopyBlock(QWidget):
         tip(self.counter, "How much of the platform's limit this text uses. Red means it's too long; "
                           "Reelay never cuts your text.")
         lay.addWidget(self.editor)
+        if compact:
+            head.insertStretch(0, 1)          # the (hidden) label held the stretch: keep the buttons on the right
+            lay.addLayout(head)
 
     def text(self) -> str:
         return self.editor.toPlainText() if isinstance(self.editor, QPlainTextEdit) else self.editor.text()
@@ -169,7 +163,7 @@ class PostPanel(QFrame):
     fillRequested = Signal(int)                       # video row id
     transcriptRequested = Signal(int)                 # video row id
     targetsChanged = Signal(int, list)                # video row id, target platforms
-    platformMarkRequested = Signal(int, str, str, object)   # row id, platform, state, when
+    platformMarkRequested = Signal(int, str, str, object, str, str)   # row id, platform, state, when, url, note
     handoffRequested = Signal(int, str)                     # row id, platform: Prepare to Publish
     recoverRequested = Signal(int)                          # row id: decide about interrupted sends
 
@@ -186,6 +180,8 @@ class PostPanel(QFrame):
         self.stage_name = None      # callable(stage) -> column name, set by the Board
         self.original_path_for = None   # callable(VideoRow) -> Path | None, set by the Board
         self._readiness_timer = QTimer(self, singleShot=True, interval=200, timeout=self._refresh_readiness)
+        self._states: dict = {}     # platform → pipeline.PlatformState, for the card on show
+        self._links: dict[str, str] = {}   # platform → its live post's link, when known
 
         self.stack = QStackedWidget()
         empty = QWidget()
@@ -281,27 +277,19 @@ class PostPanel(QFrame):
         lay.addSpacing(8)
         lay.addWidget(self.status_box)
 
-        # ---- where it's going: one row per platform (the ticket's tags)
-        lay.addSpacing(6)
-        self.platforms_section = Collapsible(
-            "PLATFORMS", key="platforms", expanded=True,
-            hint="Where this video is going, and how far it's got on each. When every platform it's going to is "
-                 "scheduled the card moves to Scheduled; when every one is live, to Published.")
-        self.platform_rows: dict[str, PlatformRow] = {}
-        for platform in MANUAL_PLATFORMS:
-            row = PlatformRow(platform)
-            row.goingToggled.connect(self._on_going)
-            row.markRequested.connect(
-                lambda p, state, when: self.card and self.platformMarkRequested.emit(self.card.id, p, state, when))
-            row.handoffRequested.connect(lambda p: self.card and self.handoffRequested.emit(self.card.id, p))
-            self.platform_rows[platform] = row
-            self.platforms_section.add(row)
-        self.platform_boxes: dict[str, QCheckBox] = {p: r.going for p, r in self.platform_rows.items()}
-        lay.addWidget(self.platforms_section)
+        # ---- where it's going: one chip per platform (the ticket's tags)
+        lay.addSpacing(10)
+        self.picker = PlatformPicker([spec.key for spec in TICKET])
+        self.picker.platformToggled.connect(self._on_chip)
+        self.platform_boxes = self.picker.chips             # platform → its chip (checked = going)
+        lay.addWidget(self.picker)
 
-        # ---- copy, one collapsible section per platform
-        lay.addSpacing(4)
+        # ---- the copy: one section per ticked platform, all the same widget
+        lay.addSpacing(6)
         fill_row = QHBoxLayout()
+        self.none_note = QLabel("Tick a platform above to write its caption.")
+        self.none_note.setProperty("faint", True)
+        fill_row.addWidget(self.none_note, 1)
         fill_row.addStretch()
         self.fill_btn = tip(QPushButton("Fill Empty from Original Post"),
                             "Fill this ticket's empty boxes from the original caption, within each platform's "
@@ -311,28 +299,39 @@ class PostPanel(QFrame):
         fill_row.addWidget(self.fill_btn)
         lay.addLayout(fill_row)
         self.blocks: dict[str, CopyBlock] = {}
-        self.copy_sections: dict[str, Collapsible] = {}
+        self.sections: dict[str, PlatformSection] = {}
         specs = {key: (label, multiline, placeholder) for key, label, multiline, placeholder in BLOCKS}
-        for platform, title, keys in COPY_SECTIONS:
-            section = Collapsible(title, key=f"copy.{platform or 'hashtags'}",
-                                  icon=platform_icon(platform, 16) if platform else None,
-                                  expanded=platform == Platform.YOUTUBE,
-                                  hint=f"Show or hide the {title.title()} copy. The right side shows its length "
-                                       "against the limit.")
-            for key in keys:
-                label, multiline, placeholder = specs[key]
-                block = CopyBlock(key, label, multiline, placeholder, self._copy, self._update_counts, self._assist)
-                self.blocks[key] = block
-                section.add(block)
-            if platform == Platform.YOUTUBE:
+
+        def block(key: str, compact: bool = False) -> CopyBlock:
+            label, multiline, placeholder = specs[key]
+            self.blocks[key] = CopyBlock(key, label, multiline, placeholder, self._copy, self._update_counts,
+                                         self._assist, compact=compact)
+            return self.blocks[key]
+
+        for spec in TICKET:
+            section = PlatformSection(spec.key)
+            section.markRequested.connect(
+                lambda p, state, when, url, note: self.card and self.platformMarkRequested.emit(
+                    self.card.id, p, state, when, url, note))
+            section.handoffRequested.connect(lambda p: self.card and self.handoffRequested.emit(self.card.id, p))
+            for key in spec.copy_fields:
+                section.add(block(key, compact=len(spec.copy_fields) == 1))
+            if spec.key == Platform.YOUTUBE:
                 seo = tip(QPushButton("Get SEO Suggestions"), "Keyword ideas from YouTube search, a score for the "
                                                               "title and tags, and one-click tags. Free.")
                 set_prop(seo, "flat")
                 seo.clicked.connect(self._seo)
                 section.add(seo)
                 self.seo_btn = seo
-            self.copy_sections[platform or "hashtags"] = section
+            section.hide()                                  # shown while its chip is ticked
+            self.sections[spec.key] = section
             lay.addWidget(section)
+        self.hashtags_section = Collapsible(
+            "HASHTAGS (ALL PLATFORMS)", key="copy.hashtags", expanded=False,
+            hint="One set of hashtags you can add to any platform's text. The right side counts them.")
+        for key in SHARED_FIELDS:
+            self.hashtags_section.add(block(key))
+        lay.addWidget(self.hashtags_section)
         self.copied = QLabel()
         self.copied.setProperty("faint", True)
         lay.addWidget(self.copied)
@@ -403,8 +402,8 @@ class PostPanel(QFrame):
         fl.addWidget(self.kids)
         self.auto_section = Collapsible(
             "POST AUTOMATICALLY", key="auto", expanded=True,
-            hint="Reelay posts to the platforms marked Going that it can post to itself (YouTube, and others "
-                 "you've turned on in Settings). Everything else, you post by hand and tick Scheduled or Posted.")
+            hint="Reelay posts to the ticked platforms it can post to itself (YouTube, and others you've turned "
+                 "on in Settings). Everything else, you post by hand and mark Scheduled or Posted from its ⋯ menu.")
         self.auto_section.add(self.form)
         lay.addWidget(self.auto_section)
 
@@ -472,12 +471,12 @@ class PostPanel(QFrame):
     def set_enabled_platforms(self, enabled: frozenset[str]) -> None:
         """Platforms Reelay may post to automatically; the others are copy-paste only."""
         self.enabled = frozenset(enabled) | {Platform.YOUTUBE}
-        off = [Platform.LABELS[p] for p in Platform.ALL if p not in self.enabled]
+        off = [s.label for s in SPECS.values() if s.posting == WHEN_ON and s.key not in self.enabled]
         off_text = f"{', '.join(off)}: automatic posting is off (turn it on in Settings). " if off else ""
-        self.manual_note.setText("Reelay posts automatically to the Going platforms it can post to. " + off_text +
+        self.manual_note.setText("Reelay posts automatically to the ticked platforms it can post to. " + off_text +
                                  "TikTok and Instagram are always posted by hand: copy the caption, post in their "
-                                 "app, then tick Scheduled or Posted above. (TikTok only allows automatic posting "
-                                 "for apps it has approved.)")
+                                 "app, then mark it Scheduled or Posted from its ⋯ menu above. (TikTok only allows "
+                                 "automatic posting for apps it has approved.)")
         self.manual_note.setVisible(True)
 
     def show_empty(self) -> None:
@@ -520,10 +519,9 @@ class PostPanel(QFrame):
         post = card.post or default_post(card.id, item, accounts[0].id if accounts else None)
         locked = self._locked()
         if not same or locked:
-            for platform, box in self.platform_boxes.items():
-                box.blockSignals(True)
-                box.setChecked(platform in post.target_platforms)
-                box.blockSignals(False)
+            for platform, chip in self.platform_boxes.items():
+                self.picker.set_chip(platform, platform in post.target_platforms, chip.isEnabled())
+            self._sync_sections(fresh=not same)
             for key, block in self.blocks.items():
                 value = getattr(post, key)
                 block.set_text(", ".join(value) if key == "tags" else (value or ""))
@@ -559,6 +557,9 @@ class PostPanel(QFrame):
         from ..products import video_products
         self.details.set_ticket(self.card.row.ticket, self.card.id, others, video_products(self.card.row.item))
         self.history.set_history(history)
+        # the newest live link per platform, for its section's header
+        self._links = {p: e.url for p, entries in history.items() for e in entries
+                       if e.url and e.status in ("published", "posted")}
 
     def _refresh_readiness(self) -> None:
         """Live checklist while editing (debounced; nothing is saved)."""
@@ -571,26 +572,63 @@ class PostPanel(QFrame):
 
     def _targets(self) -> list[str]:
         """Going platforms Reelay can post to itself."""
-        return [p for p, box in self.platform_boxes.items() if box.isChecked() and p in self.enabled]
+        return [p for p in self._going() if p in self.enabled]
 
     def _going(self) -> list[str]:
-        return [p for p in MANUAL_PLATFORMS if self.platform_boxes[p].isChecked()]
+        return [spec.key for spec in TICKET if self.platform_boxes[spec.key].isChecked()]
 
-    def _on_going(self, _platform: str, _on: bool) -> None:
+    def _on_chip(self, platform: str, on: bool) -> None:
+        """A chip was ticked or unticked. Unticking a platform that's marked Scheduled or Posted asks first, then
+        clears the mark exactly as Back to Preparing does (the same pipeline call), so nothing is lost silently."""
+        if self.card is None:
+            return
+        state = self._states.get(platform)
+        marked = bool(state and state.manual_kind and state.state in ("scheduled", "published"))
+        if not on and marked:
+            name = SPECS[platform].label
+            word = "Posted" if state.state == "published" else "Scheduled"
+            answer = QMessageBox.question(
+                self, f"Stop Posting to {name}?",
+                f"{name} is marked {word}. Untick it to stop posting there and clear that mark? The post on "
+                f"{name} itself isn't touched.")
+            if answer != QMessageBox.Yes:
+                self.picker.set_chip(platform, True)
+                return
+            self.platformMarkRequested.emit(self.card.id, platform, "none", None, "", "")
+        self._sync_sections(opened=platform if on else None)
         self._sync_platforms()
-        if self.card is not None and self._going():
+        if self._going():
             self.targetsChanged.emit(self.card.id, self._going())
 
+    def _sync_sections(self, fresh: bool = False, opened: str | None = None) -> None:
+        """Show a caption section for each ticked platform. A new ticket opens them all when there are two or
+        fewer, otherwise only the first; a platform just ticked opens its own."""
+        going = self._going()
+        for n, (platform, section) in enumerate((p, self.sections[p]) for p in going):
+            if fresh:
+                section.set_expanded(len(going) <= 2 or n == 0)
+        for platform, section in self.sections.items():
+            section.setVisible(platform in going)
+        if opened in self.sections:
+            self.sections[opened].set_expanded(True)
+        self.none_note.setVisible(not going)
+
     def set_platform_states(self, states: dict, default_when: str | None) -> None:
-        """Refresh the Platforms rows (pipeline.platform_states) and their summary."""
-        for platform, row in self.platform_rows.items():
-            row.set_state(states[platform], platform in self.enabled, default_when)
+        """Refresh each platform's chip and section header (pipeline.platform_states), and the summary."""
+        self._states = dict(states)
+        for platform, section in self.sections.items():
+            state = states[platform]
+            section.set_state(state, platform in self.enabled, default_when, self._links.get(platform, ""))
+            by_reelay = state.automatic or (state.state in ("scheduled", "sending", "failed")
+                                            and not state.manual_kind)
+            self.picker.set_chip(platform, state.target, not by_reelay,
+                                 f"Reelay is handling {section.label}; this updates on its own." if by_reelay else "")
+        self._sync_sections()
         going = [s for s in states.values() if s.target]
         live = sum(1 for s in going if s.state == "published")
         sched = sum(1 for s in going if s.state in ("scheduled", "sending"))
         prep = len(going) - sched - live
-        self.platforms_section.set_summary(
-            f"{prep} preparing · {sched} scheduled · {live} posted" if going else "Choose where it's going")
+        self.picker.summary.setText(f"{prep} preparing · {sched} scheduled · {live} posted" if going else "")
 
     def _sync_platforms(self) -> None:
         youtube = Platform.YOUTUBE in self._targets()
@@ -601,52 +639,42 @@ class PostPanel(QFrame):
 
     def _update_counts(self) -> None:
         b = self.blocks
-        title, desc = b["title"].text(), b["description"].text()
-        tags = [t.strip().lstrip("#") for t in b["tags"].text().split(",") if t.strip()]
-        counts = {
-            "title": _count(len(title.strip()), TITLE_MAX),
-            "description": _count(len(desc.encode("utf-8")), DESCRIPTION_MAX_BYTES, " bytes"),
-            "tags": _count(sum(len(t) + 1 for t in tags), TAGS_MAX_CHARS),
-            "tiktok_text": _count(len(b["tiktok_text"].text()), TIKTOK_MAX_CHARS),
-            "threads_text": _count(threads_length(b["threads_text"].text()), THREADS_MAX_CHARS),
-            "facebook_text": _count(len(b["facebook_text"].text()), FACEBOOK_MAX_CHARS),
-        }
+        counts = {key: count(key, b[key].text()) for key in COPY_FIELDS}      # platform_specs: the limits
         ig = b["instagram_text"].text()
-        ig_text, ig_over = _count(len(ig), INSTAGRAM_MAX_CHARS)
         tags_in_ig = hashtag_count(ig)
+        ig_text, ig_over = counts["instagram_text"]
         counts["instagram_text"] = (f"{ig_text} · #{tags_in_ig}/{INSTAGRAM_MAX_HASHTAGS}",
                                     ig_over or tags_in_ig > INSTAGRAM_MAX_HASHTAGS)
         bs = b["bluesky_text"].text()
-        bs_text, bs_over = _count(grapheme_count(bs), BLUESKY_MAX_GRAPHEMES)
         bs_bytes = len(bs.encode("utf-8"))
+        bs_text, bs_over = counts["bluesky_text"]
         counts["bluesky_text"] = (bs_text + (f" · {bs_bytes:,}/{BLUESKY_MAX_BYTES:,} bytes"
                                              if bs_bytes > BLUESKY_MAX_BYTES * 0.8 else ""),
                                   bs_over or bs_bytes > BLUESKY_MAX_BYTES)
         n = hashtag_count(b["hashtags"].text())
         counts["hashtags"] = (f"{n} hashtag{'s' if n != 1 else ''}", False)
         for key, (text, over) in counts.items():
-            if key in ("bluesky_text", "threads_text", "tiktok_text", "instagram_text", "facebook_text") \
-                    and not b[key].text():
-                text, over = "empty", False
+            if platform_of_field(key) not in (None, Platform.YOUTUBE) and not b[key].text():
+                text, over = "empty", False         # an empty platform box uses YouTube's text instead
             b[key].set_count(text, over)
-        for name, section in self.copy_sections.items():
-            keys = next(k for p, _t, k in COPY_SECTIONS if (p or "hashtags") == name)
-            overs = [k for k in keys if b[k].counter.property("danger")]
-            filled = [k for k in keys if b[k].text().strip()]
-            if overs:
-                section.set_summary("⚠ too long", danger=True)
-            elif not filled:
-                section.set_summary("empty")
-            else:
-                section.set_summary(" · ".join(b[k].counter.text() for k in keys if b[k].text().strip()))
+        for platform, section in self.sections.items():
+            # the header counts the caption itself (YouTube: the description; its title and tags count inside)
+            any_over = self._summary(SPECS[platform].copy_fields)[1]
+            text, _over = self._summary((SPECS[platform].caption_field,))
+            section.set_count("⚠ too long" if any_over else text, any_over)
+        self.hashtags_section.set_summary(*self._summary(SHARED_FIELDS))
         self._readiness_timer.start()
 
+    def _summary(self, keys) -> tuple[str, bool]:
+        """One line for a section header: its counts, "empty", or "⚠ too long"."""
+        b = self.blocks
+        if any(b[k].counter.property("danger") for k in keys):
+            return "⚠ too long", True
+        filled = [k for k in keys if b[k].text().strip()]
+        return (" · ".join(b[k].counter.text() for k in filled) if filled else "empty"), False
+
     # ---------------------------------------------------------------- writing help & SEO
-    LIMITS = {"title": (TITLE_MAX, len), "description": (DESCRIPTION_MAX_BYTES, lambda t: len(t.encode("utf-8"))),
-              "tiktok_text": (TIKTOK_MAX_CHARS, len), "instagram_text": (INSTAGRAM_MAX_CHARS, len),
-              "bluesky_text": (BLUESKY_MAX_GRAPHEMES, grapheme_count),
-              "threads_text": (THREADS_MAX_CHARS, threads_length), "facebook_text": (FACEBOOK_MAX_CHARS, len),
-              "hashtags": (None, len)}
+    LIMITS = {key: (lim.limit, lim.measure) for key, lim in FIELD_LIMITS.items()}   # for the rewrite helper
 
     def _assist(self, block: CopyBlock, action: str) -> None:
         from .assist_dialogs import GrammarDialog, RewriteDialog
@@ -687,12 +715,13 @@ class PostPanel(QFrame):
         text = block.text().strip()
         if not text and self.card is not None:
             post = self.collect()
-            if block.key in (Platform.BLUESKY + "_text", Platform.THREADS + "_text"):
+            platform = platform_of_field(block.key)
+            if platform in (Platform.BLUESKY, Platform.THREADS):     # built from the title, as Reelay posts them
                 try:
-                    text = resolve_text(post, block.key.removesuffix("_text"))
+                    text = resolve_text(post, platform)
                 except ValueError:
                     text = post.title
-            elif block.key in ("tiktok_text", "instagram_text", "facebook_text"):
+            elif platform not in (None, Platform.YOUTUBE):          # TikTok, Instagram, Facebook: the description
                 text = post.description
         if not text:
             self.copied.setText("Nothing to copy.")
@@ -722,9 +751,9 @@ class PostPanel(QFrame):
         """One line above Schedule saying exactly what will happen."""
         targets = self._targets()
         if not targets:
-            self.dock_summary.setText("Nothing posts automatically yet: mark a platform Going above.")
+            self.dock_summary.setText("Nothing posts automatically yet: tick a platform above.")
             return
-        names = ", ".join(Platform.LABELS[p] for p in targets)
+        names = ", ".join(SPECS[p].label for p in targets)
         if self.when.currentData() == "schedule":
             dt = self.publish_at.dateTime().toPython()
             when = f"{dt:%a %b} {dt.day}, {dt.hour % 12 or 12}:{dt:%M}{'am' if dt.hour < 12 else 'pm'}"
@@ -808,8 +837,8 @@ class PostPanel(QFrame):
             when = to_utc_iso(self.publish_at.dateTime().toPython())
         b = self.blocks
         tags = [t.strip().lstrip("#") for t in b["tags"].text().split(",") if t.strip()]
-        copy = {key: (b[key].text().strip() or None) for key in
-                ("tiktok_text", "instagram_text", "bluesky_text", "threads_text", "facebook_text", "hashtags")}
+        copy = {key: (b[key].text().strip() or None) for key in COPY_FIELDS     # the optional boxes
+                if key not in SPECS[Platform.YOUTUBE].copy_fields}
         targets = self._going() or [Platform.YOUTUBE]
         return replace(base, account_id=self.account.currentData(), title=b["title"].text().strip(),
                        description=b["description"].text().strip(), tags=tags,
