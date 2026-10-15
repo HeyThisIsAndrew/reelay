@@ -24,6 +24,11 @@ QFrame#DetailFrame { background: {bg_surface}; border: 1px solid {divider}; bord
 QFrame#BoardColumn { background: {bg_well}; border: 1px solid {divider}; border-radius: {radius_card}px; }
 QLabel#ColumnCount { background: {card_fill}; color: {text_secondary}; border: 1px solid {card_edge};
                      border-radius: 9px; padding: 1px 8px; font-size: {font_xs}pt; font-weight: 600; }
+/* A column narrowed by a filter or search says so: "3 of 7", outlined in the text colour */
+QLabel#ColumnCount[filtered="true"] { color: {text_primary}; border-color: {text_secondary}; background: {bg_hover}; }
+/* The column's name leads; what it holds sits under it, quietly */
+QLabel#ColumnTitle { color: {text_primary}; font-size: {font_lg}pt; font-weight: 700; padding-top: 4px; }
+QLabel#ColumnPurpose { color: {text_muted}; font-size: {font_xs}pt; padding-bottom: 2px; }
 
 /* The contextual inspector (right-hand panel) and its header */
 QFrame#Inspector { background: {bg_surface}; border: 1px solid {divider}; border-radius: {radius_card}px; }

@@ -23,6 +23,7 @@ from ..store import Change
 from ..text import clock, local_text
 from ..uploads import UploadManager
 from . import theme
+from .theme import set_prop
 from ..columns import ColumnError, column_for, default_columns, is_custom
 from ..columns import add as add_column
 from ..columns import load as load_columns
@@ -444,6 +445,20 @@ STEP_TIPS = {
     Stage.SCHEDULED: "videos waiting to go live (cards move here once every platform is scheduled)",
     Stage.PUBLISHED: "videos that are live (cards move here once every platform is posted)",
 }
+# One line under each column's title saying what it holds (the full sentence is the title's tooltip)
+COLUMN_PURPOSE = {
+    Stage.BACKLOG: "Downloaded, not started",
+    Stage.STAGING: "Writing the posts",
+    Stage.SCHEDULED: "Waiting to go live",
+    Stage.PUBLISHED: "Live",
+}
+
+
+def column_purpose(column) -> str:
+    """The purpose line for a column: its built-in steps' purposes, or a column you added."""
+    return " · ".join(COLUMN_PURPOSE[s] for s in column.builtin) or "Your own step"
+
+
 EMPTY_TEXT = {
     Stage.BACKLOG: "Downloaded videos land here.",
     Stage.STAGING: "Drag videos here to write their post.",
@@ -467,8 +482,7 @@ class BoardColumn(QFrame):
         lay.setContentsMargins(10, 12, 10, 6)
         lay.setSpacing(6)
         head = QHBoxLayout()
-        title = QLabel(column.name)
-        title.setProperty("section", True)
+        title = QLabel(column.name, objectName="ColumnTitle")
         holds = [STEP_TIPS[s] for s in column.builtin]
         title.setToolTip((f"{column.name}: " + "; ".join(holds) if holds else
                           f"{column.name}: your own column. Drag cards in and out.") +
@@ -481,6 +495,8 @@ class BoardColumn(QFrame):
         head.addStretch()
         head.addWidget(self.count)
         lay.addLayout(head)
+        self.purpose = QLabel(column_purpose(column), objectName="ColumnPurpose")
+        lay.addWidget(self.purpose)
         self.model = BoardModel(stage, self)
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(lambda pos: self._menu(self.mapToGlobal(pos)))
@@ -519,7 +535,9 @@ class BoardColumn(QFrame):
         self.model.set_cards(cards)
         filtered = total is not None and total != len(cards)
         self.count.setText(f"{len(cards)} of {total}" if filtered else str(len(cards)))
-        self.count.setToolTip(f"{len(cards)} shown by the filter, {total} in this column" if filtered else "")
+        self.count.setToolTip(f"{len(cards)} shown by the filter or search, {total} in this column" if filtered
+                              else f"{len(cards)} in this column")
+        set_prop(self.count, "filtered", filtered)          # outlined, so a narrowed column can't pass as whole
         self.empty.setVisible(not cards)
 
     def selected_cards(self) -> list[Card]:
@@ -574,6 +592,11 @@ class BoardPage(QWidget):
         self.subtitle = QLabel(objectName="PageCount")
         head.addWidget(title, 0, Qt.AlignBottom)
         head.addWidget(self.subtitle, 0, Qt.AlignBottom)
+        self.clear_filters_btn = tip(QPushButton("Show All"), "Clear the search and every filter")
+        set_prop(self.clear_filters_btn, "flat")
+        self.clear_filters_btn.clicked.connect(self.clear_filters)
+        self.clear_filters_btn.hide()
+        head.addWidget(self.clear_filters_btn, 0, Qt.AlignBottom)
         head.addStretch()
         self.sync_label = QLabel()
         self.sync_label.setProperty("faint", True)
@@ -896,6 +919,7 @@ class BoardPage(QWidget):
         for column_id, col in self.columns.items():
             cards = by_column.get(column_id, [])
             col.set_cards([c for c in cards if self._matches(c)], total=len(cards))
+        self._show_filter_state()
         if self.bulk_ids:
             self._reselect_bulk()
         else:
@@ -986,6 +1010,24 @@ class BoardPage(QWidget):
                       *(getattr(post, f) or "" for f in ("tiktok_text", "instagram_text", "bluesky_text",
                                                          "threads_text", "facebook_text"))]
         return " ".join(parts).lower()
+
+    def _filtering(self) -> bool:
+        return bool(self.query or self.filter != "all" or self.tag or self.product_ids)
+
+    def _show_filter_state(self) -> None:
+        """Say plainly when the Board shows only some tickets, with a way back to all of them."""
+        total = sum(c.model.rowCount() for c in self.columns.values())
+        if self._filtering():
+            self.subtitle.setText(f"Showing {total} of {len(self.cards)} tickets")
+        else:
+            self.subtitle.setText("Drag cards to move them along")
+        self.clear_filters_btn.setVisible(self._filtering())
+
+    def clear_filters(self) -> None:
+        for box in (self.filter_box, self.tag_box, self.products_filter.brand, self.products_filter.product):
+            box.setCurrentIndex(0)
+        self.search.clear()
+        self._on_filter()
 
     def _on_search(self, text: str) -> None:
         self.query = text.strip().lower()
