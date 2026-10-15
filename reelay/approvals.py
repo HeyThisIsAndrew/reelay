@@ -118,6 +118,7 @@ def skips_ready_check(req: ApprovalRequest) -> bool:
 def explain(store, req: ApprovalRequest) -> list[str]:
     """What approving ``req`` would do, in plain sentences (the app's Approvals window shows these)."""
     from .models import Platform
+    from .text import local_text
     a = req.payload
     names = lambda keys: ", ".join(Platform.LABELS.get(k, k) for k in keys)   # noqa: E731
     n = len(req.target_ids)
@@ -125,7 +126,7 @@ def explain(store, req: ApprovalRequest) -> list[str]:
     op = req.operation
     if op == "schedule":
         where = names(a["platforms"]) if a.get("platforms") else "every platform this ticket is going to"
-        when = f"for {a['scheduled_at']}" if a.get("scheduled_at") else "now"
+        when = f"for {local_text(a['scheduled_at']) or a['scheduled_at']}" if a.get("scheduled_at") else "now"
         lines = [f"Schedule it on {where}, {when}."]
         if a.get("add_shorts"):
             lines.append("Add #Shorts to the YouTube title.")

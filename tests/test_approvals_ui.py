@@ -14,6 +14,7 @@ from PySide6.QtWidgets import QMessageBox
 from reelay import approvals
 from reelay.gui import theme
 from reelay.models import ApprovalStatus
+from reelay.pipeline import utc_iso
 from reelay.scoped_pipeline import ScopedPipeline, request_approval
 from tests.fakes import disable_publishing, make_world
 
@@ -33,7 +34,7 @@ def future(days=2):
 def forced_schedule(store, profile_id, row):
     """A request to schedule even where the Ready check isn't passing (an agent sent force=true)."""
     return request_approval(store, profile_id, "schedule",
-                            {"video_id": row, "scheduled_at": future().isoformat(), "platforms": ["youtube"],
+                            {"video_id": row, "scheduled_at": utc_iso(future()), "platforms": ["youtube"],
                              "add_shorts": None, "force": True}, [row])
 
 

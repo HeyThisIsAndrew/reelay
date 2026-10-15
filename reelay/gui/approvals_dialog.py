@@ -23,7 +23,7 @@ from datetime import datetime, timezone
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-                               QMessageBox, QPushButton, QVBoxLayout, QWidget)
+                               QMessageBox, QPushButton, QSizePolicy, QVBoxLayout, QWidget)
 
 from .. import approvals
 from ..models import ApprovalRequest, ApprovalStatus, Platform
@@ -93,6 +93,8 @@ class ApprovalsDialog(QDialog):
         body.setSpacing(14)
         self.list = QListWidget(objectName="ApprovalList")
         self.list.setFixedWidth(250)
+        self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.list.setTextElideMode(Qt.ElideRight)
         self.list.currentRowChanged.connect(self._show)
         body.addWidget(self.list)
 
@@ -110,6 +112,7 @@ class ApprovalsDialog(QDialog):
         fl.setSpacing(3)
         self.force_title = _label("Skips the Ready check", name="ForceNoticeTitle")
         self.force_text = _label(name="ForceNoticeText")
+        self.force_text.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.MinimumExpanding)   # never clip a line
         fl.addWidget(self.force_title)
         fl.addWidget(self.force_text)
         self.reason = QLineEdit()
@@ -155,7 +158,7 @@ class ApprovalsDialog(QDialog):
         self.list.clear()
         for req in self.requests:
             label = OPERATION_LABELS.get(req.operation, req.operation)
-            first = (video_titles(self.store, req, 1) or [""])[0]
+            first = short_title((video_titles(self.store, req, 1) or [""])[0], 30)
             item = QListWidgetItem(f"{'⚠ ' if approvals.skips_ready_check(req) else ''}{label}\n{first}")
             item.setData(Qt.UserRole, req.id)
             self.list.addItem(item)
