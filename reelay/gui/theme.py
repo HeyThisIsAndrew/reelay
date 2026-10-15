@@ -51,10 +51,11 @@ class Palette:
     accent_hover: str
     accent_pressed: str
     focus: str             # focused input border
-    danger: str
-    success: str
+    # Status colours, one meaning each. "Ready" has none: it's the normal state, drawn neutral.
+    danger: str            # blocked or failed
+    success: str           # published, live
     info: str              # scheduled
-    warning: str           # ready to publish
+    warning: str           # waiting for your decision (an approval, an interrupted send)
     on_badge: str          # text on coloured badges
 
     # Derived tints of the accent (so a profile's brand colour can glow without shouting)
@@ -113,6 +114,31 @@ class Palette:
     @property
     def warning_ink(self) -> str:
         return _readable(self.warning, (self.warning_soft,), 4.5, self.text_primary)
+
+    @property
+    def danger_soft(self) -> str:
+        return mix(self.bg_surface, self.danger, 0.18)
+
+    @property
+    def danger_ink(self) -> str:
+        return _readable(self.danger, (self.danger_soft,), 4.5, self.text_primary)
+
+    # Status colours as text on a card (small type: 4.5:1 against the card and the column behind it)
+    @property
+    def info_text(self) -> str:             # scheduled
+        return _readable(self.info, (self.card_fill, self.bg_surface), 4.5, self.text_primary)
+
+    @property
+    def warning_text(self) -> str:          # waiting for your decision
+        return _readable(self.warning, (self.card_fill, self.bg_surface), 4.5, self.text_primary)
+
+    def ink_on(self, color: str) -> str:
+        """The glyph colour for a small badge filled with ``color`` (a ✓, a clock): the theme's
+        badge ink when it reads at 3:1 on it, else whichever of near-white and near-black reads best.
+        White on amber was 2.0:1."""
+        if contrast(self.on_badge, color) >= 3.0:
+            return self.on_badge
+        return max(("#ffffff", "#141414"), key=lambda ink: contrast(ink, color))
 
     @property
     def scrim(self) -> str:            # badges laid over thumbnails (painted with alpha)
@@ -291,7 +317,9 @@ def tokens_for(p: Palette, icons: bool = True) -> dict[str, object]:
     tokens.update(bg_well=p.bg_well, card_fill=p.card_fill, card_edge=p.card_edge, marker=p.marker,
                   marker_ink=p.marker_ink)
     tokens.update(accent_soft=p.accent_soft, accent_ring=p.accent_ring, success_soft=p.success_soft,
-                  success_ink=p.success_ink, warning_soft=p.warning_soft, warning_ink=p.warning_ink)
+                  success_ink=p.success_ink, warning_soft=p.warning_soft, warning_ink=p.warning_ink,
+                  danger_soft=p.danger_soft, danger_ink=p.danger_ink, warning_text=p.warning_text,
+                  info_text=p.info_text)
     tokens.update(font_xs=BASE_PT - 2, font_sm=BASE_PT - 1, font_pt=BASE_PT, font_lg=BASE_PT + 1,
                   font_h2=BASE_PT + 2, font_h1=BASE_PT + 4, font_title=BASE_PT + 8, font_display=BASE_PT + 22,
                   radius_sm=RADIUS_SM, radius=RADIUS, radius_lg=RADIUS_LG, radius_card=RADIUS_CARD)

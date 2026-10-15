@@ -12,9 +12,9 @@ from datetime import datetime, timezone
 from PySide6.QtCore import (QAbstractListModel, QItemSelectionModel, QMimeData, QModelIndex, QPointF, QRect, QRectF,
                             QEvent, QSettings, QSize, Qt, QTimer, Signal)
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QKeySequence, QPainter, QPainterPath, QPen, QShortcut
-from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QListView, QMenu,
-                               QMessageBox, QScrollArea, QSplitter, QStackedWidget, QStyle, QStyledItemDelegate, QToolButton,
-                               QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFrame, QHBoxLayout, QLabel, QListView, QMenu,
+                               QMessageBox, QPushButton, QScrollArea, QSplitter, QStackedWidget, QStyle,
+                               QStyledItemDelegate, QToolButton, QVBoxLayout, QWidget)
 
 from ..models import Platform, Post, PostStatus, Profile, Stage
 from ..coverage import needs_work as coverage_needs_work, short_summary
@@ -23,6 +23,7 @@ from ..store import Change
 from ..text import clock, local_text
 from ..uploads import UploadManager
 from . import theme
+from .theme import set_prop
 from ..columns import ColumnError, column_for, default_columns, is_custom
 from ..columns import add as add_column
 from ..columns import load as load_columns
@@ -40,6 +41,7 @@ from .table_model import fmt_count, fmt_duration, short_date
 from .thumbnails import ThumbnailCache
 from .tips import tip
 from .workers import CallWorker
+from .widgets import search_field
 
 log = logging.getLogger("reelay")
 
@@ -341,8 +343,9 @@ class CardDelegate(QStyledItemDelegate):
     def _draw_platforms(painter: QPainter, card: Card, x: int, y: int, size: int = CARD_LOGO_SIZE,
                         width: int | None = None) -> None:
         """The coverage map: every platform in a fixed order, so the eye learns the
-        positions. Published = green ✓, scheduled = blue clock, ready = amber dot,
-        needs work = red !, not going there = a faint logo with no badge."""
+        positions. Published = green ✓, scheduled = blue clock, ready = a plain neutral dot (the normal
+        state), needs work = red !, not going there = a faint logo with no badge. Glyphs use an ink that
+        reads at 3:1 or more on their badge."""
         from ..coverage import NEEDS_WORK, NOT_APPLICABLE, PUBLISHED, READY, SCHEDULED
         from .logos import platform_pixmap
         p = theme.P
@@ -356,7 +359,7 @@ class CardDelegate(QStyledItemDelegate):
                 painter.setOpacity(0.22)
             painter.drawPixmap(x, y, platform_pixmap(name, size))
             painter.restore()
-            color = {PUBLISHED: p.success, SCHEDULED: p.info, READY: p.warning,
+            color = {PUBLISHED: p.success, SCHEDULED: p.info, READY: p.text_secondary,
                      NEEDS_WORK: p.danger}.get(c.state)
             if color:
                 d = 11.0
@@ -364,9 +367,9 @@ class CardDelegate(QStyledItemDelegate):
                 painter.setPen(QPen(QColor(p.bg_raised), 1.5))
                 painter.setBrush(QColor(color))
                 painter.drawEllipse(badge)
-                white = QPen(QColor(Qt.white), 1.4)   # glyphs on the coloured badges
-                white.setCapStyle(Qt.RoundCap)
-                painter.setPen(white)
+                ink = QPen(QColor(p.ink_on(color)), 1.4)   # glyphs on the coloured badges
+                ink.setCapStyle(Qt.RoundCap)
+                painter.setPen(ink)
                 cx, cy = badge.center().x(), badge.center().y()
                 if c.state == PUBLISHED:
                     painter.drawPolyline([QPointF(cx - 2.6, cy + 0.1), QPointF(cx - 0.7, cy + 2.0),
@@ -383,9 +386,12 @@ class CardDelegate(QStyledItemDelegate):
     def _status(card: Card) -> tuple[str, str]:
         p, post, item = theme.P, card.post, card.row.item
         held = [d for d in card.dispatches if d.status == "interrupted"]
-        if held:
+        if held:                                    # waiting for your decision: amber
             names = ", ".join(Platform.LABELS.get(d.platform, d.platform) for d in held)
-            return f"⚠ Interrupted on {names}: open to decide", p.danger
+            return f"⚠ Interrupted on {names}: open to decide", p.warning_text
+        asked = getattr(card, "pending_approvals", [])
+        if asked:                                   # an agent's request: also waiting for you
+            return f"⏳ Waiting for your approval: {', '.join(asked)}", p.warning_text
         if card.search_hit is not None and card.search_hit.spoken:   # found by what was said in the video
             said = card.search_hit.snippet.replace("«", "").replace("»", "")
             return f"🗣 “{said}”", p.text_primary
@@ -394,13 +400,15 @@ class CardDelegate(QStyledItemDelegate):
             short = {"youtube": "YT", "bluesky": "Bsky", "threads": "Thr", "facebook": "FB"}
             text = "  ".join(f"{short.get(d.platform, d.platform)} {marks.get(d.status, '?')}" for d in card.dispatches)
             failed = any(d.status == "failed" for d in card.dispatches)
-            return text, p.danger if failed else (p.success if post and post.status == PostStatus.PUBLISHED else p.text_primary)
+            live = post and post.status == PostStatus.PUBLISHED
+            waiting = any(d.status in ("pending", "scheduled") for d in card.dispatches)
+            return text, p.danger if failed else (p.success if live else (p.info_text if waiting else p.text_primary))
         if post and post.status == PostStatus.UPLOADING:
             return ("Waiting to upload…" if card.queued else f"Uploading {(card.progress or 0):.0f}%"), p.text_primary
         if post and post.status == PostStatus.SCHEDULED:
             if post.error:
                 return "⚠ Still private on YouTube", p.danger
-            return f"Goes live {local_text(post.publish_at)}", p.text_primary
+            return f"Goes live {local_text(post.publish_at)}", p.info_text
         if post and post.status == PostStatus.PUBLISHED:
             return f"Live on {card.account.display_name}" if card.account else "Live on YouTube", p.success
         going = [s for s in card.platform_states.values() if s.target]
@@ -409,7 +417,14 @@ class CardDelegate(QStyledItemDelegate):
             live = sum(1 for s in going if s.state == "published")
             if live == len(going):
                 return f"✓ Live on {'all ' + str(live) if live > 1 else Platform.LABELS[going[0].platform]}", p.success
-            return short_summary(card.coverage), (p.danger if coverage_needs_work(card.coverage) else p.text_secondary)
+            scheduled = any(s.state in ("scheduled", "sending") for s in going)
+            return short_summary(card.coverage), (p.danger if coverage_needs_work(card.coverage) else
+                                                  p.info_text if scheduled else p.text_secondary)
+        # One post on its way (a single platform): when it goes live. Two or more are listed above.
+        on_the_way = [d for d in card.dispatches if d.status in ("pending", "scheduled", "dispatching")]
+        if on_the_way:
+            when = min((d.publish_at or d.due_at) for d in on_the_way)
+            return f"Goes live {local_text(when)}", p.info_text
         if card.row.stage == Stage.PUBLISHED:
             return "Posted outside Reelay", p.text_secondary
         if post and post.status == PostStatus.FAILED:
@@ -419,7 +434,8 @@ class CardDelegate(QStyledItemDelegate):
         readiness = card.readiness
         if readiness is not None and readiness.blocking:
             names = ", ".join(Platform.LABELS.get(n, n) for n in readiness.blocking)
-            return (f"⚠ Not ready for {names}" if readiness.ready else f"⚠ NOT READY · {names}"), p.danger
+            # Ready somewhere else, or nowhere yet: the same words either way, in sentence case
+            return (f"⚠ Not ready for {names}" if readiness.ready else f"⚠ Not ready · {names}"), p.danger
         to_fix = coverage_needs_work(card.coverage)
         if to_fix:
             return f"⚠ Needs work: {', '.join(Platform.LABELS.get(n, n) for n in to_fix)}", p.danger
@@ -428,6 +444,8 @@ class CardDelegate(QStyledItemDelegate):
                 when = f" · {local_text(post.publish_at)}" if post.publish_at else ""
                 return f"✓ Ready · {card.account.display_name}{when}", p.text_secondary
             return "✓ Ready · pick a channel", p.text_secondary
+        if card.row.stage == Stage.SCHEDULED:      # moved there by hand, nothing actually scheduled: say so
+            return "Nothing scheduled yet: schedule it, or move it back", p.warning_text
         return "✓ Ready · not started", p.text_muted
 
 
@@ -437,6 +455,20 @@ STEP_TIPS = {
     Stage.SCHEDULED: "videos waiting to go live (cards move here once every platform is scheduled)",
     Stage.PUBLISHED: "videos that are live (cards move here once every platform is posted)",
 }
+# One line under each column's title saying what it holds (the full sentence is the title's tooltip)
+COLUMN_PURPOSE = {
+    Stage.BACKLOG: "Downloaded, not started",
+    Stage.STAGING: "Writing the posts",
+    Stage.SCHEDULED: "Waiting to go live",
+    Stage.PUBLISHED: "Live",
+}
+
+
+def column_purpose(column) -> str:
+    """The purpose line for a column: its built-in steps' purposes, or a column you added."""
+    return " · ".join(COLUMN_PURPOSE[s] for s in column.builtin) or "Your own step"
+
+
 EMPTY_TEXT = {
     Stage.BACKLOG: "Downloaded videos land here.",
     Stage.STAGING: "Drag videos here to write their post.",
@@ -460,8 +492,7 @@ class BoardColumn(QFrame):
         lay.setContentsMargins(10, 12, 10, 6)
         lay.setSpacing(6)
         head = QHBoxLayout()
-        title = QLabel(column.name)
-        title.setProperty("section", True)
+        title = QLabel(column.name, objectName="ColumnTitle")
         holds = [STEP_TIPS[s] for s in column.builtin]
         title.setToolTip((f"{column.name}: " + "; ".join(holds) if holds else
                           f"{column.name}: your own column. Drag cards in and out.") +
@@ -474,6 +505,8 @@ class BoardColumn(QFrame):
         head.addStretch()
         head.addWidget(self.count)
         lay.addLayout(head)
+        self.purpose = QLabel(column_purpose(column), objectName="ColumnPurpose")
+        lay.addWidget(self.purpose)
         self.model = BoardModel(stage, self)
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(lambda pos: self._menu(self.mapToGlobal(pos)))
@@ -512,7 +545,9 @@ class BoardColumn(QFrame):
         self.model.set_cards(cards)
         filtered = total is not None and total != len(cards)
         self.count.setText(f"{len(cards)} of {total}" if filtered else str(len(cards)))
-        self.count.setToolTip(f"{len(cards)} shown by the filter, {total} in this column" if filtered else "")
+        self.count.setToolTip(f"{len(cards)} shown by the filter or search, {total} in this column" if filtered
+                              else f"{len(cards)} in this column")
+        set_prop(self.count, "filtered", filtered)          # outlined, so a narrowed column can't pass as whole
         self.empty.setVisible(not cards)
 
     def selected_cards(self) -> list[Card]:
@@ -567,19 +602,26 @@ class BoardPage(QWidget):
         self.subtitle = QLabel(objectName="PageCount")
         head.addWidget(title, 0, Qt.AlignBottom)
         head.addWidget(self.subtitle, 0, Qt.AlignBottom)
+        self.clear_filters_btn = tip(QPushButton("Show All"), "Clear the search and every filter")
+        set_prop(self.clear_filters_btn, "flat")
+        self.clear_filters_btn.clicked.connect(self.clear_filters)
+        self.clear_filters_btn.hide()
+        head.addWidget(self.clear_filters_btn, 0, Qt.AlignBottom)
         head.addStretch()
         self.sync_label = QLabel()
         self.sync_label.setProperty("faint", True)
         head.addWidget(self.sync_label)
-        self.search = tip(QLineEdit(objectName="SearchField"),
-                          "Find videos by words in the title, caption, any platform's copy, hashtags, topic, keywords, "
-                          "notes, or anything said in the video (its transcript). Put \"quotes\" around an exact "
-                          "phrase.")
-        self.search.setPlaceholderText("Search titles, captions and what was said")
-        self.search.setClearButtonEnabled(True)
-        self.search.setFixedWidth(340)
-        self.search.setAttribute(Qt.WA_MacShowFocusRect, False)
-        self.search.addAction(icons.icon("search", 16), QLineEdit.LeadingPosition)
+        # What AI assistants asked to do, waiting for a person: amber, and only there while something waits
+        self.approvals_btn = tip(QPushButton(objectName="ApprovalsButton"),
+                                 "Requests from AI assistants waiting for your decision: review, approve or reject")
+        self.approvals_btn.setCursor(Qt.PointingHandCursor)
+        self.approvals_btn.clicked.connect(lambda: self.open_approvals())
+        self.approvals_btn.hide()
+        head.addWidget(self.approvals_btn)
+        self.search = search_field(
+            "Search titles, captions and what was said",
+            "Find videos by words in the title, caption, any platform's copy, hashtags, topic, keywords, notes, or "
+            "anything said in the video (its transcript). Put \"quotes\" around an exact phrase.", width=340)
         self.search.textChanged.connect(self._on_search)
         head.addWidget(self.search)
 
@@ -675,12 +717,30 @@ class BoardPage(QWidget):
         self.side = QStackedWidget()
         self.side.addWidget(self.panel)
         self.side.addWidget(self.bulk)
+        # A selected card that an AI assistant's request is waiting on says so above its ticket
+        self.approval_bar = QFrame(objectName="ApprovalBar")
+        bar = QHBoxLayout(self.approval_bar)
+        bar.setContentsMargins(12, 8, 8, 8)
+        self.approval_text = QLabel(objectName="ApprovalBarText")
+        self.approval_text.setWordWrap(True)
+        bar.addWidget(self.approval_text, 1)
+        review = tip(QPushButton("Review…"), "Open Approvals on this video's request: see what it would do, "
+                                            "then approve or reject it")
+        review.clicked.connect(lambda: self.open_approvals(self.selected_id))
+        bar.addWidget(review)
+        self.approval_bar.hide()
+        side_box = QWidget()
+        side_lay = QVBoxLayout(side_box)
+        side_lay.setContentsMargins(0, 0, 0, 0)
+        side_lay.setSpacing(0)
+        side_lay.addWidget(self.approval_bar)
+        side_lay.addWidget(self.side, 1)
         # The ticket only takes room while a card is selected; otherwise the columns get the whole width.
-        # The Command Center: the video on top, the ticket under it.
+        # The side panel: the video on top, the ticket under it.
         self.player = PlayerWidget()
         self.player.message.connect(self._status)
         self._player_row: int | None = None
-        self.media_pane = MediaPane(self.player, self.side)
+        self.media_pane = MediaPane(self.player, side_box)
         self.inspector = Inspector(self.media_pane, "")
         self.inspector.closeRequested.connect(self.close_inspector)
         self.split = ContextualSplitter(cols, self.inspector, self.pipeline.store, "board", default_width=420)
@@ -835,7 +895,7 @@ class BoardPage(QWidget):
         self.reload()
 
     def _on_store_change(self, change: Change) -> None:
-        if change.entity in ("video", "post", "account", "dispatch") and self.profile and \
+        if change.entity in ("video", "post", "account", "dispatch", "approval") and self.profile and \
                 change.profile_id in (None, self.profile.id):
             self._schedule_reload()
 
@@ -865,6 +925,7 @@ class BoardPage(QWidget):
         for column_id, col in self.columns.items():
             cards = by_column.get(column_id, [])
             col.set_cards([c for c in cards if self._matches(c)], total=len(cards))
+        self._show_filter_state()
         if self.bulk_ids:
             self._reselect_bulk()
         else:
@@ -873,12 +934,19 @@ class BoardPage(QWidget):
     def _mark_cards(self) -> None:
         """What each card's small marks say: an Automation acted on it, an agent's request awaits
         approval, or an AI assistant made the latest copy edit."""
-        from ..models import ApprovalStatus
         from ..rules import AGENT_ORIGINS, COPY_REVISION_FIELDS, activity
+        from ..scoped_pipeline import OPERATION_LABELS
+        from .approvals_dialog import pending_for
         try:
             origins = self.store.latest_copy_origins(self.profile.id, COPY_REVISION_FIELDS)
-            pending = {vid for req in self.store.list_approvals(self.profile.id, ApprovalStatus.PENDING, 500)
-                       for vid in req.target_ids}
+            requests = pending_for(self.store, self.profile.id)        # expired ones don't count
+            asked: dict[int, list[str]] = {}
+            for req in requests:
+                for vid in req.target_ids:
+                    label = OPERATION_LABELS.get(req.operation, req.operation)
+                    if label not in asked.setdefault(vid, []):
+                        asked[vid].append(label)
+            pending = set(asked)
             ran: dict[int, list[str]] = {}
             for entry in activity(self.store, self.profile.id):
                 if entry.get("done") and entry["done"] != ["nothing to do"]:
@@ -888,7 +956,9 @@ class BoardPage(QWidget):
         except Exception:  # noqa: BLE001 — marks are a nicety; never break the board
             log.exception("Couldn't work out card marks")
             return
+        self._set_approvals_count(len(requests))
         for card in self.cards.values():
+            card.pending_approvals = asked.get(card.id, [])
             card.flags = {"automation": ran.get(card.id, [])[:3], "approval": card.id in pending,
                           "ai": origins.get(card.id, "").split(":")[0] in AGENT_ORIGINS}
 
@@ -947,6 +1017,24 @@ class BoardPage(QWidget):
                                                          "threads_text", "facebook_text"))]
         return " ".join(parts).lower()
 
+    def _filtering(self) -> bool:
+        return bool(self.query or self.filter != "all" or self.tag or self.product_ids)
+
+    def _show_filter_state(self) -> None:
+        """Say plainly when the Board shows only some tickets, with a way back to all of them."""
+        total = sum(c.model.rowCount() for c in self.columns.values())
+        if self._filtering():
+            self.subtitle.setText(f"Showing {total} of {len(self.cards)} tickets")
+        else:
+            self.subtitle.setText("Drag cards to move them along")
+        self.clear_filters_btn.setVisible(self._filtering())
+
+    def clear_filters(self) -> None:
+        for box in (self.filter_box, self.tag_box, self.products_filter.brand, self.products_filter.product):
+            box.setCurrentIndex(0)
+        self.search.clear()
+        self._on_filter()
+
     def _on_search(self, text: str) -> None:
         self.query = text.strip().lower()
         self._reload_timer.start()
@@ -998,6 +1086,7 @@ class BoardPage(QWidget):
             self.bulk_ids = [c.id for c in chosen]
             self.selected_id = None
             self.bulk.show_cards(chosen)
+            self.approval_bar.hide()
             self.side.setCurrentWidget(self.bulk)
             self.player.clear()
             self._player_row = None
@@ -1140,6 +1229,21 @@ class BoardPage(QWidget):
         self._status(f"Archived {n} video{'s' if n > 1 else ''}.")
         self.reload()
 
+    def _set_approvals_count(self, n: int) -> None:
+        self.approvals_btn.setText(f"Approvals · {n}")
+        self.approvals_btn.setVisible(n > 0)
+
+    def open_approvals(self, focus_video: int | None = None) -> None:
+        """Review what AI assistants asked to do (approvals_dialog.py). Deciding never carries anything
+        out here: the dispatcher does, once, after checking the video hasn't changed."""
+        if not self.profile:
+            return
+        from .approvals_dialog import ApprovalsDialog
+        dialog = ApprovalsDialog(self.pipeline, self.profile, self, focus_video=focus_video)
+        dialog.exec()
+        if dialog.decided:
+            self.reload()
+
     def open_archived(self) -> None:
         if not self.profile:
             return
@@ -1215,6 +1319,7 @@ class BoardPage(QWidget):
         self._hide_inspector()
 
     def _hide_inspector(self) -> None:
+        self.approval_bar.hide()
         self.side.setCurrentWidget(self.panel)
         self.panel.show_empty()
         self.player.clear()
@@ -1235,6 +1340,11 @@ class BoardPage(QWidget):
     def _show_card(self, card: Card) -> None:
         self.inspector.set_title("")
         self.split.reveal()
+        asked = getattr(card, "pending_approvals", [])
+        self.approval_bar.setVisible(bool(asked))
+        if asked:
+            self.approval_text.setText(f"⏳ Waiting for your approval: <b>{', '.join(asked)}</b>, asked by an AI "
+                                       "assistant. Nothing happens until you decide.")
         self._load_player(card)
         self.panel.show_card(card, self.pipeline.youtube_accounts(self.profile.id),
                              self.pipeline.add_shorts_default_for(card.row))
@@ -1252,10 +1362,15 @@ class BoardPage(QWidget):
             return
         self.panel.show_errors([])
 
-    def _mark_platform(self, row_id: int, platform: str, state: str, when) -> None:
+    def _mark_platform(self, row_id: int, platform: str, state: str, when, url: str = "", note: str = "") -> None:
+        from ..handoff import check_post_url
+        problem = check_post_url(platform, url)          # the same check as Prepare to Publish's pasted link
+        if problem:
+            QMessageBox.warning(self, "Mark as Posted", problem)
+            return
         before = self.store.get_video(row_id).stage
         try:
-            self.pipeline.set_platform_state(row_id, platform, state, when)
+            self.pipeline.set_platform_state(row_id, platform, state, when, url=(url or "").strip(), note=note)
         except PipelineError as exc:
             self.panel.show_errors(exc.problems)
             self.reload()

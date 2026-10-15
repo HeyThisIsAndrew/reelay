@@ -145,9 +145,9 @@ def ticket(qtbot, tmp_path):
 def test_publish_button_runs_the_handoff(ticket, monkeypatch):
     from reelay.gui import handoff_dialog
     _window, store, board, row = ticket
-    tiktok = board.panel.platform_rows["tiktok"]
-    assert not tiktok.handoff_btn.isHidden()
-    assert board.panel.platform_rows["youtube"].handoff_btn.isHidden()      # Reelay posts YouTube itself
+    tiktok = board.panel.sections["tiktok"]                                # Publish… is in its ⋯ menu
+    assert tiktok.act_publish.isVisible()
+    assert not board.panel.sections["youtube"].act_publish.isVisible()     # Reelay posts YouTube itself
     seen = {}
 
     def run(self):
@@ -162,14 +162,14 @@ def test_publish_button_runs_the_handoff(ticket, monkeypatch):
         return handoff_dialog.HandoffDialog.Accepted
     monkeypatch.setattr(handoff_dialog.HandoffDialog, "exec", run)
     board.panel.blocks["tiktok_text"].set_text("Sunnies for every adventure ☀️")   # unsaved edit is used
-    tiktok.handoff_btn.click()
+    tiktok.act_publish.trigger()
     assert seen["copied"] == ["Sunnies for every adventure ☀️"]
     assert seen["opened"] == [handoff.UPLOAD_URLS["tiktok"]] and seen["revealed"][0].name.endswith(".mp4")
     assert "✓ Caption copied" in seen["progress"] and seen["blocked"]
     [mp] = store.manual_posts(row)
     assert mp.url.endswith("/video/42") and store.get_post(row).tiktok_text == "Sunnies for every adventure ☀️"
     assert store.get_video(row).stage == Stage.PUBLISHED
-    assert board.panel.platform_rows["tiktok"].handoff_btn.isHidden()      # live now: nothing left to hand off
+    assert not board.panel.sections["tiktok"].act_publish.isVisible()     # live now: nothing left to hand off
 
 
 def test_card_tooltip_lists_coverage(ticket):

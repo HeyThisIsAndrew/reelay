@@ -8,6 +8,8 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 import requests
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QMessageBox
 
 from reelay.models import DispatchStatus, Platform, Post, Stage
 from reelay.pipeline import PipelineError
@@ -180,62 +182,130 @@ def ticket(qtbot, tmp_path, monkeypatch):
     store.close()
 
 
-def test_ticket_platform_rows_drive_the_card(ticket):
+def test_ticket_chips_and_menus_drive_the_card(ticket, monkeypatch):
+    from reelay.gui import ticket_widgets
     _window, store, b, row = ticket
     panel = b.panel
-    tiktok, instagram = panel.platform_rows["tiktok"], panel.platform_rows["instagram"]
-    assert tiktok.buttons["preparing"].isChecked() and instagram.buttons["skip"].isChecked()
-    assert tiktok.state.text() == "Preparing: not scheduled yet"
-    instagram.buttons["preparing"].click()                          # commits straight away
+    chips, sections = panel.platform_boxes, panel.sections
+    assert chips["tiktok"].isChecked() and not chips["instagram"].isChecked()
+    assert sections["tiktok"].isVisibleTo(panel) and not sections["instagram"].isVisibleTo(panel)
+    assert sections["tiktok"].status.full_text() == "Preparing"
+    chips["instagram"].click()                                      # commits straight away
     assert store.get_post(row).target_platforms == ["tiktok", "instagram"]
-    tiktok.buttons["posted"].click()
+    assert sections["instagram"].isVisibleTo(panel) and sections["instagram"].expanded   # ticked: its box opens
+    monkeypatch.setattr(ticket_widgets.MarkPostedDialog, "exec", lambda self: ticket_widgets.QDialog.Accepted)
+    sections["tiktok"].act_posted.trigger()                         # asks when (and for the link); recorded now
     assert store.get_video(row).stage == Stage.STAGING             # Instagram still to do
     b.reload()
-    instagram = b.panel.platform_rows["instagram"]
-    instagram.buttons["posted"].click()
+
+    def accepted(self):
+        self.url.setText("https://www.instagram.com/reel/abc")
+        return ticket_widgets.QDialog.Accepted
+    monkeypatch.setattr(ticket_widgets.MarkPostedDialog, "exec", accepted)
+    b.panel.sections["instagram"].act_posted.trigger()
     assert store.get_video(row).stage == Stage.PUBLISHED
+    assert [m.url for m in store.manual_posts(row) if m.platform == "instagram"] == ["https://www.instagram.com/reel/abc"]
     b.reload()
-    assert b.panel.platform_rows["tiktok"].state.text().startswith("Live")
-    assert b.panel.platform_rows["tiktok"].buttons["posted"].isChecked()
-    assert "0 preparing · 0 scheduled · 2 posted" == b.panel.platforms_section.summary.toolTip()
-    b.panel.platform_rows["instagram"].buttons["skip"].click()       # not posting there after all
+    tiktok, instagram = b.panel.sections["tiktok"], b.panel.sections["instagram"]
+    assert tiktok.status.full_text() == "Posted" and tiktok.status.toolTip().startswith("Live since")
+    assert not tiktok.act_posted.isEnabled() and tiktok.act_preparing.isEnabled()
+    assert instagram.link.isVisibleTo(instagram) and "instagram.com/reel/abc" in instagram.link.text()
+    assert b.panel.picker.summary.text() == "0 preparing · 0 scheduled · 2 posted"
+    asked = []
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: asked.append(a) or QMessageBox.No)
+    b.panel.platform_boxes["instagram"].click()                     # marked Posted: asks first, and No keeps it
+    assert asked and b.panel.platform_boxes["instagram"].isChecked()
+    assert store.get_post(row).target_platforms == ["tiktok", "instagram"] and len(store.manual_posts(row)) == 2
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.Yes)
+    b.panel.platform_boxes["instagram"].click()                     # not posting there after all
     assert store.get_post(row).target_platforms == ["tiktok"] and not store.manual_posts(row)[1:]
+    assert not b.panel.sections["instagram"].isVisibleTo(b.panel)
     card = b.columns[Stage.PUBLISHED].model.cards[0]
     tip = b.columns[Stage.PUBLISHED].model.data(b.columns[Stage.PUBLISHED].model.index(0), 3)   # ToolTipRole
     assert card.id == row and "TikTok: Published" in tip and "Instagram: Published" in tip
 
 
-def test_scheduled_box_asks_when(ticket, monkeypatch):
+def test_mark_posted_link_is_checked(ticket, monkeypatch):
+    from reelay.gui import ticket_widgets
+    _window, store, b, row = ticket
+    warned = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: warned.append(a[2]))
+
+    def wrong_site(self):
+        self.url.setText("https://www.instagram.com/reel/abc")       # not a TikTok link
+        return ticket_widgets.QDialog.Accepted
+    monkeypatch.setattr(ticket_widgets.MarkPostedDialog, "exec", wrong_site)
+    b.panel.sections["tiktok"].act_posted.trigger()
+    assert warned == ["That isn't a TikTok link."] and not store.manual_posts(row)
+
+
+def test_scheduled_asks_when_and_back_to_preparing(ticket, monkeypatch):
     from reelay.gui import ticket_widgets
     _window, store, b, row = ticket
     later = datetime.now(timezone.utc) + timedelta(days=2)
     monkeypatch.setattr(ticket_widgets.WhenDialog, "exec", lambda self: ticket_widgets.QDialog.Accepted)
     monkeypatch.setattr(ticket_widgets.WhenDialog, "when", lambda self: later)
-    b.panel.platform_rows["tiktok"].buttons["scheduled"].click()
+    b.panel.sections["tiktok"].act_scheduled.trigger()
     [mark] = store.manual_posts(row)
     assert mark.kind == "scheduled" and store.get_video(row).stage == Stage.SCHEDULED
-    monkeypatch.setattr(ticket_widgets.WhenDialog, "exec", lambda self: ticket_widgets.QDialog.Rejected)
     b.reload()
-    row_widget = b.panel.platform_rows["instagram"]
-    row_widget.buttons["scheduled"].click()                         # cancelled: nothing recorded
-    assert row_widget.buttons["skip"].isChecked() and len(store.manual_posts(row)) == 1
+    tiktok = b.panel.sections["tiktok"]
+    assert tiktok.status.full_text().startswith("Scheduled · ") and not tiktok.act_scheduled.isEnabled()
+    monkeypatch.setattr(ticket_widgets.WhenDialog, "exec", lambda self: ticket_widgets.QDialog.Rejected)
+    b.panel.platform_boxes["instagram"].click()
+    b.panel.sections["instagram"].act_scheduled.trigger()          # cancelled: nothing recorded
+    assert len(store.manual_posts(row)) == 1
+    b.reload()
+    b.panel.sections["tiktok"].act_preparing.trigger()              # the same "none" mark as unticking
+    assert not store.manual_posts(row) and store.get_video(row).stage == Stage.STAGING
 
 
-def test_copy_sections_collapse_with_logos_and_summaries(ticket):
+def test_reelay_handled_platforms_cannot_be_changed_by_hand(ticket):
+    from reelay.pipeline import PlatformState
     _window, _store, b, _row = ticket
-    sections = b.panel.copy_sections
-    assert list(sections) == ["youtube", "tiktok", "instagram", "bluesky", "threads", "facebook", "hashtags"]
-    assert sections["youtube"].expanded and not sections["tiktok"].expanded   # only YouTube open at first
-    assert not sections["tiktok"].button.icon().isNull()
-    assert sections["tiktok"].summary.text() == "empty"
-    b.panel.blocks["tiktok_text"].set_text("letting go 🦋")
-    assert sections["tiktok"].summary.text() == "12/4,000"
-    b.panel.blocks["bluesky_text"].set_text("x" * 301)
-    assert sections["bluesky"].summary.text() == "⚠ too long"
-    sections["tiktok"].button.click()
-    assert sections["tiktok"].expanded and sections["tiktok"].body.isVisibleTo(b.panel)
-    from PySide6.QtCore import QSettings
-    assert str(QSettings().value("sections/copy.tiktok")).lower() == "true"   # remembered
+    panel = b.panel
+    states = {p: PlatformState(p, p in ("youtube", "tiktok")) for p in panel.sections}
+    states["youtube"] = PlatformState("youtube", True, "scheduled", "2030-01-01T09:00:00Z", automatic=True)
+    panel.set_platform_states(states, None)
+    youtube = panel.sections["youtube"]
+    assert not panel.platform_boxes["youtube"].isEnabled()            # can't untick what Reelay is sending
+    assert not any(a.isEnabled() for a in (youtube.act_scheduled, youtube.act_posted, youtube.act_preparing))
+    assert "by Reelay" in youtube.status.full_text() and "Reelay is handling" in youtube.menu_btn.toolTip()
+
+
+def test_one_section_per_ticked_platform_with_logos_and_counts(ticket):
+    _window, _store, b, _row = ticket
+    panel = b.panel
+    sections = panel.sections
+    assert list(sections) == ["youtube", "tiktok", "instagram", "bluesky", "threads", "facebook"]
+    assert {type(s) for s in sections.values()} == {type(sections["youtube"])}          # one widget class
+    assert [p for p, s in sections.items() if s.isVisibleTo(panel)] == ["tiktok"]       # only the ticked one
+    assert not panel.none_note.isVisibleTo(panel)
+    assert not sections["tiktok"].toggle.icon().isNull()
+    assert sections["tiktok"].count.full_text() == "empty"
+    panel.blocks["tiktok_text"].set_text("letting go 🦋")
+    assert sections["tiktok"].count.full_text() == "12/4,000"
+    panel.blocks["bluesky_text"].set_text("x" * 301)
+    assert sections["bluesky"].count.full_text() == "⚠ too long"
+    panel.blocks["title"].set_text("T" * 120)
+    assert sections["youtube"].count.full_text() == "⚠ too long"   # any of its boxes over
+    assert sections["tiktok"].expanded
+    sections["tiktok"].toggle.click()                               # the header folds it
+    assert not sections["tiktok"].expanded and not sections["tiktok"].body.isVisibleTo(panel)
+    for chip in panel.platform_boxes.values():                      # every chip keyboard-reachable, with a tip
+        assert chip.focusPolicy() & Qt.TabFocus and chip.toolTip() and chip.isCheckable()
+
+
+def test_new_ticket_opens_sections_calmly(ticket, monkeypatch):
+    _window, store, b, row = ticket
+    store.save_post(Post(video_row=row, title="Letting go", description="A note.",
+                         target_platforms=["youtube", "tiktok", "instagram"]))
+    b.reload()
+    b.close_inspector()
+    col = b.columns[Stage.BACKLOG]
+    b._on_select(col, next(col.model.index(r) for r, c in enumerate(col.model.cards) if c.id == row))
+    open_ = [p for p, s in b.panel.sections.items() if s.isVisibleTo(b.panel) and s.expanded]
+    assert open_ == ["youtube"]                                     # three or more: only the first is open
 
 
 def test_logos_render_for_every_platform(qapp):

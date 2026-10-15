@@ -11,7 +11,7 @@ connections that follow.
 | The person at the Mac (the desktop app) | Full authority: a click is the decision | `Pipeline` directly |
 | Automations (rules the person made) | The person's authority, with one exception (see "Automations") | `Pipeline`, logged as `automation` |
 | AI agents and any other external client | **Untrusted** | `ScopedPipeline` only (`reelay/scoped_pipeline.py`) |
-| A person deciding agent requests | Full authority | `reelay/approvals.py` (terminal now, the app later) |
+| A person deciding agent requests | Full authority | `reelay/approvals.py` (the app's Approvals window, or the terminal) |
 
 ## The boundary: `ScopedPipeline`
 

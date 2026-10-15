@@ -6,6 +6,9 @@
   while typing.
 - PublishingHistory: what went where, when and how (automatic and by hand),
   with "Mark as Posted…".
+- PlatformPicker: "Posting to", one checkable chip per platform.
+- PlatformSection: one ticked platform's header line (status, count, ⋯ menu)
+  over its caption boxes; the panel makes one per platform.
 - RevisionDialog: the ticket's change log, newest first.
 """
 
@@ -15,16 +18,18 @@ import html
 from datetime import datetime, timezone
 
 from PySide6.QtCore import QDateTime, Qt, Signal
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QDateEdit, QDateTimeEdit, QDialog, QDialogButtonBox,
+from PySide6.QtWidgets import (QComboBox, QDateEdit, QDateTimeEdit, QDialog, QDialogButtonBox,
                                QFileDialog, QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QPlainTextEdit, QPushButton,
                                QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
-from ..models import MANUAL_LABELS, MANUAL_PLATFORMS, ContentType, Ticket
+from ..models import ContentType, Ticket
+from ..platform_specs import TICKET, label
 from ..publishing import parse_utc
 from ..readiness import NOT_CHECKED, READY, Readiness
 from ..text import local_text
 from .theme import set_prop
 from .tips import tip
+from .widgets import LineLabel
 
 AUTHORIZATION_PRESETS = ("Own content", "Managed account", "Licensed", "Used with permission")
 FIELD_LABELS = {
@@ -85,8 +90,7 @@ class ReadinessRing(QWidget):
         p.setPen(QPen(QColor(theme.P.bg_pressed), 4))
         p.drawEllipse(r)
         if self.total:
-            done = self.ready == self.total
-            pen = QPen(QColor(theme.P.success if done else theme.P.accent_color), 4)
+            pen = QPen(QColor(theme.P.accent_color), 4)     # progress: the theme's accent (green means live)
             pen.setCapStyle(Qt.RoundCap)
             p.setPen(pen)
             p.drawArc(r, 90 * 16, -int(360 * 16 * self.ready / self.total))
@@ -436,7 +440,7 @@ class PublishingHistory(QWidget):
             for e in entries:
                 when = local_text(e.at) if e.at else "as soon as possible"
                 how = "by Reelay" if e.method == "automatic" else "by hand"
-                text = f"<b>{MANUAL_LABELS.get(platform, platform)}</b>: {STATUS_WORDS.get(e.status, e.status)} " \
+                text = f"<b>{label(platform)}</b>: {STATUS_WORDS.get(e.status, e.status)} " \
                        f"{how} · {html.escape(when)}"
                 if e.url:
                     text += f" · <a href='{html.escape(e.url)}'>open</a>"
@@ -462,9 +466,12 @@ class PublishingHistory(QWidget):
 
 
 class MarkPostedDialog(QDialog):
-    def __init__(self, parent=None, default_platform: str = "tiktok"):
+    """Record a post made by hand. `locked`: the platform is already decided (a
+    platform's own ⋯ menu), so only when, the link and a note are asked."""
+
+    def __init__(self, parent=None, default_platform: str = "tiktok", locked: bool = False):
         super().__init__(parent)
-        self.setWindowTitle("Mark as Posted")
+        self.setWindowTitle(f"Mark as Posted on {label(default_platform)}" if locked else "Mark as Posted")
         self.setMinimumWidth(420)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(20, 18, 20, 14)
@@ -472,11 +479,14 @@ class MarkPostedDialog(QDialog):
         lay.addWidget(_faint("Record a post you made by hand, so this ticket's history is complete. "
                              "Nothing is posted.", "muted"))
         self.platform = tip(QComboBox(), "Where you posted it")
-        for p in MANUAL_PLATFORMS:
-            self.platform.addItem(MANUAL_LABELS[p], p)
+        for spec in TICKET:
+            self.platform.addItem(spec.label, spec.key)
         self.platform.setCurrentIndex(max(self.platform.findData(default_platform), 0))
-        lay.addWidget(_section("PLATFORM", "Where you posted it"))
-        lay.addWidget(self.platform)
+        if not locked:
+            lay.addWidget(_section("PLATFORM", "Where you posted it"))
+            lay.addWidget(self.platform)
+        else:
+            self.platform.hide()
         lay.addWidget(_section("WHEN IT WENT LIVE", "Your local time"))
         self.when = tip(QDateTimeEdit(QDateTime.currentDateTime()), "When it went live, in your local time")
         self.when.setCalendarPopup(True)
@@ -580,150 +590,285 @@ class RevisionDialog(QDialog):
 
 
 # ====================================================================== platform tags
-class PlatformRow(QWidget):
-    """One platform on the ticket: its logo, where it stands, and ONE choice:
-    Not posting · Preparing · Scheduled · Posted. Choosing Scheduled asks when
-    it goes live. (`going` is the underlying "is this a target" state, kept
-    hidden so the rest of the ticket can read it.)"""
-    goingToggled = Signal(str, bool)
-    markRequested = Signal(str, str, object)   # platform, "scheduled" | "posted" | "none", when (datetime | None)
-    handoffRequested = Signal(str)             # platform: open Prepare to Publish
+POSTING_HINT = ("Tick each place this video is going: its caption box shows below. Untick a platform and it's "
+                "skipped. When every ticked platform is scheduled the card moves to Scheduled; when every one is "
+                "live, to Published.")
 
-    CHOICES = (("skip", "Not posting"), ("preparing", "Preparing"), ("scheduled", "Scheduled"), ("posted", "Posted"))
+
+def _short_when(utc_iso: str | None) -> str:
+    """'Oct 20, 9:00 AM' in local time: short enough for a header line (the tooltip has the weekday)."""
+    from ..text import clock
+    try:
+        dt = parse_utc(utc_iso) if utc_iso else None
+    except ValueError:
+        dt = None
+    if dt is None:
+        return ""
+    local = dt.astimezone()
+    return f"{local:%b} {local.day}, {clock(local)}"
+
+
+class PlatformPicker(QWidget):
+    """"Posting to": one checkable chip per platform (its logo and name), in a
+    grid that wraps to fit the panel. Ticked means the platform is a target
+    (Preparing, or further along); unticked means Not posting."""
+    platformToggled = Signal(str, bool)
+
+    CHIP_MIN = 116          # px a chip needs before the grid drops to fewer columns
+
+    def __init__(self, platforms, parent=None):
+        super().__init__(parent)
+        from PySide6.QtCore import QSize
+        from PySide6.QtWidgets import QGridLayout, QSizePolicy
+
+        from .logos import platform_icon
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
+        head = QHBoxLayout()
+        head.setSpacing(8)
+        head.addWidget(_section("POSTING TO", POSTING_HINT))
+        head.addStretch()
+        self.summary = QLabel()
+        self.summary.setProperty("faint", True)
+        tip(self.summary, "How far this video has got on the platforms it's going to")
+        head.addWidget(self.summary)
+        lay.addLayout(head)
+        self.grid = QGridLayout()
+        self.grid.setContentsMargins(0, 0, 0, 0)
+        self.grid.setHorizontalSpacing(6)
+        self.grid.setVerticalSpacing(6)
+        lay.addLayout(self.grid)
+        self.chips: dict[str, QToolButton] = {}
+        for p in platforms:
+            chip = QToolButton(objectName="PlatformChip")
+            chip.setText(label(p))
+            chip.setIcon(platform_icon(p, 16))
+            chip.setIconSize(QSize(16, 16))
+            chip.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+            chip.setCheckable(True)
+            chip.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            chip.setAccessibleName(f"Post to {label(p)}")
+            tip(chip, self.chip_tip(p, False))
+            chip.toggled.connect(lambda on, k=p: self.platformToggled.emit(k, on))
+            self.chips[p] = chip
+        self._columns = 0
+        self._arrange(3)
+
+    @staticmethod
+    def chip_tip(platform: str, on: bool, note: str = "") -> str:
+        name = label(platform)
+        base = (f"Going to {name}. Untick if it isn't after all." if on else
+                f"Not going to {name}. Tick to post it there: its caption box shows below.")
+        return f"{base} {note}".strip()
+
+    def set_chip(self, platform: str, on: bool, enabled: bool = True, note: str = "") -> None:
+        """Show a platform's state without announcing it as a change."""
+        chip = self.chips[platform]
+        chip.blockSignals(True)
+        chip.setChecked(on)
+        chip.blockSignals(False)
+        chip.setEnabled(enabled)
+        chip.setToolTip(self.chip_tip(platform, on, note))
+
+    def _arrange(self, columns: int) -> None:
+        if columns == self._columns:
+            return
+        self._columns = columns
+        for chip in self.chips.values():
+            self.grid.removeWidget(chip)
+        for n, chip in enumerate(self.chips.values()):
+            self.grid.addWidget(chip, n // columns, n % columns)
+        for c in range(len(self.chips)):
+            self.grid.setColumnStretch(c, 1 if c < columns else 0)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        n = len(self.chips)
+        even = [c for c in range(n, 0, -1) if n % c == 0]        # rows that fill evenly: 6, 3, 2, 1
+        fits = [c for c in even if self.width() // c >= self.CHIP_MIN]
+        self._arrange(fits[0] if fits else even[-2] if len(even) > 1 else 1)
+
+
+class _StatusLabel(LineLabel):
+    """A section header's status: asks for its whole text, and ends in "…" only when the panel is too narrow."""
+
+    def __init__(self):
+        super().__init__("", "PlatformStatus")
+        from PySide6.QtWidgets import QSizePolicy
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+
+    def sizeHint(self):  # noqa: N802
+        from PySide6.QtCore import QSize
+        return QSize(self.fontMetrics().horizontalAdvance(self.full_text()) + 4, super().sizeHint().height())
+
+    def minimumSizeHint(self):  # noqa: N802
+        from PySide6.QtCore import QSize
+        return QSize(min(self.sizeHint().width(), 48), super().minimumSizeHint().height())
+
+
+class PlatformSection(QFrame):
+    """One ticked platform's part of the ticket. A single header line (logo and
+    name, where it stands, its caption's count, and a ⋯ menu with Mark as
+    Scheduled, Mark as Posted, Back to Preparing and Publish…) over that
+    platform's caption boxes. Clicking the header folds it. The panel makes one
+    of these per platform; nothing here is specific to any one platform."""
+    markRequested = Signal(str, str, object, str, str)   # platform, "scheduled"|"posted"|"none", when, url, note
+    handoffRequested = Signal(str)                        # platform: open Prepare to Publish
 
     def __init__(self, platform: str, parent=None):
         super().__init__(parent)
-        from PySide6.QtWidgets import QButtonGroup
+        from PySide6.QtCore import QSize
+        from PySide6.QtWidgets import QMenu
 
-        from ..models import Platform
-        from .logos import platform_pixmap
+        from .logos import platform_icon
+        self.setObjectName("PlatformCopy")
         self.platform = platform
-        self.label = Platform.LABELS.get(platform, platform)
-        self._loading = False
-        self._choice = "skip"
+        self.label = label(platform)
+        self._choice = "preparing"
         self._default_when = None
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 2, 0, 6)
-        outer.setSpacing(4)
-        top = QHBoxLayout()
-        top.setSpacing(8)
-        logo = QLabel()
-        logo.setPixmap(platform_pixmap(platform, 18))
-        logo.setFixedSize(20, 20)
-        tip(logo, self.label)
-        top.addWidget(logo)
-        self.name = QLabel(f"<b>{self.label}</b>")
-        top.addWidget(self.name)
-        self.state = _faint()
-        self.state.setWordWrap(True)
-        top.addWidget(self.state, 1)
-        self.handoff_btn = tip(QPushButton("Publish…"),
-                               f"Prepare to Publish on {self.label}: Reelay checks the video and caption, copies "
-                               f"the caption, opens {self.label}'s uploader and shows the video file. You post it "
-                               "there, then paste the link back.")
-        set_prop(self.handoff_btn, "flat")
-        self.handoff_btn.clicked.connect(lambda: self.handoffRequested.emit(self.platform))
-        self.handoff_btn.setVisible(False)
-        top.addWidget(self.handoff_btn, 0, Qt.AlignTop)
-        outer.addLayout(top)
-        seg = QHBoxLayout()
-        seg.setContentsMargins(0, 0, 0, 0)
-        seg.setSpacing(0)
-        self.group = QButtonGroup(self)
-        self.group.setExclusive(True)
-        self.buttons: dict[str, QPushButton] = {}
-        hints = {"skip": f"This video isn't going to {self.label}.",
-                 "preparing": f"You plan to post it on {self.label} but haven't scheduled it yet. Its logo shows "
-                              "(faded) on the card.",
-                 "scheduled": f"You've scheduled it in {self.label}'s app. Reelay asks when it goes live, and moves "
-                              "the card to Published after that time.",
-                 "posted": f"It's live on {self.label}. When every platform it's going to is posted, the card "
-                           "moves to Published."}
-        for n, (key, text) in enumerate(self.CHOICES):
-            btn = QPushButton(text)
-            btn.setCheckable(True)
-            btn.setProperty("segment", "first" if n == 0 else "last" if n == len(self.CHOICES) - 1 else "middle")
-            tip(btn, hints[key])
-            self.group.addButton(btn)
-            self.buttons[key] = btn
-            seg.addWidget(btn)
-            btn.clicked.connect(lambda _=False, k=key: self.choose(k))
-        seg.addStretch()
-        outer.addLayout(seg)
-        self.going = QCheckBox()          # hidden model of "target"
-        self.going.setVisible(False)
-        self.going.toggled.connect(lambda on: not self._loading and self.goingToggled.emit(self.platform, on))
+        outer.setContentsMargins(10, 6, 4, 10)
+        outer.setSpacing(6)
+        self.header = QFrame(objectName="PlatformCopyHeader")
+        self.header.installEventFilter(self)
+        head = QHBoxLayout(self.header)
+        head.setContentsMargins(0, 0, 0, 0)
+        head.setSpacing(5)
+        self.toggle = QToolButton(objectName="PlatformCopyToggle")
+        self.toggle.setCheckable(True)
+        self.toggle.setAutoRaise(True)
+        self.toggle.setIcon(platform_icon(platform, 16))
+        self.toggle.setIconSize(QSize(16, 16))
+        self.toggle.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        tip(self.toggle, f"Show or hide the {self.label} caption")
+        self.toggle.toggled.connect(self._fold)
+        head.addWidget(self.toggle)
+        self.status = _StatusLabel()                     # wins the space: where it stands matters most
+        head.addWidget(self.status)
+        self.link = QLabel(objectName="PlatformLink")
+        self.link.setTextFormat(Qt.RichText)
+        self.link.setOpenExternalLinks(True)
+        self.link.setTextInteractionFlags(Qt.TextBrowserInteraction)
+        self.link.hide()
+        head.addWidget(self.link)
+        self.count = LineLabel("", "PlatformCount")        # gives way first ("…"); the box shows it in full
+        self.count.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        head.addWidget(self.count, 1)
+        self.menu_btn = QToolButton(objectName="PlatformMenu", text="⋯")
+        self.menu_btn.setPopupMode(QToolButton.InstantPopup)
+        self.menu_btn.setAutoRaise(True)
+        self.menu_btn.setAccessibleName(f"{self.label} actions")
+        self._menu_tip = (f"Mark {self.label} as scheduled or posted, go back to preparing, or get it ready to "
+                          "post by hand")
+        tip(self.menu_btn, self._menu_tip)
+        menu = QMenu(self.menu_btn)
+        menu.setToolTipsVisible(True)
+        self.act_scheduled = menu.addAction("Mark as Scheduled…", self._mark_scheduled)
+        self.act_scheduled.setToolTip(f"You've scheduled it in {self.label}'s app. Reelay asks when it goes live, "
+                                      "and moves the card to Published after that time.")
+        self.act_posted = menu.addAction("Mark as Posted…", self._mark_posted)
+        self.act_posted.setToolTip(f"It's live on {self.label}. Reelay asks when, and for the link if you have it.")
+        self.act_preparing = menu.addAction("Back to Preparing", self._back_to_preparing)
+        self.act_preparing.setToolTip("Clear the Scheduled or Posted mark. The post on the platform isn't touched.")
+        menu.addSeparator()
+        self.act_publish = menu.addAction("Publish…", lambda: self.handoffRequested.emit(self.platform))
+        self.act_publish.setToolTip(f"Prepare to Publish on {self.label}: Reelay checks the video and caption, "
+                                    f"copies the caption, opens {self.label}'s uploader and shows the video file. "
+                                    "You post it there, then paste the link back.")
+        self.menu_btn.setMenu(menu)
+        head.addWidget(self.menu_btn)
+        outer.addWidget(self.header)
+        self.body = QWidget()
+        self.body_layout = QVBoxLayout(self.body)
+        self.body_layout.setContentsMargins(0, 0, 4, 0)
+        self.body_layout.setSpacing(6)
+        outer.addWidget(self.body)
+        self.toggle.setChecked(True)
+        self._fold(True)
 
-    def choose(self, key: str) -> None:
-        """What happens when a choice is clicked."""
-        if self._loading or key == self._choice:
-            return
-        previous, marked = self._choice, self._choice in ("scheduled", "posted")
-        if key == "scheduled":
-            dialog = WhenDialog(self.label, self.window(), self._default_when)
-            if dialog.exec() != QDialog.Accepted:
-                self._show_choice(previous)
-                return
-            self._choice = key
-            self._set_going(True, quiet=True)
-            self.markRequested.emit(self.platform, "scheduled", dialog.when())
-        elif key == "posted":
-            self._choice = key
-            self._set_going(True, quiet=True)
-            self.markRequested.emit(self.platform, "posted", None)
-        else:
-            self._choice = key
-            if marked:
-                self.markRequested.emit(self.platform, "none", None)
-            self._set_going(key == "preparing", quiet=False)
+    # ---- folding
+    def add(self, widget: QWidget) -> QWidget:
+        self.body_layout.addWidget(widget)
+        return widget
 
-    def _set_going(self, on: bool, quiet: bool) -> None:
-        if quiet:
-            self.going.blockSignals(True)
-        self.going.setChecked(on)
-        if quiet:
-            self.going.blockSignals(False)
+    @property
+    def expanded(self) -> bool:
+        return self.toggle.isChecked()
 
-    def _show_choice(self, key: str) -> None:
-        self._choice = key
-        self.buttons[key].setChecked(True)
+    def set_expanded(self, on: bool) -> None:
+        self.toggle.setChecked(on)
 
-    def set_state(self, state, auto_enabled: bool, default_when: str | None = None) -> None:
-        """state: pipeline.PlatformState."""
-        self._loading = True
+    def _fold(self, on: bool) -> None:
+        self.body.setVisible(on)
+        self.toggle.setText(f"{self.label} {'▾' if on else '▸'}")
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        from PySide6.QtCore import QEvent
+        if obj is self.header and event.type() == QEvent.MouseButtonRelease and event.button() == Qt.LeftButton:
+            self.toggle.toggle()            # the whole header line folds, not only the name
+            return True
+        return super().eventFilter(obj, event)
+
+    # ---- what the header says
+    def set_count(self, text: str, over: bool) -> None:
+        self.count.set_full(text)
+        self.count.setToolTip(f"{text}. How much of {self.label}'s limit the caption uses. Red means it's too "
+                              "long; Reelay never cuts your text.")
+        set_prop(self.count, "danger", over)
+
+    def set_state(self, state, auto_enabled: bool, default_when: str | None = None, link: str = "") -> None:
+        """state: pipeline.PlatformState. `link`: the live post's address, if known."""
         self._default_when = default_when
-        try:
-            self.going.setChecked(state.target)
-            live = state.state == "published"
-            if live:
-                choice = "posted"
-            elif state.state in ("scheduled", "sending"):
-                choice = "scheduled"
-            elif state.target:
-                choice = "preparing"
-            else:
-                choice = "skip"
-            self._show_choice(choice)
-            by_reelay = state.automatic or (state.state in ("scheduled", "sending", "failed") and not state.manual_kind)
-            for btn in self.buttons.values():
-                btn.setEnabled(not by_reelay)
-            when = local_text(state.at) if state.at else ""
-            text = {"none": "Preparing: not scheduled yet" if state.target else "",
-                    "failed": "Reelay couldn't post it", "sending": "Reelay is posting it now",
-                    "scheduled": f"Goes live {when}" if when else "Scheduled",
-                    "published": f"Live since {when}" if when else "Live"}[state.state]
-            if by_reelay and state.state != "published":
-                text += " (by Reelay)"
-            elif state.state == "none" and state.target and auto_enabled:
-                text = "Preparing: Reelay can post it for you (Schedule below)"
-            self.state.setText(text)
-            set_prop(self.state, "danger", state.state == "failed")
-            set_prop(self.state, "success", live)
-            self.setToolTip(f"Reelay is handling {self.label}; this updates on its own." if by_reelay else "")
-            # posted by hand (Reelay can't post here) and not live yet: offer the guided hand-off
-            self.handoff_btn.setVisible(not auto_enabled and not by_reelay and not live)
-        finally:
-            self._loading = False
+        live = state.state == "published"
+        self._choice = ("posted" if live else "scheduled" if state.state in ("scheduled", "sending")
+                        else "preparing")
+        by_reelay = state.automatic or (state.state in ("scheduled", "sending", "failed") and not state.manual_kind)
+        when = local_text(state.at) if state.at else ""
+        short = _short_when(state.at)
+        who = " by Reelay" if by_reelay and not live else ""
+        text, detail = {
+            "none": ("Preparing", "Preparing: not scheduled yet. " + (
+                "Reelay can post it for you: choose when under Post automatically." if auto_enabled else
+                f"Post it on {self.label}, then use ⋯ to mark it Scheduled or Posted.")),
+            "failed": ("Couldn't post", "Reelay couldn't post it. The card says why."),
+            "sending": ("Posting now", "Reelay is posting it now."),
+            "scheduled": (f"Scheduled{who}" + (f" · {short}" if short else ""),
+                          f"Goes live {when}." if when else "Scheduled."),
+            "published": ("Posted", f"Live since {when}." if when else "Live."),
+        }[state.state]
+        self.status.set_full(text)
+        self.status.updateGeometry()
+        self.status.setToolTip(detail + (f" Reelay is handling {self.label}; this updates on its own."
+                                         if by_reelay else ""))
+        set_prop(self.status, "danger", state.state == "failed")
+        set_prop(self.status, "success", live)
+        self.link.setVisible(bool(live and link))
+        if live and link:
+            self.link.setText(f"<a href='{html.escape(link)}'>Open</a>")
+            self.link.setToolTip(f"Open the live post: {link}")
+        self.act_scheduled.setEnabled(not by_reelay and self._choice != "scheduled")
+        self.act_posted.setEnabled(not by_reelay and self._choice != "posted")
+        self.act_preparing.setEnabled(not by_reelay and self._choice in ("scheduled", "posted"))
+        # posted by hand (Reelay can't post here) and not live yet: offer the guided hand-off
+        self.act_publish.setVisible(not auto_enabled and not by_reelay and not live)
+        self.menu_btn.setToolTip(f"Reelay is handling {self.label}; this updates on its own." if by_reelay
+                                 else self._menu_tip)
+
+    # ---- the ⋯ menu
+    def _mark_scheduled(self) -> None:
+        dialog = WhenDialog(self.label, self.window(), self._default_when)
+        if dialog.exec() == QDialog.Accepted:
+            self.markRequested.emit(self.platform, "scheduled", dialog.when(), "", "")
+
+    def _mark_posted(self) -> None:
+        dialog = MarkPostedDialog(self.window(), self.platform, locked=True)
+        if dialog.exec() == QDialog.Accepted:
+            v = dialog.values()
+            self.markRequested.emit(self.platform, "posted", v["posted_at"], v["url"], v["note"])
+
+    def _back_to_preparing(self) -> None:
+        self.markRequested.emit(self.platform, "none", None, "", "")
 
 
 class WhenDialog(QDialog):

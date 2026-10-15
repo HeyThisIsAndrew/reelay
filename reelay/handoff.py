@@ -25,6 +25,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from .models import Platform, Post
+from .platform_specs import TICKET
 from .platform_text import hashtag_count, text_problem
 
 UPLOAD_URLS = {
@@ -54,10 +55,7 @@ POST_HOSTS = {
     Platform.THREADS: ("threads.com", "threads.net"),
     Platform.BLUESKY: ("bsky.app",),
 }
-CAPTION_FIELD = {
-    Platform.TIKTOK: "tiktok_text", Platform.INSTAGRAM: "instagram_text", Platform.FACEBOOK: "facebook_text",
-    Platform.THREADS: "threads_text", Platform.BLUESKY: "bluesky_text",
-}
+CAPTION_FIELD = {s.key: s.caption_field for s in TICKET if s.key != Platform.YOUTUBE}   # from platform_specs
 OK, WARN, BLOCK = "ok", "warn", "block"
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import struct
 import threading
 from dataclasses import dataclass, replace
 from datetime import datetime
@@ -11,7 +12,7 @@ from typing import Callable
 import yt_dlp
 from yt_dlp.utils import DownloadCancelled, DownloadError
 
-from .models import Status, VideoItem
+from .models import Status, VideoItem, info_dimensions
 from .urlsafety import app_ydl, fetch_url_problem, inside
 from .ytdl import guarded_ydl
 
@@ -67,6 +68,50 @@ def _final_filepath(info: dict) -> Path | None:
 def _is_watermark_free(info: dict) -> bool:
     formats = info.get("requested_formats") or [info]
     return not any("watermark" in (f.get("format_note") or "").lower() for f in formats)
+
+
+def video_dimensions(path: Path | str) -> tuple[int, int] | None:
+    """Width and height of an MP4 / MOV file's video track, read from its header (moov → trak → tkhd), turned
+    if the file says to show it rotated. No ffprobe needed. None if it can't be read."""
+    def boxes(f, start: int, end: int):
+        pos = start
+        while pos + 8 <= end:
+            f.seek(pos)
+            size, kind = struct.unpack(">I4s", f.read(8))
+            head = 8
+            if size == 1:
+                size, head = struct.unpack(">Q", f.read(8))[0], 16
+            elif size == 0:
+                size = end - pos
+            if size < head:
+                return
+            yield kind, pos + head, min(pos + size, end)
+            pos += size
+
+    try:
+        with open(path, "rb") as f:
+            end = f.seek(0, 2)
+            for kind, start, stop in boxes(f, 0, end):
+                if kind != b"moov":
+                    continue
+                for trak, t_start, t_stop in boxes(f, start, stop):
+                    if trak != b"trak":
+                        continue
+                    for box, b_start, b_stop in boxes(f, t_start, t_stop):
+                        if box != b"tkhd":
+                            continue
+                        f.seek(b_start)
+                        data = f.read(b_stop - b_start)
+                        matrix, size_at = (40, 76) if data[:1] == b"\x00" else (52, 88)
+                        if len(data) < size_at + 8:
+                            continue
+                        w, h = (v >> 16 for v in struct.unpack(">II", data[size_at:size_at + 8]))
+                        if w and h:               # a video track (audio tracks have no size)
+                            a, b = struct.unpack(">ii", data[matrix:matrix + 8])
+                            return (h, w) if a == 0 and b != 0 else (w, h)
+    except (OSError, struct.error):
+        return None
+    return None
 
 
 def _unique_stem(folder: Path, stem: str, ext: str = "mp4") -> str:
@@ -162,6 +207,11 @@ def download_item(
         raise DownloadError("The download was written outside the chosen folder, so Reelay didn't use it.")
 
     result.filename = filepath.name
+    # The file's real size: what was downloaded (yt-dlp's requested_downloads), else read from the file itself.
+    downloaded = info_dimensions({"requested_downloads": (info or {}).get("requested_downloads")})
+    dims = downloaded or video_dimensions(filepath)
+    if dims:
+        result.width, result.height = dims
     result.format_id = info.get("format_id") or ""
     result.watermark_free = _is_watermark_free(info)
     result.downloaded_at = datetime.now().isoformat(timespec="seconds")

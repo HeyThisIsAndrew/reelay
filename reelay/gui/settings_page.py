@@ -8,7 +8,7 @@ from pathlib import Path
 from PySide6.QtCore import QRectF, Qt, QUrl, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QGuiApplication, QPainter, QPainterPath, QPixmap
 from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
-                               QPushButton, QScrollArea, QVBoxLayout, QWidget)
+                               QPushButton, QVBoxLayout, QWidget)
 
 from .. import APP_NAME, __version__
 from ..flags import FLAG_PLATFORMS, env_var, flag_source, setting_key
@@ -19,6 +19,7 @@ from . import tips
 from . import branding
 from .theme import MODE_LABELS, MODES, set_prop
 from .tips import tip
+from .widgets import scroll_page
 
 
 def _card(title: str) -> tuple[QFrame, QVBoxLayout]:
@@ -46,13 +47,7 @@ class SettingsPage(QWidget):
         self.setObjectName("Page")
         self.store = store
         self.services = services
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        body = QWidget(objectName="Page")
-        lay = QVBoxLayout(body)
-        lay.setContentsMargins(24, 18, 24, 24)
-        lay.setSpacing(14)
-        scroll.setWidget(body)
+        scroll, body, lay = scroll_page((24, 18, 24, 24), 14, body_name="Page")
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.addWidget(scroll)

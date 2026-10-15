@@ -24,6 +24,11 @@ QFrame#DetailFrame { background: {bg_surface}; border: 1px solid {divider}; bord
 QFrame#BoardColumn { background: {bg_well}; border: 1px solid {divider}; border-radius: {radius_card}px; }
 QLabel#ColumnCount { background: {card_fill}; color: {text_secondary}; border: 1px solid {card_edge};
                      border-radius: 9px; padding: 1px 8px; font-size: {font_xs}pt; font-weight: 600; }
+/* A column narrowed by a filter or search says so: "3 of 7", outlined in the text colour */
+QLabel#ColumnCount[filtered="true"] { color: {text_primary}; border-color: {text_secondary}; background: {bg_hover}; }
+/* The column's name leads; what it holds sits under it, quietly */
+QLabel#ColumnTitle { color: {text_primary}; font-size: {font_lg}pt; font-weight: 700; padding-top: 4px; }
+QLabel#ColumnPurpose { color: {text_muted}; font-size: {font_xs}pt; padding-bottom: 2px; }
 
 /* The contextual inspector (right-hand panel) and its header */
 QFrame#Inspector { background: {bg_surface}; border: 1px solid {divider}; border-radius: {radius_card}px; }
@@ -64,8 +69,9 @@ QLabel[muted="true"] { color: {text_secondary}; }
 QLabel[faint="true"] { color: {text_muted}; }
 QLabel[danger="true"] { color: {danger}; }
 QLabel[success="true"] { color: {success}; }
-QLabel[badge="ready"] { color: {on_badge}; background: {success}; border-radius: 9px; padding: 2px 10px;
-                        font-weight: 700; letter-spacing: 0.5px; }
+/* Status colours have one meaning each (theme.py): ready is the normal state, so it's neutral */
+QLabel[badge="ready"] { color: {text_primary}; background: {bg_raised}; border: 1px solid {border}; border-radius: 9px;
+                        padding: 1px 9px; font-weight: 700; letter-spacing: 0.5px; }
 QLabel[badge="not_ready"] { color: {on_badge}; background: {danger}; border-radius: 9px; padding: 2px 10px;
                             font-weight: 700; letter-spacing: 0.5px; }
 QLabel[section="true"] { color: {text_secondary}; font-size: {font_sm}pt; font-weight: 600; padding-top: 6px; }
@@ -244,8 +250,32 @@ QFrame#ReadyRow { border: none; border-top: 1px solid {divider}; }
 QLabel#ReadyName { font-size: {font_sm}pt; font-weight: 600; }
 QLabel#ReadyNote { color: {text_muted}; font-size: {font_sm}pt; }
 QLabel#ReadyMark { color: {text_muted}; font-size: {font_sm}pt; font-weight: 700; }
-QLabel#ReadyMark[state="ready"] { color: {success_ink}; }
-QLabel#ReadyMark[state="blocking"] { color: {warning_ink}; }
+QLabel#ReadyMark[state="ready"] { color: {text_primary}; }
+QLabel#ReadyMark[state="blocking"] { color: {danger}; }
+
+/* Ticket: "Posting to" chips, then one caption card per ticked platform */
+QToolButton#PlatformChip { background: transparent; color: {text_secondary}; border: 1px solid {divider};
+                           border-radius: {radius}px; padding: 5px 8px; font-size: {font_sm}pt; text-align: left; }
+QToolButton#PlatformChip:hover { background: {bg_hover}; color: {text_primary}; }
+QToolButton#PlatformChip:checked { background: {accent_soft}; color: {text_primary}; border-color: {accent_ring};
+                                   font-weight: 600; }
+QToolButton#PlatformChip:focus { border-color: {accent_color}; }
+QToolButton#PlatformChip:disabled { color: {text_muted}; background: transparent; }
+QToolButton#PlatformChip:checked:disabled { background: {bg_raised}; border-color: {divider}; }
+QFrame#PlatformCopy { background: {card_fill}; border: 1px solid {card_edge}; border-radius: {radius_card}px; }
+QFrame#PlatformCopyHeader { background: transparent; border: none; }
+QToolButton#PlatformCopyToggle { background: transparent; border: none; padding: 3px 0px; font-weight: 600;
+                                 font-size: {font_pt}pt; color: {text_primary}; }
+QToolButton#PlatformCopyToggle:focus { color: {accent_color}; }
+QLabel#PlatformStatus { color: {text_secondary}; font-size: {font_sm}pt; }
+QLabel#PlatformStatus[success="true"] { color: {success}; }
+QLabel#PlatformStatus[danger="true"] { color: {danger}; }
+QLabel#PlatformLink, QLabel#PlatformCount { color: {text_muted}; font-size: {font_sm}pt; }
+QLabel#PlatformCount[danger="true"] { color: {danger}; }
+QToolButton#PlatformMenu { background: transparent; border: 1px solid transparent; border-radius: {radius}px;
+                           padding: 0px 4px; font-size: {font_pt}pt; font-weight: 700; color: {text_secondary}; }
+QToolButton#PlatformMenu:hover, QToolButton#PlatformMenu:focus { background: {bg_hover}; border-color: {divider};
+                                                                  color: {text_primary}; }
 
 /* Side panel title row: the video's column as a quiet pill beside its title */
 QLabel#StagePill { background: {bg_raised}; color: {text_secondary}; border: 1px solid {divider}; border-radius: 9px;
@@ -293,3 +323,16 @@ QFrame#HelpCallout { background: {bg_raised}; border-radius: {radius}px; }
 QFrame#HelpDiagram { background: {card_fill}; border: 1px solid {card_edge}; border-radius: {radius_card}px; }
 QFrame#HelpPlace { background: {bg_raised}; border-radius: {radius}px; }
 QStackedWidget#HelpStack QPushButton:focus { border-color: {accent_color}; }
+
+/* Approvals (approvals_dialog.py). Amber = waiting for your decision; red = a request that skips a safety check */
+QPushButton#ApprovalsButton { background: {warning_soft}; color: {warning_ink}; border: 1px solid {warning};
+                              font-weight: 600; padding: 6px 14px; }
+QPushButton#ApprovalsButton:hover { background: {warning_soft}; border-color: {warning_ink}; }
+QFrame#ApprovalBar { background: {warning_soft}; border: none; border-bottom: 1px solid {warning}; }
+QLabel#ApprovalBarText { color: {warning_ink}; }
+QFrame#ForceNotice { background: {danger_soft}; border: 1px solid {danger}; border-radius: {radius}px; }
+QLabel#ForceNoticeTitle { color: {danger_ink}; font-weight: 700; }
+QLabel#ForceNoticeText { color: {danger_ink}; }
+QLabel#ApprovalOutcome { border-radius: {radius}px; padding: 7px 10px; background: {bg_raised}; }
+QLabel#ApprovalOutcome[tone="danger"] { background: {danger_soft}; color: {danger_ink}; }
+QListWidget#ApprovalList::item { padding: 8px 6px; border-bottom: 1px solid {divider}; }

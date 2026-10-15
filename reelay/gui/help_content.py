@@ -105,7 +105,8 @@ TOUR: tuple[TourStep, ...] = (
                               "YouTube caption section with its Copy buttons."),
         (Step("On the **Board**, click a card to open its ticket on the right.", "card"),
          Step("**Fill Empty from Original Post** writes the empty captions from the original post.", "fill"),
-         Step("Edit each platform's caption in its own section. The count turns red if it's too long.", "caption"),
+         Step("Each platform ticked under **Posting to** gets its own caption box. The count turns red if it's "
+              "too long.", "caption"),
          Step("**Copy** puts that caption on the clipboard, ready to paste.", "copy")),
         "The transcript, cover and topic are further down, under Details and provenance.",
         go="board", go_label="Open the Board", short="Prepare"),
@@ -116,19 +117,19 @@ TOUR: tuple[TourStep, ...] = (
                          "selected card on the Board."),
         (Step("The ring counts the platforms that are ready. Each row: **✓** ready, **–** you post it by hand, "
               "**!** something to fix, with the note saying what.", "ready"),
-         Step("On the card, each logo has a badge: green published, blue scheduled, amber ready, red needs "
-              "work.", "card"),
+         Step("On the card, each logo has a badge: green published, blue scheduled, a plain dot ready, red "
+              "needs work. Amber means it's waiting for you to decide.", "card"),
          Step("Hover a row or a card to see every check.")),
         "Fix anything marked !, then choose where the video goes.",
         go="board", go_label="Open the Board", short="Readiness"),
     TourStep(
         "publish", "Publish or schedule",
         "Reelay posts to some platforms for you; for the rest, it sets everything up and you post.",
-        Visual("ticket-platforms", "The ticket's Platforms section: YouTube and TikTok set to Preparing, TikTok's "
-                                   "Publish… button, and Publish Now at the bottom."),
-        (Step("Under **Platforms**, set each place the video is going to **Preparing**.", "youtube"),
-         Step("TikTok and Instagram are posted by hand: **Publish…** copies the caption, opens the uploader and "
-              "shows the video file.", "publish"),
+        Visual("ticket-platforms", "The ticket's Posting to chips with YouTube and TikTok ticked, TikTok's ⋯ menu "
+                                   "open at Publish…, and Publish Now at the bottom."),
+        (Step("Under **Posting to**, tick each place the video is going.", "youtube"),
+         Step("TikTok and Instagram are posted by hand: in the platform's **⋯** menu, **Publish…** copies the "
+              "caption, opens the uploader and shows the video file.", "publish"),
          Step("For YouTube (and Bluesky, Threads or Facebook once turned on), choose when, then click "
               "**Schedule** or **Publish Now**.", "post")),
         "Cards move to Scheduled and Published by themselves as each platform goes live.",
@@ -272,8 +273,10 @@ BOARD = Category("board", "Board & preparing posts", "Turn videos into ready-to-
                "themselves when they're scheduled or posted.",
                "Columns you add are steps you drag cards in and out of.")),
            Detail("Marks on cards", (
-               "⚡ an Automation acted on the video, ⏳ an AI assistant's change is waiting for your approval, "
-               "✦ an AI assistant last edited the caption.",
+               "⚡ an Automation acted on the video, ⏳ an AI assistant's change is waiting for your approval "
+               "(review it under **Approvals** at the top of the Board), ✦ an AI assistant last edited the caption.",
+               "Colours mean one thing each: green live, blue scheduled, red blocked or failed, amber waiting "
+               "for your decision. Ready is the normal state, so it has no colour.",
                "**Filter → Cards** switches between large cards and compact ones.",
                "The sidebar's **Up next** shows the next post going out for this profile."))),
           ("board-captions", "board-readiness", "board-find"),
@@ -284,7 +287,7 @@ BOARD = Category("board", "Board & preparing posts", "Turn videos into ready-to-
                                 "and its Copy button."),
           (Step("Click a card to open its ticket.", "card"),
            Step("**Fill Empty from Original Post** fills empty captions, title, tags and hashtags.", "fill"),
-           Step("Each platform has its own section with a live count against its limit.", "caption"),
+           Step("Each ticked platform has its own caption box with a live count against its limit.", "caption"),
            Step("**Copy** puts the caption on the clipboard.", "copy")),
           "Red means too long. Reelay never cuts your text short.",
           (Detail("Empty boxes", (
@@ -311,7 +314,7 @@ BOARD = Category("board", "Board & preparing posts", "Turn videos into ready-to-
     Guide("board-readiness", "Readiness", "Know what still needs work before you post.",
           Visual("ticket", "A ticket's readiness ring and platform rows beside the selected card."),
           (Step("The ring counts the ready platforms. **✓** ready, **–** posted by hand, **!** needs work.", "ready"),
-           Step("Card badges: green published, blue scheduled, amber ready, red needs work.", "card"),
+           Step("Card badges: green published, blue scheduled, a plain dot ready, red needs work.", "card"),
            Step("Hover a row for every check behind it.")),
           "A ticket can go when at least one of its platforms is ready. Platforms you post by hand never block.",
           (Detail("What's checked", (
@@ -412,7 +415,7 @@ PUBLISHING = Category("publishing", "Publishing & accounts",
     Guide("publish-schedule", "Schedule or publish", "Post a ready video from Reelay, now or later.",
           Visual("ticket-post", "A ticket's Post automatically section with the YouTube channel and when to "
                                 "publish, the summary line and Publish Now."),
-          (Step("Under **Platforms**, set the platforms it's going to **Preparing**."),
+          (Step("Under **Posting to**, tick the platforms it's going to."),
            Step("In **Post automatically**, choose the channel and who can see it.", "auto"),
            Step("Choose **Publish as soon as it's uploaded** or **Schedule for a date and time**.", "when"),
            Step("Check the line above the buttons, then click **Publish Now** or **Schedule**.", "post")),
@@ -437,7 +440,7 @@ PUBLISHING = Category("publishing", "Publishing & accounts",
     Guide("publish-by-hand", "Post by hand", "Post to TikTok or Instagram in their own uploader, with Reelay's help.",
           Visual("handoff", "The Publish on TikTok window: checks, Copy Caption, Open TikTok & Show Video, and "
                             "Record as Published."),
-          (Step("In the ticket's **Platforms**, click **Publish…** next to TikTok or Instagram."),
+          (Step("In the ticket, open TikTok's or Instagram's **⋯** menu and choose **Publish…**."),
            Step("Reelay checks the video file and the caption."),
            Step("**Copy Caption, Open TikTok & Show Video** copies the caption, opens the upload page and "
                 "shows the file in Finder."),
@@ -446,7 +449,8 @@ PUBLISHING = Category("publishing", "Publishing & accounts",
           (Detail("Snapchat", (
                "Copy the caption from the ticket and post Spotlight from the Snapchat app.",)),
            Detail("Already posted?", (
-               "Set the platform's row to **Posted**, or right-click the card and choose **Mark as Posted…**.",))),
+               "Choose **Mark as Posted…** in the platform's **⋯** menu, or right-click the card and choose "
+               "**Mark as Posted…**.",))),
           ("publish-which", "board-find"),
           "manual by hand tiktok instagram snapchat publish prepare copy caption uploader record link posted"),
 ))

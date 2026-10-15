@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QDialog, QDialogButtonBox, QHeaderView, QLabel, QTableWidget,
-                               QTableWidgetItem, QVBoxLayout)
+from PySide6.QtWidgets import QDialog, QDialogButtonBox, QLabel, QTableWidgetItem, QVBoxLayout
 
 from ..library import RenameStep
 from ..naming import TOKENS
 from .theme import set_prop
+from .widgets import table as make_table
 
 
 class RenamePreviewDialog(QDialog):
@@ -31,13 +31,7 @@ class RenamePreviewDialog(QDialog):
         lay.addWidget(title)
         lay.addWidget(sub)
 
-        table = QTableWidget(len(steps), 2)
-        table.setHorizontalHeaderLabels(["CURRENT NAME", "NEW NAME"])
-        table.verticalHeader().hide()
-        table.setShowGrid(False)
-        table.setEditTriggers(QTableWidget.NoEditTriggers)
-        table.setSelectionMode(QTableWidget.NoSelection)
-        table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        table = make_table(["CURRENT NAME", "NEW NAME"], rows=len(steps), select="none", grid=False)
         table.horizontalHeader().setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         for row, step in enumerate(steps):
             table.setItem(row, 0, QTableWidgetItem(step.old))

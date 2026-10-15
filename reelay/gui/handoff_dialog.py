@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import sys
+from functools import partial
 
-from PySide6.QtCore import QDateTime, Qt, QUrl
+from PySide6.QtCore import QDateTime, QUrl
 from PySide6.QtGui import QDesktopServices, QGuiApplication
 from PySide6.QtWidgets import (QComboBox, QDateTimeEdit, QDialog, QDialogButtonBox, QHBoxLayout, QLabel, QLineEdit,
                                QPlainTextEdit, QPushButton, QVBoxLayout)
@@ -14,18 +15,13 @@ from ..models import Platform
 from .logos import platform_pixmap
 from .theme import set_prop
 from .tips import tip
+from .widgets import label
 
 MARK = {handoff.OK: "✓", handoff.WARN: "⚠", handoff.BLOCK: "✕"}
 FILES = "Finder" if sys.platform == "darwin" else "File Explorer" if sys.platform == "win32" else "your file manager"
 
 
-def _label(text: str = "", prop: str | None = None) -> QLabel:
-    lab = QLabel(text)
-    lab.setWordWrap(True)
-    lab.setTextFormat(Qt.RichText)
-    if prop:
-        lab.setProperty(prop, True)
-    return lab
+_label = partial(label, rich=True)
 
 
 class HandoffDialog(QDialog):

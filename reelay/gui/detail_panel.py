@@ -1,4 +1,9 @@
-"""Right-hand panel: everything about the selected video, plus its custom name."""
+"""Right-hand panel: everything about the selected video, plus its custom name.
+
+Top to bottom: the title; Details (every known fact once, as label and value
+rows: platform with its logo, creator, date, length, views, likes, comments,
+resolution); what the post says (caption, hashtags, tagged products); then the
+file (your name for it, the file name) and what to do with it."""
 
 from __future__ import annotations
 
@@ -10,15 +15,17 @@ from pathlib import Path
 
 from PySide6.QtCore import QRectF, QSize, Qt, QUrl, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QPainter, QPainterPath, QPixmap
-from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton, QScrollArea,
-                               QSizePolicy, QStackedWidget, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QSizePolicy,
+                               QStackedWidget, QVBoxLayout, QWidget)
 
 from ..models import Status, VideoItem
+from ..platform_specs import by_label
 from ..text import short_title
 from . import theme
 from .tips import tip
 from .table_model import fmt_count, fmt_date, fmt_duration
 from .thumbnails import ThumbnailCache
+from .widgets import label, scroll_page
 
 COVER_SIZE = QSize(198, 352)  # 9:16
 
@@ -36,13 +43,7 @@ def _label(text: str = "", *, prop: str | None = None, wrap: bool = True, select
     if prop == "section":
         from .theme import heading
         text = heading(text)
-    lab = QLabel(text)
-    lab.setWordWrap(wrap)
-    if prop:
-        lab.setProperty(prop, True)
-    if select:
-        lab.setTextInteractionFlags(Qt.TextSelectableByMouse)
-    return lab
+    return label(text, prop, wrap=wrap, select=select)
 
 
 class CoverView(QLabel):
@@ -114,15 +115,8 @@ class DetailPanel(QFrame):
         return w
 
     def _build_single(self) -> QWidget:
-        scroll = QScrollArea()
-        scroll.setObjectName("DetailScroll")
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        body = QWidget()
-        body.setObjectName("DetailBody")
-        lay = QVBoxLayout(body)
-        lay.setContentsMargins(20, 20, 20, 20)
-        lay.setSpacing(6)
+        scroll, body, lay = scroll_page((20, 20, 20, 20), 6, name="DetailScroll", body_name="DetailBody",
+                                        sideways=False)
 
         self.cover = CoverView()
         lay.addWidget(self.cover, 0, Qt.AlignHCenter)
@@ -130,26 +124,23 @@ class DetailPanel(QFrame):
 
         self.title = _label(select=True)
         self.title.setObjectName("DetailTitle")
-        self.meta = _label(prop="muted")
+        self.meta = _label("Loading details…", prop="faint")    # only while the full details are on their way
         lay.addWidget(self.title)
         lay.addWidget(self.meta)
 
+        # ---- the facts, each once: label and value rows; unknown ones are left out
         lay.addSpacing(6)
-        lay.addWidget(tip(_label("YOUR NAME FOR THIS VIDEO", prop="section"),
-                          "A short name you choose. It's used in the file name when Name files includes your name."))
-        self.custom = QLineEdit()
-        self.custom.setPlaceholderText("e.g. letting-go-of-who-you-were")
-        tip(self.custom, "Type a short name for this video. Saved automatically.")
-        self.custom.setAttribute(Qt.WA_MacShowFocusRect, False)
-        self.custom.textEdited.connect(self._emit_custom)
-        lay.addWidget(self.custom)
-        self.filename = _label(select=True)
-        self.filename.setObjectName("FilenamePreview")
-        tip(self.filename, "The file name this video has (or will have) on disk")
-        lay.addWidget(self.filename)
-        self.file_note = _label(prop="faint")
-        lay.addWidget(self.file_note)
+        lay.addWidget(tip(_label("DETAILS", prop="section"), "Facts about the original post"))
+        self.facts = QWidget(objectName="DetailFacts")
+        self.facts_grid = QGridLayout(self.facts)
+        self.facts_grid.setContentsMargins(0, 0, 0, 0)
+        self.facts_grid.setHorizontalSpacing(14)
+        self.facts_grid.setVerticalSpacing(5)
+        self.facts_grid.setColumnStretch(1, 1)
+        lay.addWidget(self.facts)
+        self.fact_values: dict[str, QLabel] = {}          # label → its value, for the rows on show
 
+        # ---- what the post says
         lay.addSpacing(6)
         lay.addWidget(tip(_label("CAPTION", prop="section"), "The caption from the original post"))
         self.caption = _label(select=True)
@@ -176,11 +167,22 @@ class DetailPanel(QFrame):
         lay.addWidget(self.products_header)
         lay.addWidget(self.products)
 
+        # ---- the file: your name for it, and what to do with it
         lay.addSpacing(6)
-        lay.addWidget(tip(_label("DETAILS", prop="section"), "Facts about the original post"))
-        self.details = _label(prop="muted", select=True)
-        self.details.setTextFormat(Qt.RichText)
-        lay.addWidget(self.details)
+        lay.addWidget(tip(_label("YOUR NAME FOR THIS VIDEO", prop="section"),
+                          "A short name you choose. It's used in the file name when Name files includes your name."))
+        self.custom = QLineEdit()
+        self.custom.setPlaceholderText("e.g. letting-go-of-who-you-were")
+        tip(self.custom, "Type a short name for this video. Saved automatically.")
+        self.custom.setAttribute(Qt.WA_MacShowFocusRect, False)
+        self.custom.textEdited.connect(self._emit_custom)
+        lay.addWidget(self.custom)
+        self.filename = _label(select=True)
+        self.filename.setObjectName("FilenamePreview")
+        tip(self.filename, "The file name this video has (or will have) on disk")
+        lay.addWidget(self.filename)
+        self.file_note = _label(prop="faint")
+        lay.addWidget(self.file_note)
 
         lay.addSpacing(8)
         self.open_btn = tip(QPushButton("Open Original Post"), "Open the video on the platform it came from")
@@ -198,7 +200,6 @@ class DetailPanel(QFrame):
         lay.addLayout(row)
         lay.addWidget(self.open_btn)
         lay.addStretch()
-        scroll.setWidget(body)
         return scroll
 
     def _build_multi(self) -> QWidget:
@@ -249,12 +250,7 @@ class DetailPanel(QFrame):
         self.cover.set_cover(self.thumbs.cover(item))
         self.title.setText(short_title(item.hook))
 
-        bits = [fmt_date(item.upload_date) if item.upload_date else None,
-                fmt_duration(item.duration) if item.duration else None,
-                f"{fmt_count(item.view_count)} views" if item.view_count is not None else None,
-                f"{fmt_count(item.like_count)} likes" if item.like_count is not None else None]
-        self.meta.setText(" · ".join(b for b in bits if b) or "Loading details…")
-
+        self.meta.setVisible(not item.has_details)
         if not same or not self.custom.hasFocus():
             self.custom.setText(item.custom_name)
         self.update_filename(planned_filename)
@@ -273,19 +269,62 @@ class DetailPanel(QFrame):
         self.products_header.setVisible(bool(found))
         self.products.setVisible(bool(found))
 
-        rows = [("Platform", item.platform), ("Video ID", item.video_id),
-                ("Creator", item.uploader or "—"),
-                ("Comments", fmt_count(item.comment_count)),
-                ("Resolution", f"{item.width}×{item.height}" if item.width and item.height else "—")]
-        if item.is_downloaded:
-            rows.append(("Watermark", "None" if item.watermark_free is not False else "Possible"))
-        self.details.setText("<table cellspacing='0' cellpadding='2'>" + "".join(
-            f"<tr><td style='color:{theme.P.text_muted}; padding-right:14px'>{k}</td><td>{html.escape(str(v))}</td></tr>"
-            for k, v in rows) + "</table>")
+        self._set_facts(item)
 
         downloaded = item.is_downloaded and self._video_path() is not None
         self.play_btn.setEnabled(downloaded)
         self.reveal_btn.setEnabled(downloaded)
+
+    @staticmethod
+    def facts_for(item: VideoItem) -> list[tuple[str, str]]:
+        """(label, value) for every fact that's known, in reading order. Nothing unknown is shown as a dash."""
+        from .cards import resolution_label
+        if item.width and item.height:
+            label = resolution_label(item)
+            resolution = f"{item.width}×{item.height}" + (f" · {label}" if label else "")
+        else:            # listed, not downloaded: platforms often only say once there's a file
+            resolution = "" if item.is_downloaded else "Known after download"
+        spec = by_label(item.platform)
+        rows = [("Platform", spec.label if spec else item.platform),
+                ("Creator", item.uploader),
+                ("Posted", fmt_date(item.upload_date) if item.upload_date else ""),
+                ("Length", fmt_duration(item.duration) if item.duration else ""),
+                ("Views", fmt_count(item.view_count) if item.view_count is not None else ""),
+                ("Likes", fmt_count(item.like_count) if item.like_count is not None else ""),
+                ("Comments", fmt_count(item.comment_count) if item.comment_count is not None else ""),
+                ("Resolution", resolution),
+                ("Watermark", ("None" if item.watermark_free is not False else "Possible") if item.is_downloaded
+                 else ""),
+                ("Video ID", item.video_id)]
+        return [(k, str(v)) for k, v in rows if v not in (None, "", "—")]
+
+    def _set_facts(self, item: VideoItem) -> None:
+        from .logos import platform_pixmap
+        grid = self.facts_grid
+        while grid.count():
+            w = grid.takeAt(0).widget()
+            if w is not None:
+                w.hide()
+                w.deleteLater()
+        self.fact_values = {}
+        spec = by_label(item.platform)
+        for row, (key, value) in enumerate(self.facts_for(item)):
+            grid.addWidget(_label(key, prop="faint", wrap=False), row, 0, Qt.AlignLeft | Qt.AlignTop)
+            text = _label(value, select=True)
+            if key == "Platform":            # the platform's logo beside its name
+                holder = QWidget()
+                hl = QHBoxLayout(holder)
+                hl.setContentsMargins(0, 0, 0, 0)
+                hl.setSpacing(6)
+                logo = QLabel()
+                logo.setPixmap(platform_pixmap(spec.key if spec else item.platform.lower(), 16))
+                logo.setFixedSize(16, 16)
+                hl.addWidget(logo)
+                hl.addWidget(text, 1)
+                grid.addWidget(holder, row, 1)
+            else:
+                grid.addWidget(text, row, 1)
+            self.fact_values[key] = text
 
     def update_filename(self, planned: str) -> None:
         item = self.item

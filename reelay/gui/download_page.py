@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (QApplication, QComboBox, QDialog, QDialogButtonBo
                                QTabBar, QTableView, QToolButton, QVBoxLayout, QWidget)
 
 from .. import APP_NAME
-from ..downloader import QUALITY_BEST, QUALITY_LABELS
+from ..downloader import QUALITY_BEST, QUALITY_LABELS, video_dimensions
 from ..library import Library
 from ..models import Profile, Status, VideoItem
 from ..naming import DEFAULT_TEMPLATE, slugify
@@ -832,6 +832,7 @@ class DownloadPage(QWidget):
         items = self._selected_items()
         self.naming.set_example_item(items[0] if items else None)
         if len(items) == 1:
+            self._fill_dimensions(items[0])
             self.detail.show_item(items[0], self.model.planned_filename(items[0]))
             self.inspector.set_title("")
             self._load_player(items[0])
@@ -845,6 +846,17 @@ class DownloadPage(QWidget):
             self.detail.show_empty()
             self._load_player(None)
             self.split.dismiss()
+
+    def _fill_dimensions(self, item: VideoItem) -> None:
+        """A video downloaded before Reelay kept its frame size: read it from the file once, and keep it."""
+        if (item.width and item.height) or not item.is_downloaded or not self.profile:
+            return
+        path = item.path(self.folder)
+        dims = video_dimensions(path) if path is not None and path.is_file() else None
+        if dims:
+            item.width, item.height = dims
+            self.store.save_video(self.profile.id, item)
+            self.model.refresh(item.key)
 
     def _load_player(self, item: VideoItem | None) -> None:
         """The selected video in the player; changes only when the selection does."""

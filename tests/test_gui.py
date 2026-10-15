@@ -328,7 +328,8 @@ def open_ticket(window, store, monkeypatch):
 def test_ticket_lists_every_platform_and_posts_only_enabled_ones(app_window, monkeypatch):
     window, store, _ = app_window
     panel, _row = open_ticket(window, store, monkeypatch)
-    assert set(panel.platform_rows) == {"youtube", "tiktok", "instagram", "bluesky", "threads", "facebook"}
+    assert set(panel.sections) == {"youtube", "tiktok", "instagram", "bluesky", "threads", "facebook"}
+    assert set(panel.platform_boxes) == set(panel.sections)             # one chip and one section each
     going = {p for p, box in panel.platform_boxes.items() if box.isChecked()}
     assert going == {"youtube", "threads"}                               # the ticket's targets
     assert panel._targets() == ["youtube"]                              # only YouTube posts automatically

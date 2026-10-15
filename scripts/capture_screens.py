@@ -128,7 +128,10 @@ def capture(theme: str, home: str, clips: list[str], out: str, only: list[str], 
     from reelay import rules as R
     from reelay.gui import branding
     from reelay.gui.app import create_window
-    from reelay.models import Account, Post, Source, Stage, VideoItem
+    from datetime import datetime, timedelta, timezone
+
+    from reelay.models import Account, Dispatch, DispatchStatus, ManualPost, Post, PostStatus, Source, Stage, VideoItem
+    from reelay.pipeline import utc_iso
     from reelay.paths import db_path
     from reelay.store import Store
     from reelay.tokens import MemoryTokenStore
@@ -180,12 +183,29 @@ def capture(theme: str, home: str, clips: list[str], out: str, only: list[str], 
                 ("tiktok", "jl-open-id", "Juniper Lane", "@juniperlane"),
                 ("threads", "1784140000000", "juniperlane", "@juniperlane"),
                 ("bluesky", "did:plc:juniperlane", "juniperlane.bsky.social", "@juniperlane.bsky.social")]
+    saved = {}
     for platform, ext, name, handle in accounts:
-        acc = store.save_account(Account(profile_id=prof.id, platform=platform, external_id=ext,
-                                         display_name=name, handle=handle))
+        acc = saved[platform] = store.save_account(Account(profile_id=prof.id, platform=platform, external_id=ext,
+                                                           display_name=name, handle=handle))
         secret = (Tokens("demo", "demo", 9e12).to_json() if platform == "youtube" else
                   json.dumps({"access_token": "demo", "user_id": ext, "handle": handle, "app_password": "demo"}))
         tokens.set(acc.token_key, secret)
+    # ---- the Scheduled column holds what is really scheduled. Each card there used to be only *placed* in
+    # Scheduled, so it read "✓ Ready · not started", and the website showed that. Now: YouTube scheduled by
+    # Reelay (uploaded, private until its time) and, for the first, TikTok scheduled by hand in TikTok's app.
+    soon = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0) + timedelta(days=2, hours=3)
+    for n, row in enumerate((rows[2], rows[3])):
+        when = utc_iso(soon + timedelta(days=2 * n))
+        post = store.get_post(row) or Post(video_row=row, title=VIDEOS[3][0], description=VIDEOS[3][1],
+                                           target_platforms=["youtube"])
+        post.account_id, post.publish_at = saved["youtube"].id, when
+        post.status, post.remote_id = PostStatus.SCHEDULED, f"jl-demo-{n}"
+        [sent] = store.schedule_post(post, [Dispatch(video_row=row, platform="youtube", due_at=when, publish_at=when,
+                                                     account_id=saved["youtube"].id)], Stage.SCHEDULED)
+        store.finish_dispatch(sent.id, DispatchStatus.SCHEDULED, remote_id=f"jl-demo-{n}")
+    store.add_manual_post(ManualPost(video_row=rows[2], platform="tiktok", posted_at=utc_iso(soon), kind="scheduled",
+                                     note="Scheduled in TikTok"))
+
     store.add_source(Source(profile_id=prof.id, name="@juniperlane on TikTok", platform="tiktok",
                             url="https://www.tiktok.com/@juniperlane", mine=True))
     store.add_source(Source(profile_id=prof.id, name="@juniperlane on Instagram", platform="instagram",
@@ -221,6 +241,7 @@ def capture(theme: str, home: str, clips: list[str], out: str, only: list[str], 
                              "done": ["filled TikTok caption", "platforms: YouTube, TikTok, Instagram, Threads"]}])
 
     window = create_window(app, store, tokens)
+    window.board.sync = lambda force=False: None   # the demo's scheduled posts are not on YouTube: never ask it
     window.accounts.set_oauth_client(OAuthClient("demo.apps.googleusercontent.com", "demo"))
     window.menuBar().hide()            # on a Mac the menu bar is at the top of the screen, not in the window
     window.resize(WIDTH, HEIGHT)
@@ -463,19 +484,23 @@ def capture_help(app, theme: str, store, window, rows: list[int], out: Path) -> 
     card_rect = col.view.visualRect(idx)
     card = frac(QRect(col.view.viewport().mapTo(window, card_rect.topLeft()), card_rect.size()))
     save("ticket", window.grab(), {
-        "card": card, "ready": at(panel.readiness_header), "platforms": at(panel.platforms_section),
+        "card": card, "ready": at(panel.readiness_header), "platforms": at(panel.picker),
         "save": at(panel.save_btn), "post": at(panel.upload_btn), "close": at(board.inspector.close_btn)})
     scroll_to(panel.fill_btn)
-    section = panel.copy_sections["youtube"]
+    section = panel.sections["youtube"]
     copy = next((b for b in section.findChildren(QPushButton) if b.text() == "Copy"), section)
     save("ticket-copy", window.grab(), {"card": card, "fill": at(panel.fill_btn), "caption": at(section),
                                         "copy": at(copy)})
-    scroll_to(panel.platforms_section)
-    row = panel.platform_rows["tiktok"]
-    save("ticket-platforms", window.grab(), {
-        "platforms": at(panel.platforms_section), "youtube": at(panel.platform_rows["youtube"]),
-        "tiktok": at(row), "publish": at(row.handoff_btn) if row.handoff_btn.isVisible() else at(row),
-        "post": at(panel.upload_btn)})
+    youtube_open = panel.sections["youtube"].expanded
+    panel.sections["youtube"].set_expanded(False)        # folded, so TikTok's header and its menu fit below
+    settle(0.3)
+    scroll_to(panel.picker)
+    tiktok = panel.sections["tiktok"]                    # its ⋯ menu open, at Publish…
+    pix, pos = with_menu(tiktok.menu_btn.menu(), tiktok.menu_btn)
+    save("ticket-platforms", pix, {
+        "platforms": at(panel.picker), "youtube": at(panel.platform_boxes["youtube"]), "tiktok": at(tiktok.header),
+        **menu_marks(tiktok.menu_btn.menu(), pos, {"publish": "Publish…"}), "post": at(panel.upload_btn)})
+    panel.sections["youtube"].set_expanded(youtube_open)
     panel.details.toggle.setChecked(True)                 # open: the transcript, cover and topic fields show
     settle(0.5)
     scroll_to(panel.details, 16)

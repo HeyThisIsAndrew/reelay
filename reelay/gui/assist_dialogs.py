@@ -2,26 +2,21 @@
 
 from __future__ import annotations
 
+from functools import partial
+
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import (QComboBox, QDialog, QDialogButtonBox, QHBoxLayout, QLabel, QLineEdit,
-                               QListWidget, QListWidgetItem, QPlainTextEdit, QPushButton, QScrollArea, QVBoxLayout,
-                               QWidget)
+from PySide6.QtWidgets import (QComboBox, QDialog, QDialogButtonBox, QHBoxLayout, QLineEdit, QListWidget,
+                               QListWidgetItem, QPlainTextEdit, QPushButton, QVBoxLayout, QWidget)
 
 from .. import assist
 from .theme import set_prop
 from .tips import tip
 from .workers import CallWorker
+from .widgets import label, scroll_page
 
 
-def _label(text: str = "", prop: str | None = None) -> QLabel:
-    lab = QLabel(text)
-    lab.setWordWrap(True)
-    lab.setTextFormat(Qt.RichText)
-    lab.setOpenExternalLinks(True)
-    if prop:
-        lab.setProperty(prop, True)
-    return lab
+_label = partial(label, links=True)
 
 
 # ====================================================================== spelling & grammar
@@ -44,12 +39,7 @@ class GrammarDialog(QDialog):
         self.preview.setFixedHeight(90)
         tip(self.preview, "The text as it will be after your fixes")
         lay.addWidget(self.preview)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        self.body = QWidget()
-        self.list = QVBoxLayout(self.body)
-        self.list.setSpacing(8)
-        scroll.setWidget(self.body)
+        scroll, self.body, self.list = scroll_page(spacing=8)
         lay.addWidget(scroll, 1)
         buttons = QDialogButtonBox(QDialogButtonBox.Cancel | QDialogButtonBox.Ok)
         buttons.button(QDialogButtonBox.Ok).setText("Use Fixed Text")
