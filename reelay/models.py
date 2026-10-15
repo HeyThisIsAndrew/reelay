@@ -171,8 +171,10 @@ class VideoItem:
         put("comment_count", info.get("comment_count"))
         put("tags", info.get("tags"))
         put("uploader", info.get("uploader") or info.get("channel"))
-        put("width", info.get("width"))
-        put("height", info.get("height"))
+        dims = info_dimensions(info)
+        if dims:
+            put("width", dims[0])
+            put("height", dims[1])
         put("thumbnail_url", pick_thumbnail(info))
         put("upload_date", info.get("upload_date") or _date_from_timestamp(info.get("timestamp")))
         if info.get("webpage_url"):
@@ -207,6 +209,27 @@ class VideoItem:
                    url=info.get("webpage_url") or info.get("url") or fallback_url)
         item.update_from_info(info)
         return item
+
+
+def info_dimensions(info: dict) -> tuple[int, int] | None:
+    """A yt-dlp info dict's frame size. yt-dlp copies the chosen format's width and height to the top level only
+    when it selects formats; full metadata fetched without that (``process=False``, as the Library's details are)
+    has them only on each format. So: the top level, then what was downloaded, then the requested formats, then
+    the largest video format offered."""
+    def pair(d: dict) -> tuple[int, int] | None:
+        w, h = d.get("width"), d.get("height")
+        return (int(w), int(h)) if isinstance(w, (int, float)) and isinstance(h, (int, float)) and w and h else None
+
+    found = pair(info)
+    if found:
+        return found
+    for key in ("requested_downloads", "requested_formats"):
+        for d in info.get(key) or []:
+            found = pair(d)
+            if found:
+                return found
+    videos = [p for p in (pair(f) for f in info.get("formats") or [] if f.get("vcodec") != "none") if p]
+    return max(videos, key=lambda wh: wh[0] * wh[1]) if videos else None
 
 
 def _date_from_timestamp(ts) -> str:
