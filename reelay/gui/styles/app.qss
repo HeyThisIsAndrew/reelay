@@ -294,3 +294,16 @@ QFrame#HelpCallout { background: {bg_raised}; border-radius: {radius}px; }
 QFrame#HelpDiagram { background: {card_fill}; border: 1px solid {card_edge}; border-radius: {radius_card}px; }
 QFrame#HelpPlace { background: {bg_raised}; border-radius: {radius}px; }
 QStackedWidget#HelpStack QPushButton:focus { border-color: {accent_color}; }
+
+/* Approvals (approvals_dialog.py). Amber = waiting for your decision; red = a request that skips a safety check */
+QPushButton#ApprovalsButton { background: {warning_soft}; color: {warning_ink}; border: 1px solid {warning};
+                              font-weight: 600; padding: 6px 14px; }
+QPushButton#ApprovalsButton:hover { background: {warning_soft}; border-color: {warning_ink}; }
+QFrame#ApprovalBar { background: {warning_soft}; border: none; border-bottom: 1px solid {warning}; }
+QLabel#ApprovalBarText { color: {warning_ink}; }
+QFrame#ForceNotice { background: {danger_soft}; border: 1px solid {danger}; border-radius: {radius}px; }
+QLabel#ForceNoticeTitle { color: {danger_ink}; font-weight: 700; }
+QLabel#ForceNoticeText { color: {danger_ink}; }
+QLabel#ApprovalOutcome { border-radius: {radius}px; padding: 7px 10px; background: {bg_raised}; }
+QLabel#ApprovalOutcome[tone="danger"] { background: {danger_soft}; color: {danger_ink}; }
+QListWidget#ApprovalList::item { padding: 8px 6px; border-bottom: 1px solid {divider}; }

@@ -13,8 +13,8 @@ from PySide6.QtCore import (QAbstractListModel, QItemSelectionModel, QMimeData, 
                             QEvent, QSettings, QSize, Qt, QTimer, Signal)
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QKeySequence, QPainter, QPainterPath, QPen, QShortcut
 from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QListView, QMenu,
-                               QMessageBox, QScrollArea, QSplitter, QStackedWidget, QStyle, QStyledItemDelegate, QToolButton,
-                               QVBoxLayout, QWidget)
+                               QMessageBox, QPushButton, QScrollArea, QSplitter, QStackedWidget, QStyle,
+                               QStyledItemDelegate, QToolButton, QVBoxLayout, QWidget)
 
 from ..models import Platform, Post, PostStatus, Profile, Stage
 from ..coverage import needs_work as coverage_needs_work, short_summary
@@ -386,7 +386,10 @@ class CardDelegate(QStyledItemDelegate):
         held = [d for d in card.dispatches if d.status == "interrupted"]
         if held:                                    # waiting for your decision: amber
             names = ", ".join(Platform.LABELS.get(d.platform, d.platform) for d in held)
-            return f"⚠ Interrupted on {names}: open to decide", p.danger
+            return f"⚠ Interrupted on {names}: open to decide", p.warning_text
+        asked = getattr(card, "pending_approvals", [])
+        if asked:                                   # an agent's request: also waiting for you
+            return f"⏳ Waiting for your approval: {', '.join(asked)}", p.warning_text
         if card.search_hit is not None and card.search_hit.spoken:   # found by what was said in the video
             said = card.search_hit.snippet.replace("«", "").replace("»", "")
             return f"🗣 “{said}”", p.text_primary
@@ -395,7 +398,9 @@ class CardDelegate(QStyledItemDelegate):
             short = {"youtube": "YT", "bluesky": "Bsky", "threads": "Thr", "facebook": "FB"}
             text = "  ".join(f"{short.get(d.platform, d.platform)} {marks.get(d.status, '?')}" for d in card.dispatches)
             failed = any(d.status == "failed" for d in card.dispatches)
-            return text, p.danger if failed else (p.success if post and post.status == PostStatus.PUBLISHED else p.text_primary)
+            live = post and post.status == PostStatus.PUBLISHED
+            waiting = any(d.status in ("pending", "scheduled") for d in card.dispatches)
+            return text, p.danger if failed else (p.success if live else (p.info_text if waiting else p.text_primary))
         if post and post.status == PostStatus.UPLOADING:
             return ("Waiting to upload…" if card.queued else f"Uploading {(card.progress or 0):.0f}%"), p.text_primary
         if post and post.status == PostStatus.SCHEDULED:
@@ -573,6 +578,13 @@ class BoardPage(QWidget):
         self.sync_label = QLabel()
         self.sync_label.setProperty("faint", True)
         head.addWidget(self.sync_label)
+        # What AI assistants asked to do, waiting for a person: amber, and only there while something waits
+        self.approvals_btn = tip(QPushButton(objectName="ApprovalsButton"),
+                                 "Requests from AI assistants waiting for your decision: review, approve or reject")
+        self.approvals_btn.setCursor(Qt.PointingHandCursor)
+        self.approvals_btn.clicked.connect(lambda: self.open_approvals())
+        self.approvals_btn.hide()
+        head.addWidget(self.approvals_btn)
         self.search = tip(QLineEdit(objectName="SearchField"),
                           "Find videos by words in the title, caption, any platform's copy, hashtags, topic, keywords, "
                           "notes, or anything said in the video (its transcript). Put \"quotes\" around an exact "
@@ -677,12 +689,29 @@ class BoardPage(QWidget):
         self.side = QStackedWidget()
         self.side.addWidget(self.panel)
         self.side.addWidget(self.bulk)
+        # A selected card that an AI assistant's request is waiting on says so above its ticket
+        self.approval_bar = QFrame(objectName="ApprovalBar")
+        bar = QHBoxLayout(self.approval_bar)
+        bar.setContentsMargins(12, 8, 8, 8)
+        self.approval_text = QLabel(objectName="ApprovalBarText")
+        self.approval_text.setWordWrap(True)
+        bar.addWidget(self.approval_text, 1)
+        review = QPushButton("Review…")
+        review.clicked.connect(lambda: self.open_approvals(self.selected_id))
+        bar.addWidget(review)
+        self.approval_bar.hide()
+        side_box = QWidget()
+        side_lay = QVBoxLayout(side_box)
+        side_lay.setContentsMargins(0, 0, 0, 0)
+        side_lay.setSpacing(0)
+        side_lay.addWidget(self.approval_bar)
+        side_lay.addWidget(self.side, 1)
         # The ticket only takes room while a card is selected; otherwise the columns get the whole width.
         # The side panel: the video on top, the ticket under it.
         self.player = PlayerWidget()
         self.player.message.connect(self._status)
         self._player_row: int | None = None
-        self.media_pane = MediaPane(self.player, self.side)
+        self.media_pane = MediaPane(self.player, side_box)
         self.inspector = Inspector(self.media_pane, "")
         self.inspector.closeRequested.connect(self.close_inspector)
         self.split = ContextualSplitter(cols, self.inspector, self.pipeline.store, "board", default_width=420)
@@ -837,7 +866,7 @@ class BoardPage(QWidget):
         self.reload()
 
     def _on_store_change(self, change: Change) -> None:
-        if change.entity in ("video", "post", "account", "dispatch") and self.profile and \
+        if change.entity in ("video", "post", "account", "dispatch", "approval") and self.profile and \
                 change.profile_id in (None, self.profile.id):
             self._schedule_reload()
 
@@ -875,12 +904,19 @@ class BoardPage(QWidget):
     def _mark_cards(self) -> None:
         """What each card's small marks say: an Automation acted on it, an agent's request awaits
         approval, or an AI assistant made the latest copy edit."""
-        from ..models import ApprovalStatus
         from ..rules import AGENT_ORIGINS, COPY_REVISION_FIELDS, activity
+        from ..scoped_pipeline import OPERATION_LABELS
+        from .approvals_dialog import pending_for
         try:
             origins = self.store.latest_copy_origins(self.profile.id, COPY_REVISION_FIELDS)
-            pending = {vid for req in self.store.list_approvals(self.profile.id, ApprovalStatus.PENDING, 500)
-                       for vid in req.target_ids}
+            requests = pending_for(self.store, self.profile.id)        # expired ones don't count
+            asked: dict[int, list[str]] = {}
+            for req in requests:
+                for vid in req.target_ids:
+                    label = OPERATION_LABELS.get(req.operation, req.operation)
+                    if label not in asked.setdefault(vid, []):
+                        asked[vid].append(label)
+            pending = set(asked)
             ran: dict[int, list[str]] = {}
             for entry in activity(self.store, self.profile.id):
                 if entry.get("done") and entry["done"] != ["nothing to do"]:
@@ -890,7 +926,9 @@ class BoardPage(QWidget):
         except Exception:  # noqa: BLE001 — marks are a nicety; never break the board
             log.exception("Couldn't work out card marks")
             return
+        self._set_approvals_count(len(requests))
         for card in self.cards.values():
+            card.pending_approvals = asked.get(card.id, [])
             card.flags = {"automation": ran.get(card.id, [])[:3], "approval": card.id in pending,
                           "ai": origins.get(card.id, "").split(":")[0] in AGENT_ORIGINS}
 
@@ -1000,6 +1038,7 @@ class BoardPage(QWidget):
             self.bulk_ids = [c.id for c in chosen]
             self.selected_id = None
             self.bulk.show_cards(chosen)
+            self.approval_bar.hide()
             self.side.setCurrentWidget(self.bulk)
             self.player.clear()
             self._player_row = None
@@ -1142,6 +1181,21 @@ class BoardPage(QWidget):
         self._status(f"Archived {n} video{'s' if n > 1 else ''}.")
         self.reload()
 
+    def _set_approvals_count(self, n: int) -> None:
+        self.approvals_btn.setText(f"Approvals · {n}")
+        self.approvals_btn.setVisible(n > 0)
+
+    def open_approvals(self, focus_video: int | None = None) -> None:
+        """Review what AI assistants asked to do (approvals_dialog.py). Deciding never carries anything
+        out here: the dispatcher does, once, after checking the video hasn't changed."""
+        if not self.profile:
+            return
+        from .approvals_dialog import ApprovalsDialog
+        dialog = ApprovalsDialog(self.pipeline, self.profile, self, focus_video=focus_video)
+        dialog.exec()
+        if dialog.decided:
+            self.reload()
+
     def open_archived(self) -> None:
         if not self.profile:
             return
@@ -1217,6 +1271,7 @@ class BoardPage(QWidget):
         self._hide_inspector()
 
     def _hide_inspector(self) -> None:
+        self.approval_bar.hide()
         self.side.setCurrentWidget(self.panel)
         self.panel.show_empty()
         self.player.clear()
@@ -1237,6 +1292,11 @@ class BoardPage(QWidget):
     def _show_card(self, card: Card) -> None:
         self.inspector.set_title("")
         self.split.reveal()
+        asked = getattr(card, "pending_approvals", [])
+        self.approval_bar.setVisible(bool(asked))
+        if asked:
+            self.approval_text.setText(f"⏳ Waiting for your approval: <b>{', '.join(asked)}</b>, asked by an AI "
+                                       "assistant. Nothing happens until you decide.")
         self._load_player(card)
         self.panel.show_card(card, self.pipeline.youtube_accounts(self.profile.id),
                              self.pipeline.add_shorts_default_for(card.row))

@@ -109,6 +109,60 @@ def execute_approved(pipeline) -> list[ApprovalRequest]:
     return handled
 
 
+# ---------------------------------------------------------------------- what a request would do
+def skips_ready_check(req: ApprovalRequest) -> bool:
+    """True when approving would schedule a platform even if its Ready check isn't passing (force)."""
+    return req.operation == "schedule" and bool(req.payload.get("force"))
+
+
+def explain(store, req: ApprovalRequest) -> list[str]:
+    """What approving ``req`` would do, in plain sentences (the app's Approvals window shows these)."""
+    from .models import Platform
+    a = req.payload
+    names = lambda keys: ", ".join(Platform.LABELS.get(k, k) for k in keys)   # noqa: E731
+    n = len(req.target_ids)
+    videos = f"{n} video{'s' if n != 1 else ''}"
+    op = req.operation
+    if op == "schedule":
+        where = names(a["platforms"]) if a.get("platforms") else "every platform this ticket is going to"
+        when = f"for {a['scheduled_at']}" if a.get("scheduled_at") else "now"
+        lines = [f"Schedule it on {where}, {when}."]
+        if a.get("add_shorts"):
+            lines.append("Add #Shorts to the YouTube title.")
+        if a.get("force"):
+            lines.append("Skips the Ready check: platforms whose checklist isn't passing would be scheduled too.")
+        return lines
+    if op == "archive":
+        return [f"{'Archive' if a.get('archived') else 'Bring back'} {videos}."]
+    if op == "bulk_update":
+        fields = ", ".join(sorted((a.get("changes") or {}).keys())) or "nothing"
+        return [f"Change {fields} on {videos}."]
+    if op == "import_sheet":
+        return [f"Apply a sheet import to {videos}" + (", replacing what's there." if a.get("overwrite") else
+                                                        ", filling only empty fields.")]
+    if op == "set_platform_state":
+        what = {"none": "not posted", "scheduled": "scheduled", "published": "posted"}.get(a.get("state"), a.get("state"))
+        return [f"Mark {names([a.get('platform', '')])} as {what}" + (f" ({a['url']})." if a.get("url") else ".")]
+    if op == "mark_posted":
+        return [f"Record that you posted it on {names([a.get('platform', '')])} by hand"
+                + (f" ({a['url']})." if a.get("url") else ".")]
+    if op == "resolve_interrupted":
+        sent = store.get_dispatch(int(a.get("dispatch_id") or 0)) if a.get("dispatch_id") else None
+        on = f" on {names([sent.platform])}" if sent else ""
+        action = a.get("action")
+        if action == "retry":
+            return [f"Send the interrupted post{on} again now.",
+                    "If the first send actually went through, it would be posted twice: check the platform first."]
+        if action == "posted":
+            return [f"Record that the interrupted post{on} did go out" + (f" ({a['url']})." if a.get("url") else ".")]
+        if action == "cancel":
+            return [f"Cancel the interrupted post{on}: it won't be sent."]
+        return [f"Decide the interrupted post{on}: {action}."]
+    if op == "delete_source":
+        return [f"Delete saved source #{a.get('source_id')}."]
+    return [f"An operation Reelay doesn't know ({op}). Reject it."]
+
+
 # ---------------------------------------------------------------------- terminal
 def describe(store, req: ApprovalRequest) -> str:
     titles = []

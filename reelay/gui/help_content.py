@@ -272,8 +272,10 @@ BOARD = Category("board", "Board & preparing posts", "Turn videos into ready-to-
                "themselves when they're scheduled or posted.",
                "Columns you add are steps you drag cards in and out of.")),
            Detail("Marks on cards", (
-               "⚡ an Automation acted on the video, ⏳ an AI assistant's change is waiting for your approval, "
-               "✦ an AI assistant last edited the caption.",
+               "⚡ an Automation acted on the video, ⏳ an AI assistant's change is waiting for your approval "
+               "(review it under **Approvals** at the top of the Board), ✦ an AI assistant last edited the caption.",
+               "Colours mean one thing each: green live, blue scheduled, red blocked or failed, amber waiting "
+               "for your decision. Ready is the normal state, so it has no colour.",
                "**Filter → Cards** switches between large cards and compact ones.",
                "The sidebar's **Up next** shows the next post going out for this profile."))),
           ("board-captions", "board-readiness", "board-find"),
