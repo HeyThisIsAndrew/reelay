@@ -19,8 +19,8 @@ from datetime import datetime, timedelta
 from PySide6.QtCore import QDateTime, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QGuiApplication
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDateTimeEdit, QFrame, QHBoxLayout, QLabel, QLineEdit,
-                               QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QSizePolicy,
-                               QStackedWidget, QVBoxLayout, QWidget)
+                               QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QSizePolicy, QStackedWidget,
+                               QVBoxLayout, QWidget)
 
 from ..models import Account, Platform, Post, PostStatus, Privacy, Stage
 from ..pipeline import Card
@@ -35,7 +35,7 @@ from .tips import tip
 from .thumbnails import ThumbnailCache
 from .ticket_widgets import PlatformPicker, PlatformSection, PublishingHistory, ReadinessHeader, TicketDetails
 from .video_widgets import VideoTools
-from .widgets import Collapsible
+from .widgets import Collapsible, scroll_page
 
 PRIVACY_LABELS = {Privacy.PUBLIC: "Public", Privacy.UNLISTED: "Unlisted", Privacy.PRIVATE: "Private"}
 
@@ -205,13 +205,8 @@ class PostPanel(QFrame):
 
     # ---------------------------------------------------------------- build
     def _build_editor(self) -> QWidget:
-        scroll = QScrollArea(objectName="DetailScroll")
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        body = QWidget(objectName="DetailBody")
-        lay = QVBoxLayout(body)
-        lay.setContentsMargins(18, 18, 18, 18)
-        lay.setSpacing(6)
+        scroll, body, lay = scroll_page((18, 18, 18, 18), 6, name="DetailScroll", body_name="DetailBody",
+                                        sideways=False)
 
         # Title block: the title with its column as a pill on the right, the facts under it. With the player
         # above (no cover), it lines up exactly with the readiness card below.
@@ -432,7 +427,6 @@ class PostPanel(QFrame):
         self.history_section.add(self.history)
         lay.addWidget(self.history_section)
         lay.addStretch()
-        scroll.setWidget(body)
 
         # ---- the action dock: always in reach, however far you've scrolled
         page = QWidget()

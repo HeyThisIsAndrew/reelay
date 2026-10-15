@@ -16,12 +16,13 @@ from pathlib import Path
 
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QKeySequence, QPainter, QPainterPath, QPen, QPixmap, QShortcut
-from PySide6.QtWidgets import (QButtonGroup, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
-                               QScrollArea, QSizePolicy, QStackedWidget, QToolButton, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QButtonGroup, QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea,
+                               QSizePolicy, QStackedWidget, QToolButton, QVBoxLayout, QWidget)
 
 from . import help_content as H
 from . import icons, theme
 from .tips import tip
+from . import widgets
 
 SHOTS = Path(__file__).with_name("help_shots")
 SHOT_RATIO = 1100 / 1760                       # every Help picture is a 1440 × 900 window
@@ -58,12 +59,7 @@ def plain(text: str) -> str:
 
 
 def _label(text: str = "", name: str = "", wrap: bool = True, prop: str = "") -> QLabel:
-    lab = QLabel(objectName=name) if name else QLabel()
-    lab.setTextFormat(Qt.RichText)
-    lab.setText(rich(text))
-    lab.setWordWrap(wrap)
-    if prop:
-        lab.setProperty(prop, True)
+    lab = widgets.label(rich(text), prop or None, name=name or None, wrap=wrap, rich=True)
     lab.setTextInteractionFlags(Qt.NoTextInteraction)
     return lab
 
@@ -392,15 +388,8 @@ class HelpHome(QWidget):
         self.store = store
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        body = QWidget(objectName="Page")
-        lay = QVBoxLayout(body)
-        lay.setContentsMargins(28, 22, 28, 28)
-        lay.setSpacing(18)
-        scroll.setWidget(body)
+        scroll, body, lay = widgets.scroll_page((28, 22, 28, 28), 18, body_name="Page", frameless=True,
+                                                sideways=False)
         outer.addWidget(scroll)
 
         head = QHBoxLayout()
@@ -408,13 +397,9 @@ class HelpHome(QWidget):
         title = QLabel("Help", objectName="PageTitle")
         head.addWidget(title, 0, Qt.AlignVCenter)
         head.addStretch()
-        self.search = QLineEdit(objectName="HelpSearch")
-        self.search.setPlaceholderText("Search help: schedule, TikTok, archive…")
-        self.search.setClearButtonEnabled(True)
-        self.search.setAttribute(Qt.WA_MacShowFocusRect, False)
-        self.search.addAction(icons.icon("search", 16), QLineEdit.LeadingPosition)
-        self.search.setMinimumWidth(320)
-        tip(self.search, "Find a guide by what you want to do. Press Return to open the first result.")
+        self.search = widgets.search_field("Search help: schedule, TikTok, archive…",
+                                           "Find a guide by what you want to do. Press Return to open the first "
+                                           "result.", name="HelpSearch", min_width=320)
         self.search.textChanged.connect(self._on_search)
         self.search.returnPressed.connect(self._open_first)
         head.addWidget(self.search)

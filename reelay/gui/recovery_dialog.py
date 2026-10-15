@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QDialog, QDialogButtonBox, QFrame, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
-                               QMessageBox, QPushButton, QScrollArea, QVBoxLayout, QWidget)
+                               QMessageBox, QPushButton, QVBoxLayout)
 
 from ..models import Dispatch, Platform
 from ..pipeline import MISSED_MESSAGE, PipelineError
@@ -12,6 +12,7 @@ from ..text import local_text, short_title
 from .logos import platform_pixmap
 from .theme import set_prop
 from .tips import tip
+from .widgets import scroll_page
 
 
 class RecoveryDialog(QDialog):
@@ -33,12 +34,7 @@ class RecoveryDialog(QDialog):
         intro.setWordWrap(True)
         intro.setProperty("muted", True)
         lay.addWidget(intro)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        body = QWidget()
-        self.rows = QVBoxLayout(body)
-        self.rows.setSpacing(8)
-        scroll.setWidget(body)
+        scroll, _body, self.rows = scroll_page(spacing=8)
         lay.addWidget(scroll, 1)
         self.row_widgets: dict[int, QFrame] = {}
         for d in dispatches:

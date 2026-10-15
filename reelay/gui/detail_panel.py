@@ -15,8 +15,8 @@ from pathlib import Path
 
 from PySide6.QtCore import QRectF, QSize, Qt, QUrl, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QPainter, QPainterPath, QPixmap
-from PySide6.QtWidgets import (QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QScrollArea,
-                               QSizePolicy, QStackedWidget, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QSizePolicy,
+                               QStackedWidget, QVBoxLayout, QWidget)
 
 from ..models import Status, VideoItem
 from ..platform_specs import by_label
@@ -25,6 +25,7 @@ from . import theme
 from .tips import tip
 from .table_model import fmt_count, fmt_date, fmt_duration
 from .thumbnails import ThumbnailCache
+from .widgets import label, scroll_page
 
 COVER_SIZE = QSize(198, 352)  # 9:16
 
@@ -42,13 +43,7 @@ def _label(text: str = "", *, prop: str | None = None, wrap: bool = True, select
     if prop == "section":
         from .theme import heading
         text = heading(text)
-    lab = QLabel(text)
-    lab.setWordWrap(wrap)
-    if prop:
-        lab.setProperty(prop, True)
-    if select:
-        lab.setTextInteractionFlags(Qt.TextSelectableByMouse)
-    return lab
+    return label(text, prop, wrap=wrap, select=select)
 
 
 class CoverView(QLabel):
@@ -120,15 +115,8 @@ class DetailPanel(QFrame):
         return w
 
     def _build_single(self) -> QWidget:
-        scroll = QScrollArea()
-        scroll.setObjectName("DetailScroll")
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        body = QWidget()
-        body.setObjectName("DetailBody")
-        lay = QVBoxLayout(body)
-        lay.setContentsMargins(20, 20, 20, 20)
-        lay.setSpacing(6)
+        scroll, body, lay = scroll_page((20, 20, 20, 20), 6, name="DetailScroll", body_name="DetailBody",
+                                        sideways=False)
 
         self.cover = CoverView()
         lay.addWidget(self.cover, 0, Qt.AlignHCenter)
@@ -212,7 +200,6 @@ class DetailPanel(QFrame):
         lay.addLayout(row)
         lay.addWidget(self.open_btn)
         lay.addStretch()
-        scroll.setWidget(body)
         return scroll
 
     def _build_multi(self) -> QWidget:

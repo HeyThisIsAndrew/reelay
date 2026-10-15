@@ -15,9 +15,9 @@ from datetime import datetime
 
 from PySide6.QtCore import Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import (QComboBox, QDialog, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QHeaderView,
-                               QLabel, QMessageBox, QPushButton, QScrollArea, QSizePolicy, QTreeWidget,
-                               QTreeWidgetItem, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QComboBox, QDialog, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel,
+                               QMessageBox, QPushButton, QSizePolicy, QTreeWidget, QTreeWidgetItem, QVBoxLayout,
+                               QWidget)
 
 from dataclasses import dataclass
 
@@ -31,7 +31,7 @@ from ..youtube import OAuthClient, YouTubeError, watch_url
 from . import theme
 from .chrome import icon_button
 from .grid import balanced_columns, equalize_heights, max_columns_for, place_even
-from .widgets import LineLabel
+from .widgets import LineLabel, label as _label, scroll_page
 from .logos import platform_pixmap
 from .post_panel import local_text
 from .sources_panel import SourcesPanel
@@ -39,16 +39,6 @@ from .setup_dialogs import GoogleSignInDialog, ProviderSignInDialog, TokenSetupD
 from .theme import set_prop
 from .tips import tip
 from .workers import CallWorker
-
-def _label(text: str, prop: str | None = None, rich: bool = False) -> QLabel:
-    lab = QLabel(text)
-    lab.setWordWrap(True)
-    if prop:
-        lab.setProperty(prop, True)
-    if rich:
-        lab.setTextFormat(Qt.RichText)
-        lab.setOpenExternalLinks(True)
-    return lab
 
 
 def _card() -> tuple[QFrame, QVBoxLayout]:
@@ -304,13 +294,7 @@ class AccountsPage(QWidget):
         self._build_ui()
 
     def _build_ui(self) -> None:
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        body = QWidget(objectName="Page")
-        self.body = QVBoxLayout(body)
-        self.body.setContentsMargins(24, 18, 24, 24)
-        self.body.setSpacing(14)
-        scroll.setWidget(body)
+        scroll, body, self.body = scroll_page((24, 18, 24, 24), 14, body_name="Page")
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.addWidget(scroll)

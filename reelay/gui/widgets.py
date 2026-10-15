@@ -1,4 +1,6 @@
-"""Small reusable widgets: the friendly file-naming picker and the growing search box."""
+"""Small reusable widgets: the friendly file-naming picker, the growing search box, and the building
+blocks every page and dialog used to write out for itself (a label, a search field, a read-only table,
+a scrolling page body). One definition each, so a change to how they look or behave lands everywhere."""
 
 from __future__ import annotations
 
@@ -6,14 +8,101 @@ from datetime import date
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFontMetrics, QKeyEvent
-from PySide6.QtWidgets import (QComboBox, QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit, QSizePolicy,
-                               QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
+                               QPlainTextEdit, QScrollArea, QSizePolicy, QTableWidget, QVBoxLayout, QWidget)
 
 from ..models import VideoItem
 from ..naming import DEFAULT_TEMPLATE, PRESETS, TOKENS, render_stem
 from .tips import tip
 
 CUSTOM = "__custom__"
+
+
+# ---------------------------------------------------------------------- building blocks
+def label(text: str = "", prop: str | None = None, *, name: str | None = None, wrap: bool = True,
+          rich: bool = False, links: bool = False, select: bool = False) -> QLabel:
+    """A label. ``prop`` is its style role ("muted", "faint", "danger", …, see app.qss); ``rich`` forces rich
+    text; ``links`` makes its links open in the browser (and implies rich); ``select`` lets the reader select
+    and copy the text."""
+    lab = QLabel(text)
+    if name:
+        lab.setObjectName(name)
+    lab.setWordWrap(wrap)
+    if rich or links:
+        lab.setTextFormat(Qt.RichText)
+    if links:
+        lab.setOpenExternalLinks(True)
+    if select:
+        lab.setTextInteractionFlags(Qt.TextSelectableByMouse)
+    if prop:
+        lab.setProperty(prop, True)
+    return lab
+
+
+def search_field(placeholder: str, hint: str, *, name: str = "SearchField", width: int | None = None,
+                 min_width: int | None = None) -> QLineEdit:
+    """The one-line search box: a magnifier at the start, a clear button at the end, and a tip."""
+    from . import icons
+    field = QLineEdit(objectName=name)
+    field.setPlaceholderText(placeholder)
+    field.setClearButtonEnabled(True)
+    field.setAttribute(Qt.WA_MacShowFocusRect, False)
+    field.addAction(icons.icon("search", 16), QLineEdit.LeadingPosition)
+    if width:
+        field.setFixedWidth(width)
+    if min_width:
+        field.setMinimumWidth(min_width)
+    return tip(field, hint)
+
+
+def table(headers: list[str], *, rows: int = 0, select: str = "rows", grid: bool = True,
+          stretch: tuple[int, ...] | None = None, fit: tuple[int, ...] = ()) -> QTableWidget:
+    """A read-only table with column headings and no row numbers. ``select``: "rows" (one or more rows by
+    clicking), "extended" (shift/cmd too) or "none". Columns in ``fit`` size to their contents; the rest
+    (or just ``stretch``) share the width."""
+    t = QTableWidget(rows, len(headers))
+    t.setHorizontalHeaderLabels(headers)
+    t.verticalHeader().hide()
+    t.setEditTriggers(QAbstractItemView.NoEditTriggers)
+    t.setShowGrid(grid)
+    if select == "none":
+        t.setSelectionMode(QAbstractItemView.NoSelection)
+    else:
+        t.setSelectionBehavior(QAbstractItemView.SelectRows)
+        if select == "extended":
+            t.setSelectionMode(QAbstractItemView.ExtendedSelection)
+    hh = t.horizontalHeader()
+    for col in range(len(headers)):
+        if col in fit:
+            hh.setSectionResizeMode(col, QHeaderView.ResizeToContents)
+        elif stretch is None or col in stretch:
+            hh.setSectionResizeMode(col, QHeaderView.Stretch)
+    return t
+
+
+def scroll_page(margins: tuple[int, int, int, int] | None = None, spacing: int | None = None, *,
+                name: str | None = None, body_name: str | None = None, frameless: bool = False,
+                sideways: bool = True) -> tuple[QScrollArea, QWidget, QVBoxLayout]:
+    """A vertically scrolling body: the scroll area, the widget inside it and that widget's layout.
+    ``sideways=False`` never scrolls sideways (a side panel wraps its text instead)."""
+    scroll = QScrollArea()
+    if name:
+        scroll.setObjectName(name)
+    scroll.setWidgetResizable(True)
+    if frameless:
+        scroll.setFrameShape(QFrame.NoFrame)
+    if not sideways:
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+    body = QWidget()
+    if body_name:
+        body.setObjectName(body_name)
+    lay = QVBoxLayout(body)
+    if margins is not None:                     # else the style's own margins, as a plain layout has
+        lay.setContentsMargins(*margins)
+    if spacing is not None:
+        lay.setSpacing(spacing)
+    scroll.setWidget(body)
+    return scroll, body, lay
 
 
 def _sample_item() -> VideoItem:

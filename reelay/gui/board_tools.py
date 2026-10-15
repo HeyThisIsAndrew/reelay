@@ -6,8 +6,8 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
-                               QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidgetItem, QPushButton,
-                               QScrollArea, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
+                               QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidgetItem, QPushButton, QTableWidgetItem,
+                               QVBoxLayout)
 
 from ..models import ContentType
 from ..sheet_import import FIELDS, LABELS, MATCH_KEYS, SheetError, fetch_google_sheet, google_export_url, read_file
@@ -17,14 +17,7 @@ from .theme import set_prop
 from .ticket_widgets import AUTHORIZATION_PRESETS
 from .tips import tip
 from .workers import CallWorker
-
-
-def _label(text: str = "", prop: str | None = None) -> QLabel:
-    lab = QLabel(text)
-    lab.setWordWrap(True)
-    if prop:
-        lab.setProperty(prop, True)
-    return lab
+from .widgets import label as _label, scroll_page, table
 
 
 def _section(text: str, hint: str) -> QLabel:
@@ -48,14 +41,8 @@ class BulkPanel(QFrame):
         self.setMinimumWidth(330)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
-        scroll = QScrollArea(objectName="DetailScroll")
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        body = QWidget(objectName="DetailBody")
-        lay = QVBoxLayout(body)
-        lay.setContentsMargins(18, 18, 18, 18)
-        lay.setSpacing(8)
-        scroll.setWidget(body)
+        scroll, body, lay = scroll_page((18, 18, 18, 18), 8, name="DetailScroll", body_name="DetailBody",
+                                        sideways=False)
         outer.addWidget(scroll)
 
         self.title = QLabel(objectName="DetailTitle")
@@ -209,12 +196,7 @@ class ImportDialog(QDialog):
         body = QHBoxLayout()
         left = QVBoxLayout()
         left.addWidget(_section("COLUMNS", "Which ticket field each column of the sheet fills"))
-        self.mapping_table = QTableWidget(0, 2)
-        self.mapping_table.setHorizontalHeaderLabels(["SHEET COLUMN", "GOES TO"])
-        self.mapping_table.verticalHeader().hide()
-        self.mapping_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.mapping_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        self.mapping_table.setSelectionMode(QAbstractItemView.NoSelection)
+        self.mapping_table = table(["SHEET COLUMN", "GOES TO"], select="none")
         left.addWidget(self.mapping_table, 1)
         self.overwrite = tip(QCheckBox("Replace what's already filled in"),
                              "Off: only empty fields are filled (safest). On: the sheet's values replace what's "
@@ -225,15 +207,8 @@ class ImportDialog(QDialog):
 
         right = QVBoxLayout()
         right.addWidget(_section("PREVIEW", "What happens to each row of the sheet"))
-        self.preview = QTableWidget(0, 4)
-        self.preview.setHorizontalHeaderLabels(["ROW", "VIDEO", "WILL SET", "NOTES"])
-        self.preview.verticalHeader().hide()
+        self.preview = table(["ROW", "VIDEO", "WILL SET", "NOTES"], fit=(0,))
         self.preview.setWordWrap(True)
-        self.preview.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        hh = self.preview.horizontalHeader()
-        hh.setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        for col in (1, 2, 3):
-            hh.setSectionResizeMode(col, QHeaderView.Stretch)
         right.addWidget(self.preview, 1)
         body.addLayout(right, 3)
         lay.addLayout(body, 1)
@@ -368,13 +343,7 @@ class ArchivedDialog(QDialog):
         lay.setContentsMargins(18, 14, 18, 12)
         lay.addWidget(_label("Archived videos are hidden from the Board and the Library. Their files, "
                              "tickets and history are kept.", "muted"))
-        self.table = QTableWidget(0, 2)
-        self.table.setHorizontalHeaderLabels(["VIDEO", "ARCHIVED"])
-        self.table.verticalHeader().hide()
-        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.table = table(["VIDEO", "ARCHIVED"], fit=(1,))
         lay.addWidget(self.table, 1)
         row = QHBoxLayout()
         self.restore_btn = tip(QPushButton("Bring Back"), "Put the highlighted videos back where they were")

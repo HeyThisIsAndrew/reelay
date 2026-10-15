@@ -20,10 +20,11 @@ from __future__ import annotations
 import getpass
 import socket
 from datetime import datetime, timezone
+from functools import partial
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-                               QMessageBox, QPushButton, QSizePolicy, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QDialog, QFrame, QHBoxLayout, QLineEdit, QListWidget, QListWidgetItem, QMessageBox,
+                               QPushButton, QSizePolicy, QVBoxLayout, QWidget)
 
 from .. import approvals
 from ..models import ApprovalRequest, ApprovalStatus, Platform
@@ -32,6 +33,7 @@ from ..scoped_pipeline import OPERATION_LABELS
 from ..text import local_text, short_title
 from .theme import set_prop
 from .tips import tip
+from .widgets import label
 
 
 def decided_by() -> str:
@@ -60,15 +62,7 @@ def video_titles(store, req: ApprovalRequest, limit: int = 5) -> list[str]:
     return out
 
 
-def _label(text: str = "", prop: str | None = None, name: str | None = None) -> QLabel:
-    lab = QLabel(text)
-    lab.setWordWrap(True)
-    lab.setTextInteractionFlags(Qt.TextSelectableByMouse)
-    if name:
-        lab.setObjectName(name)
-    if prop:
-        lab.setProperty(prop, True)
-    return lab
+_label = partial(label, select=True)     # its words can be selected and copied
 
 
 class ApprovalsDialog(QDialog):

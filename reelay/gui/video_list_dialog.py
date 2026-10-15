@@ -12,18 +12,17 @@ from pathlib import Path
 
 from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QIcon, QPixmap
-from PySide6.QtWidgets import (QAbstractItemView, QApplication, QDialog, QDialogButtonBox, QFileDialog, QHBoxLayout,
-                               QHeaderView, QLabel, QLineEdit, QMessageBox, QPushButton, QTableWidget,
-                               QTableWidgetItem, QVBoxLayout)
+from PySide6.QtWidgets import (QApplication, QDialog, QDialogButtonBox, QFileDialog, QHBoxLayout, QHeaderView, QLabel,
+                               QMessageBox, QPushButton, QTableWidgetItem, QVBoxLayout)
 
 from ..handoff import reveal_in_file_manager
 from ..manifest import write_manifest
 from ..models import VideoItem
-from . import icons
 from .logos import platform_icon
 from .table_model import fmt_count, fmt_date, fmt_duration
 from .theme import set_prop
 from .tips import tip
+from .widgets import search_field, table
 
 REVEAL = "Show in Finder" if sys.platform == "darwin" else "Show in Explorer"
 THUMB_W, THUMB_H = 36, 64
@@ -75,25 +74,16 @@ class VideoListDialog(QDialog):
         self.count = QLabel(objectName="PageCount")
         head.addWidget(self.count)
         head.addStretch()
-        self.search = QLineEdit(objectName="SearchField")
-        self.search.setPlaceholderText("Search titles, names and files")
-        self.search.setClearButtonEnabled(True)
-        self.search.setFixedWidth(300)
-        self.search.addAction(icons.icon("search", 16), QLineEdit.LeadingPosition)
-        tip(self.search, "Show only videos whose title, your name for it, platform or file name match")
+        self.search = search_field("Search titles, names and files",
+                                   "Show only videos whose title, your name for it, platform or file name match",
+                                   width=300)
         self.search.textChanged.connect(self._filter)
         head.addWidget(self.search)
         lay.addLayout(head)
 
-        self.table = QTableWidget(0, len(COLUMNS))
-        self.table.setHorizontalHeaderLabels(COLUMNS)
-        self.table.verticalHeader().hide()
+        self.table = table(COLUMNS, select="extended", grid=False, stretch=())   # widths are set below
         self.table.verticalHeader().setDefaultSectionSize(THUMB_H + 8)
         self.table.setIconSize(QSize(THUMB_W, THUMB_H))
-        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
-        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.table.setShowGrid(False)
         self.table.setWordWrap(False)
         self.table.setAttribute(Qt.WA_MacShowFocusRect, False)
         hh = self.table.horizontalHeader()

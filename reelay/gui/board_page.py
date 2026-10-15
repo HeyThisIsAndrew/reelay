@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from PySide6.QtCore import (QAbstractListModel, QItemSelectionModel, QMimeData, QModelIndex, QPointF, QRect, QRectF,
                             QEvent, QSettings, QSize, Qt, QTimer, Signal)
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QKeySequence, QPainter, QPainterPath, QPen, QShortcut
-from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QListView, QMenu,
+from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFrame, QHBoxLayout, QLabel, QListView, QMenu,
                                QMessageBox, QPushButton, QScrollArea, QSplitter, QStackedWidget, QStyle,
                                QStyledItemDelegate, QToolButton, QVBoxLayout, QWidget)
 
@@ -41,6 +41,7 @@ from .table_model import fmt_count, fmt_duration, short_date
 from .thumbnails import ThumbnailCache
 from .tips import tip
 from .workers import CallWorker
+from .widgets import search_field
 
 log = logging.getLogger("reelay")
 
@@ -617,15 +618,10 @@ class BoardPage(QWidget):
         self.approvals_btn.clicked.connect(lambda: self.open_approvals())
         self.approvals_btn.hide()
         head.addWidget(self.approvals_btn)
-        self.search = tip(QLineEdit(objectName="SearchField"),
-                          "Find videos by words in the title, caption, any platform's copy, hashtags, topic, keywords, "
-                          "notes, or anything said in the video (its transcript). Put \"quotes\" around an exact "
-                          "phrase.")
-        self.search.setPlaceholderText("Search titles, captions and what was said")
-        self.search.setClearButtonEnabled(True)
-        self.search.setFixedWidth(340)
-        self.search.setAttribute(Qt.WA_MacShowFocusRect, False)
-        self.search.addAction(icons.icon("search", 16), QLineEdit.LeadingPosition)
+        self.search = search_field(
+            "Search titles, captions and what was said",
+            "Find videos by words in the title, caption, any platform's copy, hashtags, topic, keywords, notes, or "
+            "anything said in the video (its transcript). Put \"quotes\" around an exact phrase.", width=340)
         self.search.textChanged.connect(self._on_search)
         head.addWidget(self.search)
 

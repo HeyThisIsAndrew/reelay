@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFrame, QGridLayout, QHBoxLayout,
-                               QLabel, QLineEdit, QListWidget, QMenu, QMessageBox, QPushButton, QScrollArea,
-                               QToolButton, QVBoxLayout, QWidget)
+                               QLabel, QLineEdit, QListWidget, QMenu, QMessageBox, QPushButton, QToolButton,
+                               QVBoxLayout, QWidget)
 
 from .. import rules as R
 from ..columns import load as load_columns
@@ -13,6 +13,7 @@ from ..text import local_text
 from . import icons, theme
 from .theme import set_prop
 from .tips import tip
+from .widgets import scroll_page
 
 
 def _muted(text: str, prop: str = "muted") -> QLabel:
@@ -310,13 +311,7 @@ class AutomationsPage(QWidget):
         self.setObjectName("Page")
         self.pipeline, self.store = pipeline, pipeline.store
         self.profile = None
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        body = QWidget(objectName="Page")
-        self.lay = QVBoxLayout(body)
-        self.lay.setContentsMargins(24, 18, 24, 24)
-        self.lay.setSpacing(12)
-        scroll.setWidget(body)
+        scroll, body, self.lay = scroll_page((24, 18, 24, 24), 12, body_name="Page")
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.addWidget(scroll)
