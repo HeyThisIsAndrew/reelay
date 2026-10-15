@@ -1,8 +1,9 @@
 """Approving what agents asked for: a person decides, the running app carries it out.
 
 Decisions (``approve`` / ``reject``) are only made by a person on this
-computer: from the terminal now (``python -m reelay.approvals``), from the
-app later. The agent API can list requests but has no way to decide them.
+computer: in the app's Approvals window (``gui/approvals_dialog.py``) or the
+terminal (``python -m reelay.approvals``), both through these functions. The
+agent API can list requests but has no way to decide them.
 
 Approving checks the target hash first: if the video changed after the request
 (a caption edited, a file replaced, another post scheduled), the request
