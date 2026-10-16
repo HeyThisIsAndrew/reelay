@@ -189,11 +189,11 @@ QFrame#SourceBar { background: transparent; border: none; }
 QWidget#Player { background: {bg_surface}; }
 QWidget#PlayerBar { background: {bg_surface}; border-bottom: 1px solid {divider}; }
 QWidget#PlayerNotice { background: {bg_raised}; border-bottom: 1px solid {divider}; }
-QToolButton#PlayerButton { background: transparent; border: none; border-radius: {radius_sm}px; padding: 5px;
-                           color: {text_secondary}; font-size: {font_sm}pt; font-weight: 600; min-width: 18px; }
+QToolButton#PlayerButton { background: transparent; border: none; border-radius: {radius_sm}px; padding: 4px;
+                           color: {text_secondary}; font-size: {font_sm}pt; font-weight: 600; }
 QToolButton#PlayerButton:hover { background: {bg_hover}; color: {text_primary}; }
 QToolButton#PlayerButton:checked { background: {accent_soft}; }
-QLabel#PlayerTime { color: {text_secondary}; font-size: {font_sm}pt; padding: 0 6px; }
+QLabel#PlayerTime { color: {text_secondary}; font-size: {font_sm}pt; padding: 0 2px; }
 QSlider#Scrubber::groove:horizontal { height: 4px; background: {bg_pressed}; border-radius: 2px; }
 QSlider#Scrubber::sub-page:horizontal { background: {accent_color}; border-radius: 2px; }
 QSlider#Scrubber::add-page:horizontal { background: {bg_pressed}; border-radius: 2px; }
@@ -206,6 +206,7 @@ QSlider#Scrubber:disabled::handle:horizontal { background: {bg_pressed}; }
 /* ---- Command Center ---- */
 QLabel#CommandTitle { font-size: {font_h1}pt; font-weight: 700; }
 QWidget#ActionDock { background: {bg_surface}; border-top: 1px solid {divider}; }
+QWidget#ActionDock QPushButton { padding: 7px 12px; }
 QLabel#DockSummary { color: {text_secondary}; font-size: {font_sm}pt; }
 QPlainTextEdit#CopyText, QLineEdit#CopyText { font-size: {font_lg}pt; }
 QSlider#TileSlider::groove:horizontal { height: 4px; background: {bg_pressed}; border-radius: 2px; }

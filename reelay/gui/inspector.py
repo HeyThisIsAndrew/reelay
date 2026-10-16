@@ -49,13 +49,14 @@ class Inspector(QFrame):
 
 
 class _Slide(QWidget):
-    """Holds the inspector at its full width and clips it while the splitter opens or
-    closes, so it slides in instead of squashing its contents. Reports no minimum size of
-    its own, which is what lets the splitter animate it from zero."""
+    """Holds the inspector at its minimum width while the splitter opens or closes, so it slides in
+    instead of squashing its contents. Reports no minimum size of its own, which is what lets the
+    splitter animate it from zero."""
 
-    def __init__(self, child: QWidget, parent=None):
+    def __init__(self, child: QWidget, min_width: int = 320, parent=None):
         super().__init__(parent)
         self.child = child
+        self.min_width = min_width
         child.setParent(self)
 
     def minimumSizeHint(self) -> QSize:  # noqa: N802
@@ -66,7 +67,7 @@ class _Slide(QWidget):
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
-        self.child.setGeometry(0, 0, max(self.width(), self.child.minimumSizeHint().width()), self.height())
+        self.child.setGeometry(0, 0, max(self.width(), self.min_width), self.height())
 
 
 class ContextualSplitter(QSplitter):
@@ -85,7 +86,7 @@ class ContextualSplitter(QSplitter):
         self.min_width = min_width
         main.setMinimumWidth(self.MAIN_MIN_WIDTH)
         self.inspector = inspector
-        self.slide = _Slide(inspector)
+        self.slide = _Slide(inspector, min_width)
         self.addWidget(main)
         self.addWidget(self.slide)
         self.setStretchFactor(0, 1)
@@ -182,7 +183,11 @@ class MediaPane(QWidget):
 
     def __init__(self, player: QWidget, content: QWidget, parent=None):
         super().__init__(parent)
+        from PySide6.QtWidgets import QSizePolicy
         self.player, self.content = player, content
+        stage = getattr(player, "stage", None)
+        if stage is not None:
+            stage.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
@@ -192,10 +197,17 @@ class MediaPane(QWidget):
     def set_player_visible(self, on: bool) -> None:
         self.player.setVisible(on)
 
-    def resizeEvent(self, event) -> None:  # noqa: N802
-        super().resizeEvent(event)
+    def _sync_stage_height(self) -> None:
         stage = getattr(self.player, "stage", None)
-        if stage is not None:
-            target_h = int(min(self.width() * 9 / 16, self.height() * 0.48))
+        if stage is not None and self.width() > 0 and self.height() > 0:
+            notice = getattr(self.player, "notice", None)
+            notice_h = notice.heightForWidth(self.width()) if notice is not None and notice.isVisible() else 0
+            if notice_h < 0 and notice is not None and notice.isVisible():
+                notice_h = notice.sizeHint().height()
+            target_h = max(48, int(min(self.width() * 9 / 16, self.height() * 0.48) - notice_h * 0.75))
             if stage.height() != target_h:
                 stage.setFixedHeight(target_h)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._sync_stage_height()

@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QFontMetrics, QKeyEvent
 from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
                                QPlainTextEdit, QScrollArea, QSizePolicy, QTableWidget, QVBoxLayout, QWidget)
@@ -80,6 +80,14 @@ def table(headers: list[str], *, rows: int = 0, select: str = "rows", grid: bool
     return t
 
 
+class _VerticalBody(QWidget):
+    """A scroll-area body that never insists on a minimum width, so QScrollArea shrinks it to the viewport
+    width and lets children wrap instead of clipping their right edge."""
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        return QSize(0, super().minimumSizeHint().height())
+
+
 def scroll_page(margins: tuple[int, int, int, int] | None = None, spacing: int | None = None, *,
                 name: str | None = None, body_name: str | None = None, frameless: bool = False,
                 sideways: bool = True) -> tuple[QScrollArea, QWidget, QVBoxLayout]:
@@ -93,7 +101,7 @@ def scroll_page(margins: tuple[int, int, int, int] | None = None, spacing: int |
         scroll.setFrameShape(QFrame.NoFrame)
     if not sideways:
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-    body = QWidget()
+    body = QWidget() if sideways else _VerticalBody()
     if body_name:
         body.setObjectName(body_name)
     lay = QVBoxLayout(body)

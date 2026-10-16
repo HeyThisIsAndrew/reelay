@@ -17,11 +17,11 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QRectF, QSizeF, Qt, QUrl, Signal
+from PySide6.QtCore import QRectF, QSize, QSizeF, Qt, QUrl, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QKeySequence, QPainter, QPixmap, QShortcut
-from PySide6.QtWidgets import (QGraphicsItem, QGraphicsPixmapItem, QGraphicsScene, QGraphicsView, QHBoxLayout,
-                               QLabel, QPushButton, QSlider, QStyle, QStyleOptionSlider, QToolButton, QToolTip,
-                               QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QGraphicsItem, QGraphicsPixmapItem, QGraphicsScene, QGraphicsView, QGridLayout,
+                               QHBoxLayout, QLabel, QPushButton, QSlider, QStyle, QStyleOptionSlider, QToolButton,
+                               QToolTip, QVBoxLayout, QWidget)
 
 from . import icons, theme
 from .theme import set_prop
@@ -110,6 +110,12 @@ class Scrubber(QSlider):
         self.setCursor(Qt.PointingHandCursor)
         self.setRange(0, 0)
 
+    def sizeHint(self) -> QSize:  # noqa: N802
+        return QSize(24, super().sizeHint().height())
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        return QSize(24, super().minimumSizeHint().height())
+
     def _value_at(self, x: float) -> int:
         opt = QStyleOptionSlider()
         self.initStyleOption(opt)
@@ -136,7 +142,9 @@ class PlayerWidget(QWidget):
 
     def __init__(self, compact: bool = False, parent=None):
         super().__init__(parent)
+        from PySide6.QtWidgets import QSizePolicy
         self.setObjectName("Player")
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
         self.path: Path | None = None
         self.original: Path | None = None
         self._started = False
@@ -165,14 +173,14 @@ class PlayerWidget(QWidget):
 
         # the line under the picture: problems and their fixes
         self.notice = QWidget(objectName="PlayerNotice")
+        self.notice.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
         nv = QVBoxLayout(self.notice)
         nv.setContentsMargins(14, 10, 14, 10)
-        nv.setSpacing(8)
-        nl = QHBoxLayout()
-        nl.setSpacing(8)
+        nv.setSpacing(6)
         self.notice_text = QLabel()
         self.notice_text.setWordWrap(True)
         self.notice_text.setProperty("muted", True)
+        self.notice_text.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
         self.preview_btn = tip(QPushButton("Make a Preview Copy"),
                                "Make a small H.264 copy that plays here (in the background, cached). The original "
                                "file isn't changed.")
@@ -181,25 +189,25 @@ class PlayerWidget(QWidget):
         self.external_btn = tip(QPushButton(OPEN_EXTERNALLY), "Open the video file in your Mac's video player")
         self.external_btn.clicked.connect(self.open_externally)
         nv.addWidget(self.notice_text)
-        nl.addWidget(self.preview_btn)
-        nl.addWidget(self.external_btn)
-        nl.addStretch()
-        nv.addLayout(nl)
+        nv.addWidget(self.preview_btn)
+        nv.addWidget(self.external_btn)
         self.notice.setVisible(False)
         lay.addWidget(self.notice)
 
         # controls
         bar = QWidget(objectName="PlayerBar")
         bl = QHBoxLayout(bar)
-        bl.setContentsMargins(8, 4, 8, 6)
-        bl.setSpacing(4)
+        bl.setContentsMargins(6, 4, 6, 6)
+        bl.setSpacing(1)
         self.play_btn = self._button("play", "Play or pause (Space)")
         self.play_btn.clicked.connect(self.toggle)
         self.scrubber = Scrubber()
         tip(self.scrubber, "Click to jump; hover to see the time")
         self.time = QLabel("0:00 / 0:00", objectName="PlayerTime")
+        self.time.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Preferred)
         self.speed_btn = QToolButton(objectName="PlayerButton")
         self.speed_btn.setText("1×")
+        self.speed_btn.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Preferred)
         tip(self.speed_btn, "Playback speed")
         self.speed_btn.clicked.connect(self.cycle_speed)
         self.mute_btn = self._button("volume", "Mute or unmute (M)")
@@ -287,6 +295,8 @@ class PlayerWidget(QWidget):
         self.scrubber.setRange(0, 0)
         self.time.setText("0:00 / 0:00")
         self._set_controls_enabled(False)
+        if hasattr(self.parentWidget(), "_sync_stage_height"):
+            self.parentWidget()._sync_stage_height()
 
     def _set_poster(self, cover: QPixmap | None) -> None:
         self.poster.setPixmap(cover if cover is not None and not cover.isNull() else QPixmap())
@@ -310,11 +320,29 @@ class PlayerWidget(QWidget):
         self.open_btn.setEnabled(bool(self.original and self.original.is_file()))
         self.badge.setVisible(on and not self._started)
 
+    def _sync_notice_height(self) -> None:
+        if self.notice_text.text():
+            w = max((self.notice.width() or self.width() or 320) - 28, 120)
+            target = max(0, self.notice_text.heightForWidth(w))
+            if self.notice_text.minimumHeight() != target:
+                self.notice_text.setMinimumHeight(target)
+                if self.notice.layout() is not None:
+                    self.notice.layout().activate()
+                if self.layout() is not None:
+                    self.layout().activate()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._sync_notice_height()
+
     def _notice(self, text: str, preview: bool = False, external: bool = True) -> None:
         self.notice_text.setText(text)
         self.preview_btn.setVisible(preview)
         self.external_btn.setVisible(external and bool(self.original and self.original.is_file()))
         self.notice.setVisible(True)
+        self._sync_notice_height()
+        if hasattr(self.parentWidget(), "_sync_stage_height"):
+            self.parentWidget()._sync_stage_height()
 
     # ------------------------------------------------------------ controls
     def toggle(self) -> None:

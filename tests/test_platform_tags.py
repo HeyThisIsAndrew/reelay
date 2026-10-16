@@ -348,3 +348,23 @@ def test_download_list_right_click_archive(ticket, monkeypatch):
     item = page.model.find(key)
     page._archive([item])
     assert store.get_video(row).archived_at and page.model.find(key) is None
+
+
+def test_platform_chips_reflow_when_ticket_column_is_narrow(ticket, qapp):
+    from PySide6.QtWidgets import QScrollArea
+    window, _store, b, _row = ticket
+    window.resize(1180, 860)
+    scroll = b.panel.findChild(QScrollArea)
+    b.split._anim.stop()
+    b.split.width_wanted = 420
+    b.split._settle()
+    qapp.processEvents()
+    assert b.panel.picker._columns == 3
+    assert scroll.widget().width() <= scroll.viewport().width()
+
+    b.split.width_wanted = 320
+    b.split._settle()
+    qapp.processEvents()
+    assert b.panel.picker._columns == 2
+    assert scroll.widget().width() <= scroll.viewport().width()
+

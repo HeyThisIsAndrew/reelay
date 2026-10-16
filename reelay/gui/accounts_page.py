@@ -294,7 +294,7 @@ class AccountsPage(QWidget):
         self._build_ui()
 
     def _build_ui(self) -> None:
-        scroll, body, self.body = scroll_page((24, 18, 24, 24), 14, body_name="Page")
+        scroll, body, self.body = scroll_page((24, 18, 24, 24), 14, body_name="Page", sideways=False)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.addWidget(scroll)

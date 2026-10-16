@@ -77,9 +77,8 @@ BLOCK_TIPS = {
 
 
 class CopyBlock(QWidget):
-    """Label + live count + Copy button over an editor. `compact`: the block is
-    its platform's only one, so the section's header already names it and shows
-    its count; the block keeps just its editor with Assist and Copy under it."""
+    """Label + live count over an editor, with Assist and Copy under it. `compact`: the block is
+    its platform's only one, so the section's header already names it and shows its count."""
 
     def __init__(self, key: str, label: str, multiline: bool, placeholder: str, on_copy, on_change, on_assist=None,
                  compact: bool = False):
@@ -98,6 +97,22 @@ class CopyBlock(QWidget):
         head.addWidget(self.counter)
         title.setVisible(not compact)
         self.counter.setVisible(not compact)
+        if not compact:
+            lay.addLayout(head)
+        if multiline:
+            self.editor = QPlainTextEdit()
+            self.editor.setFixedHeight(110 if key == "description" else 72)
+            self.editor.textChanged.connect(on_change)
+        else:
+            self.editor = QLineEdit()
+            self.editor.textChanged.connect(lambda _t: on_change())
+        self.editor.setPlaceholderText(placeholder)
+        tip(self.editor, BLOCK_TIPS.get(key, ""))
+        tip(self.counter, "How much of the platform's limit this text uses. Red means it's too long; "
+                          "Reelay never cuts your text.")
+        lay.addWidget(self.editor)
+        actions = QHBoxLayout()
+        actions.addStretch(1)
         self.copy_btn = QPushButton("Copy")
         set_prop(self.copy_btn, "flat")
         tip(self.copy_btn, "Copy this text so you can paste it into the app or website")
@@ -113,25 +128,9 @@ class CopyBlock(QWidget):
             menu.addAction("Check Spelling & Grammar…", lambda: on_assist(self, "check"))
             menu.addAction("Rewrite with Local AI…", lambda: on_assist(self, "rewrite"))
             self.assist_btn.setMenu(menu)
-            head.addWidget(self.assist_btn)
-        head.addWidget(self.copy_btn)
-        if not compact:
-            lay.addLayout(head)
-        if multiline:
-            self.editor = QPlainTextEdit()
-            self.editor.setFixedHeight(110 if key == "description" else 72)
-            self.editor.textChanged.connect(on_change)
-        else:
-            self.editor = QLineEdit()
-            self.editor.textChanged.connect(lambda _t: on_change())
-        self.editor.setPlaceholderText(placeholder)
-        tip(self.editor, BLOCK_TIPS.get(key, ""))
-        tip(self.counter, "How much of the platform's limit this text uses. Red means it's too long; "
-                          "Reelay never cuts your text.")
-        lay.addWidget(self.editor)
-        if compact:
-            head.insertStretch(0, 1)          # the (hidden) label held the stretch: keep the buttons on the right
-            lay.addLayout(head)
+            actions.addWidget(self.assist_btn)
+        actions.addWidget(self.copy_btn)
+        lay.addLayout(actions)
 
     def text(self) -> str:
         return self.editor.toPlainText() if isinstance(self.editor, QPlainTextEdit) else self.editor.text()
@@ -170,7 +169,7 @@ class PostPanel(QFrame):
     def __init__(self, thumbs: ThumbnailCache, parent=None):
         super().__init__(parent)
         self.setObjectName("DetailFrame")
-        self.setMinimumWidth(330)
+        self.setMinimumWidth(300)
         self.thumbs = thumbs
         self.card: Card | None = None
         self.accounts: list[Account] = []
@@ -246,12 +245,12 @@ class PostPanel(QFrame):
         self.status_box = QFrame(objectName="Card")
         sb = QVBoxLayout(self.status_box)
         sb.setContentsMargins(12, 10, 12, 10)
+        sb.setSpacing(6)
         self.status_text = QLabel()
         self.status_text.setWordWrap(True)
         self.upload_bar = QProgressBar()
         self.upload_bar.setTextVisible(False)
         self.upload_bar.setRange(0, 1000)
-        brow = QHBoxLayout()
         self.open_btn = tip(QPushButton("Open on YouTube"), "Watch this video on YouTube")
         self.open_btn.clicked.connect(self._open_remote)
         self.studio_btn = tip(QPushButton("Edit in YouTube Studio"), "Change this video's details in YouTube Studio")
@@ -264,11 +263,10 @@ class PostPanel(QFrame):
                                "Say whether it was posted, try again, or cancel it.")
         set_prop(self.recover_btn, "primary")
         self.recover_btn.clicked.connect(lambda: self.card and self.recoverRequested.emit(self.card.id))
-        for b in (self.recover_btn, self.open_btn, self.studio_btn, self.cancel_btn):
-            brow.addWidget(b)
         sb.addWidget(self.status_text)
         sb.addWidget(self.upload_bar)
-        sb.addLayout(brow)
+        for b in (self.recover_btn, self.open_btn, self.studio_btn, self.cancel_btn):
+            sb.addWidget(b)
         lay.addSpacing(8)
         lay.addWidget(self.status_box)
 
@@ -281,10 +279,11 @@ class PostPanel(QFrame):
 
         # ---- the copy: one section per ticked platform, all the same widget
         lay.addSpacing(6)
-        fill_row = QHBoxLayout()
         self.none_note = QLabel("Tick a platform above to write its caption.")
         self.none_note.setProperty("faint", True)
-        fill_row.addWidget(self.none_note, 1)
+        self.none_note.setWordWrap(True)
+        lay.addWidget(self.none_note)
+        fill_row = QHBoxLayout()
         fill_row.addStretch()
         self.fill_btn = tip(QPushButton("Fill Empty from Original Post"),
                             "Fill this ticket's empty boxes from the original caption, within each platform's "
@@ -370,10 +369,14 @@ class PostPanel(QFrame):
 
         fl.addWidget(tip(_section("WHO CAN SEE IT, AND WHEN"), "Choose who can watch it on YouTube and when it goes live"))
         self.privacy = tip(QComboBox(), "Public: anyone. Unlisted: only people with the link. Private: only you.")
+        self.privacy.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.privacy.setMinimumContentsLength(10)
         for key, label in PRIVACY_LABELS.items():
             self.privacy.addItem(label, key)
         fl.addWidget(self.privacy)
         self.when = tip(QComboBox(), "Post right away, or pick a date and time")
+        self.when.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.when.setMinimumContentsLength(10)
         self.when.addItem("Publish as soon as it's uploaded", "now")
         self.when.addItem("Schedule for a date and time", "schedule")
         self.when.currentIndexChanged.connect(self._sync_when)
@@ -436,7 +439,7 @@ class PostPanel(QFrame):
         pl.addWidget(scroll, 1)
         self.dock = QWidget(objectName="ActionDock")
         dl = QVBoxLayout(self.dock)
-        dl.setContentsMargins(16, 10, 16, 12)
+        dl.setContentsMargins(12, 10, 12, 12)
         dl.setSpacing(8)
         self.dock_summary = QLabel(objectName="DockSummary")
         self.dock_summary.setWordWrap(True)

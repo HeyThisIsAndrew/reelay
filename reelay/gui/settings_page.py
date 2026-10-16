@@ -47,7 +47,7 @@ class SettingsPage(QWidget):
         self.setObjectName("Page")
         self.store = store
         self.services = services
-        scroll, body, lay = scroll_page((24, 18, 24, 24), 14, body_name="Page")
+        scroll, body, lay = scroll_page((24, 18, 24, 24), 14, body_name="Page", sideways=False)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.addWidget(scroll)

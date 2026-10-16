@@ -442,17 +442,16 @@ class HelpHome(QWidget):
         self.topics_title = _kicker("Browse topics")
         lay.addWidget(self.topics_title)
         self.topics = QWidget()
-        grid = QGridLayout(self.topics)
-        grid.setContentsMargins(0, 0, 0, 0)
-        grid.setSpacing(12)
+        self.topics_grid = QGridLayout(self.topics)
+        self.topics_grid.setContentsMargins(0, 0, 0, 0)
+        self.topics_grid.setSpacing(12)
         self.cards: list[CategoryCard] = []
-        for n, category in enumerate(H.CATEGORIES):           # six topics: an even 3 × 2 grid
+        for category in H.CATEGORIES:
             card = CategoryCard(category)
             card.clicked.connect(lambda _=False, c=category: self.guideRequested.emit(c.guides[0].key))
             self.cards.append(card)
-            grid.addWidget(card, n // 3, n % 3)
-        for col in range(3):
-            grid.setColumnStretch(col, 1)
+        self._topic_columns = 0
+        self._place_topics()
         lay.addWidget(self.topics)
 
         self.results = QWidget()
@@ -464,6 +463,24 @@ class HelpHome(QWidget):
         lay.addStretch()
         self.result_buttons: list[QPushButton] = []
         self.sync_tour()
+
+    def _place_topics(self) -> None:
+        from .grid import balanced_columns, max_columns_for
+        columns = balanced_columns(len(self.cards),
+                                   max_columns_for((self.width() or 960) - 56, wide=820, medium=520))
+        if columns == self._topic_columns:
+            return
+        self._topic_columns = columns
+        for card in self.cards:
+            self.topics_grid.removeWidget(card)
+        for n, card in enumerate(self.cards):
+            self.topics_grid.addWidget(card, n // columns, n % columns)
+        for col in range(len(self.cards)):
+            self.topics_grid.setColumnStretch(col, 1 if col < columns else 0)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._place_topics()
 
     def _resume_step(self) -> int:
         try:

@@ -628,11 +628,12 @@ class PlatformPicker(QWidget):
         head = QHBoxLayout()
         head.setSpacing(8)
         head.addWidget(_section("POSTING TO", POSTING_HINT))
-        head.addStretch()
         self.summary = QLabel()
         self.summary.setProperty("faint", True)
+        self.summary.setWordWrap(True)
+        self.summary.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         tip(self.summary, "How far this video has got on the platforms it's going to")
-        head.addWidget(self.summary)
+        head.addWidget(self.summary, 1)
         lay.addLayout(head)
         self.grid = QGridLayout()
         self.grid.setContentsMargins(0, 0, 0, 0)
@@ -647,13 +648,17 @@ class PlatformPicker(QWidget):
             chip.setIconSize(QSize(16, 16))
             chip.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
             chip.setCheckable(True)
-            chip.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            chip.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
             chip.setAccessibleName(f"Post to {label(p)}")
             tip(chip, self.chip_tip(p, False))
             chip.toggled.connect(lambda on, k=p: self.platformToggled.emit(k, on))
             self.chips[p] = chip
         self._columns = 0
         self._arrange(3)
+
+    def minimumSizeHint(self):  # noqa: N802
+        from PySide6.QtCore import QSize
+        return QSize(self.CHIP_MIN, super().minimumSizeHint().height())
 
     @staticmethod
     def chip_tip(platform: str, on: bool, note: str = "") -> str:
@@ -681,6 +686,7 @@ class PlatformPicker(QWidget):
             self.grid.addWidget(chip, n // columns, n % columns)
         for c in range(len(self.chips)):
             self.grid.setColumnStretch(c, 1 if c < columns else 0)
+        self.updateGeometry()
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)

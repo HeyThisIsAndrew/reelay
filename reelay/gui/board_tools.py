@@ -38,7 +38,7 @@ class BulkPanel(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("DetailFrame")
-        self.setMinimumWidth(330)
+        self.setMinimumWidth(300)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         scroll, body, lay = scroll_page((18, 18, 18, 18), 8, name="DetailScroll", body_name="DetailBody",
@@ -69,11 +69,15 @@ class BulkPanel(QFrame):
         lay.addWidget(_section("SET ON EVERY SELECTED TICKET", "Leave a field blank to keep each ticket's own value"))
         self.permission = QComboBox()
         self.permission.setEditable(True)
+        self.permission.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.permission.setMinimumContentsLength(10)
         self.permission.addItem("")
         self.permission.addItems(AUTHORIZATION_PRESETS)
         self.permission.lineEdit().setPlaceholderText("Permission: leave as is")
         tip(self.permission, "Your right to use these videos, e.g. Own content")
         self.content_type = tip(QComboBox(), "What kind of videos these are")
+        self.content_type.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.content_type.setMinimumContentsLength(10)
         self.content_type.addItem("Type: leave as is", None)
         for key in ContentType.ALL:
             self.content_type.addItem(ContentType.LABELS[key], key)

@@ -311,7 +311,8 @@ class AutomationsPage(QWidget):
         self.setObjectName("Page")
         self.pipeline, self.store = pipeline, pipeline.store
         self.profile = None
-        scroll, body, self.lay = scroll_page((24, 18, 24, 24), 12, body_name="Page")
+        self._recipe_columns = 0
+        scroll, body, self.lay = scroll_page((24, 18, 24, 24), 12, body_name="Page", sideways=False)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.addWidget(scroll)
@@ -386,10 +387,10 @@ class AutomationsPage(QWidget):
         lay.addWidget(section)
         grid = QGridLayout()
         grid.setSpacing(12)
+        self.recipe_grid = grid
+        self.recipe_cards: list[QFrame] = []
         self.recipe_buttons: dict[str, QPushButton] = {}
-        from .grid import balanced_columns
-        columns = balanced_columns(len(R.RECIPES), 3)          # an even grid: every row full
-        for n, (key, (name, desc)) in enumerate(R.RECIPES.items()):
+        for key, (name, desc) in R.RECIPES.items():
             card = QFrame(objectName="Card")
             cl = QVBoxLayout(card)
             cl.setContentsMargins(16, 14, 16, 14)
@@ -402,9 +403,27 @@ class AutomationsPage(QWidget):
             add.clicked.connect(lambda _=False, k=key: self.add_recipe(k))
             self.recipe_buttons[key] = add
             cl.addWidget(add, 0, Qt.AlignLeft)
-            grid.addWidget(card, n // columns, n % columns)
+            self.recipe_cards.append(card)
         lay.addLayout(grid)
+        self._place_recipes()
         return w
+
+    def _place_recipes(self) -> None:
+        from .grid import balanced_columns, max_columns_for
+        columns = balanced_columns(len(self.recipe_cards), max_columns_for((self.width() or 720) - 48, medium=560))
+        if columns == self._recipe_columns:
+            return
+        self._recipe_columns = columns
+        for card in self.recipe_cards:
+            self.recipe_grid.removeWidget(card)
+        for n, card in enumerate(self.recipe_cards):
+            self.recipe_grid.addWidget(card, n // columns, n % columns)
+        for c in range(len(self.recipe_cards)):
+            self.recipe_grid.setColumnStretch(c, 1 if c < columns else 0)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._place_recipes()
 
     def add_recipe(self, key: str) -> None:
         if not self.profile:
