@@ -32,7 +32,8 @@ from ..columns import save as save_columns
 from .board_tools import ArchivedDialog, BulkPanel, ImportDialog
 from .bridge import change_bridge
 from . import icons
-from .cards import HoverFader, draw_frame, draw_pill, draw_thumbnail, media_label, small_font
+from .cards import (BADGE, HoverFader, draw_frame, draw_pill, draw_source_badge, draw_thumbnail, small_font,
+                    source_badge)
 from .chrome import FilterButton, Popover, icon_button
 from .inspector import ContextualSplitter, Inspector, MediaPane
 from .player import PlayerWidget
@@ -188,13 +189,25 @@ class CardDelegate(QStyledItemDelegate):
         text = 10 + 2 * tf + 4 + sf + 8 + CARD_LOGO_SIZE + 8 + sf + 12
         return QSize(width, int((width - 4) * 9 / 16) + text + 10)
 
+    def _badge_rect(self, option) -> QRectF:
+        """Where paint() puts the source badge."""
+        if self.density == "compact":
+            r = QRectF(option.rect).adjusted(2, 4, -2, -4)
+            return QRectF(r.x() + 14, r.y() + (r.height() - COVER_H) / 2 + 4, 18, 18)
+        r = QRectF(option.rect).adjusted(2, 5, -2, -5)
+        return QRectF(r.left() + 8, r.top() + 8, BADGE, BADGE)
+
     def helpEvent(self, event, view, option, index) -> bool:  # noqa: N802
         card: Card = index.data(Qt.UserRole)
-        notes = card_notes(card)
-        if notes and event.type() == QEvent.ToolTip:
+        if event.type() == QEvent.ToolTip:
             from PySide6.QtWidgets import QToolTip
-            QToolTip.showText(event.globalPos(), "\n".join(notes), view)
-            return True
+            if self._badge_rect(option).contains(QPointF(event.pos())):      # where the video came from
+                QToolTip.showText(event.globalPos(), source_badge(card.row.item)[1], view)
+                return True
+            notes = card_notes(card)
+            if notes:
+                QToolTip.showText(event.globalPos(), "\n".join(notes), view)
+                return True
         return super().helpEvent(event, view, option, index)
 
     def paint(self, painter: QPainter, option, index) -> None:
@@ -214,8 +227,7 @@ class CardDelegate(QStyledItemDelegate):
         top.addRect(thumb)
         cover = self.thumbs.cover(item)
         draw_thumbnail(painter, thumb, item, cover, frame.intersected(top))
-        draw_pill(painter, media_label(item, cover), QPointF(thumb.left() + 8, thumb.top() + 8),
-                  Qt.AlignLeft | Qt.AlignTop, small_font(option.font, -3, bold=True))
+        draw_source_badge(painter, thumb, item, cover)
         if item.duration:
             draw_pill(painter, fmt_duration(item.duration), QPointF(thumb.right() - 8, thumb.bottom() - 8),
                       Qt.AlignRight | Qt.AlignBottom, small_font(option.font, -2, bold=True))
@@ -302,6 +314,7 @@ class CardDelegate(QStyledItemDelegate):
         else:
             painter.fillPath(cpath, QColor(p.bg_pressed))
         painter.restore()
+        draw_source_badge(painter, cover, card.row.item, None, size=18, inset=4)
 
         # text
         x = int(cover.right() + 12)
@@ -575,6 +588,7 @@ class BoardPage(QWidget):
         self.selected_id: int | None = None
         self.bulk_ids: list[int] = []
         self.filter = "all"
+        self.form = ""                   # "" both · readiness.SHORT_FORM · readiness.LONG_FORM
         self.tag = ""
         self.product_ids: set | None = None
         self.query = ""
@@ -643,6 +657,14 @@ class BoardPage(QWidget):
         self.filter_popover = Popover(self)
         self.filter_popover.add_section("Show", "Which tickets the Board shows", self.filter_box)
         self.filter_popover.add_section("Hashtag", "Only tickets with this hashtag", self.tag_box)
+        from ..readiness import LONG_FORM, SHORT_FORM
+        self.form_box = tip(QComboBox(), "Show only Shorts and other short vertical videos (3 minutes or less), "
+                                         "or only long-form videos")
+        for key, label in (("", "All formats"), (SHORT_FORM, "Short-form"), (LONG_FORM, "Long-form")):
+            self.form_box.addItem(label, key)
+        self.form_box.currentIndexChanged.connect(self._on_filter)
+        self.filter_popover.add_section("Format", "Short-form (vertical, 3 minutes or less) or long-form",
+                                        self.form_box)
         self.filter_popover.add_section("Brand and product", "Only tickets tagged with a brand's products, or one "
                                         "product", self.products_filter)
         self.density_box = tip(QComboBox(), "Large cards lead with the video's thumbnail; compact cards fit more "
@@ -994,6 +1016,10 @@ class BoardPage(QWidget):
             return False
         if self.product_ids and not any(p.get("id") in self.product_ids for p in card.row.item.products or []):
             return False
+        if self.form:
+            from ..readiness import video_form
+            if video_form(card.row.item) != self.form:
+                return False
         if self.query and card.search_hit is None and not all(word in self._haystack(card)
                                                               for word in self.query.split()):
             return False
@@ -1018,7 +1044,7 @@ class BoardPage(QWidget):
         return " ".join(parts).lower()
 
     def _filtering(self) -> bool:
-        return bool(self.query or self.filter != "all" or self.tag or self.product_ids)
+        return bool(self.query or self.filter != "all" or self.form or self.tag or self.product_ids)
 
     def _show_filter_state(self) -> None:
         """Say plainly when the Board shows only some tickets, with a way back to all of them."""
@@ -1030,7 +1056,8 @@ class BoardPage(QWidget):
         self.clear_filters_btn.setVisible(self._filtering())
 
     def clear_filters(self) -> None:
-        for box in (self.filter_box, self.tag_box, self.products_filter.brand, self.products_filter.product):
+        for box in (self.filter_box, self.form_box, self.tag_box, self.products_filter.brand,
+                    self.products_filter.product):
             box.setCurrentIndex(0)
         self.search.clear()
         self._on_filter()
@@ -1069,9 +1096,11 @@ class BoardPage(QWidget):
 
     def _on_filter(self) -> None:
         self.filter = self.filter_box.currentData()
+        self.form = self.form_box.currentData() or ""
         self.tag = self.tag_box.currentData() or ""
         self.product_ids = self.products_filter.selection()
-        self.filter_btn.set_count(sum(bool(x) for x in (self.filter != "all", self.tag, self.product_ids)))
+        self.filter_btn.set_count(sum(bool(x) for x in (self.filter != "all", self.form, self.tag,
+                                                         self.product_ids)))
         self.reload()
 
     # ---------------------------------------------------------------- multi-select & bulk

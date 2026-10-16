@@ -1,6 +1,6 @@
 """Small platform marks (YouTube, TikTok, Instagram, Bluesky, Threads,
 Facebook, Snapchat), drawn with QPainter so they're crisp at any size and need no image
-files. They're simplified badges in each platform's colours, used only to say
+files. They're the platforms' own marks in their colours (YouTube Shorts has its own), used only to say
 which platform something is about."""
 
 from __future__ import annotations
@@ -36,17 +36,39 @@ def _text(p: QPainter, rect: QRectF, text: str, color: str, scale: float, bold: 
 # Vector glyphs on a 24 x 24 grid (the same paths the website draws), filled in each platform's colours.
 TIKTOK_NOTE = ("M14.2 3h3c.2 1.9 1.5 3.4 3.4 3.6v3.1a7.1 7.1 0 0 1-3.4-1v6.2a5.6 5.6 0 1 1-5.6-5.6c.3 0 .6 0 "
                ".9.1v3.2a2.5 2.5 0 1 0 1.7 2.3z")
-THREADS_AT = ("M16.8 11.1a6.6 6.6 0 0 0-.3-.1c-.2-3-1.8-4.7-4.6-4.7-1.7 0-3.1.7-3.9 2l1.5 1c.6-.9 1.6-1.1 2.4-1.1 1 "
-              "0 1.7.3 2.1.9.3.4.5 1 .6 1.7a10 10 0 0 0-2.3-.1c-2.3.1-3.8 1.5-3.7 3.4.1 1 .6 1.8 1.4 2.3.7.5 1.6.7 "
-              "2.6.6 1.3-.1 2.3-.6 3-1.4.5-.7.9-1.5 1-2.6.6.4 1.1.9 1.3 1.5.4 1 .4 2.6-.9 3.9-1.2 1.2-2.6 1.7-4.8 "
-              "1.7-2.4 0-4.2-.8-5.4-2.3-1.1-1.4-1.7-3.4-1.7-6s.6-4.6 1.7-6c1.2-1.5 3-2.3 5.4-2.3 2.4 0 4.3.8 5.5 "
-              "2.3.6.7 1.1 1.7 1.4 2.8l1.7-.5c-.4-1.4-1-2.5-1.8-3.5C17.5 1.1 15.2.1 12.2.1h-.1C9.2.1 6.9 1.1 5.4 3c"
-              "-1.4 1.7-2.1 4.1-2.1 7.1s.7 5.4 2.1 7.1c1.5 1.9 3.8 2.9 6.7 2.9h.1c2.6 0 4.4-.7 5.9-2.2 2-2 1.9-4.5 "
-              "1.3-6-.5-1.1-1.4-2-2.6-2.6zm-4.5 4.4c-1 .1-2.1-.4-2.2-1.4 0-.7.5-1.5 2.2-1.6h.6c.6 0 1.2.1 1.8.2-.2 "
-              "2.4-1.3 2.7-2.4 2.8z")
-BLUESKY_BUTTERFLY = ("M12 11.2C10.7 8.6 7.2 4 4.6 3.6 3 3.4 2.6 4.6 2.6 6c0 1.1.6 5 1 5.6.9 1.6 3 2 4.7 1.6-3 .5"
-                     "-4.1 2.3-2.4 4.1 3 3.1 4.6-.7 5.4-2.6l.7-1.7.7 1.7c.8 1.9 2.4 5.7 5.4 2.6 1.7-1.8.6-3.6-2.4"
-                     "-4.1 1.7.4 3.8 0 4.7-1.6.4-.6 1-4.5 1-5.6 0-1.4-.4-2.6-2-2.4-2.6.4-6.1 5-7.4 7.6z")
+# The corrected Threads mark (as on Be Unconventional HQ), on a 640 x 640 grid.
+THREADS_AT = ("M427.5 299.7C429.7 300.6 431.7 301.6 433.8 302.5C463 316.6 484.4 337.7 495.6 363.9C511.3 400.4 512.8 "
+              "459.7 465.3 507.1C429.1 543.3 385 559.6 322.7 560.1L322.4 560.1C252.2 559.6 198.3 536 162 489.9C129.7 "
+              "448.9 113.1 391.8 112.5 320.3L112.5 319.8C113 248.3 129.6 191.2 161.9 150.2C198.2 104.1 252.2 80.5 "
+              "322.4 80L322.7 80C393 80.5 447.6 104 485 149.9C503.4 172.6 517 199.9 525.6 231.6L485.2 242.4C478.1 "
+              "216.6 467.4 194.6 453 177C423.8 141.2 380 122.8 322.5 122.4C265.5 122.9 222.4 141.2 194.3 176.8C168.1 "
+              "210.1 154.5 258.3 154 320C154.5 381.7 168.1 429.9 194.3 463.3C222.3 498.9 265.5 517.2 322.5 517.7C373.9 "
+              "517.3 407.9 505.1 436.2 476.8C468.5 444.6 467.9 405 457.6 380.9C451.5 366.7 440.5 354.9 425.7 346C422 "
+              "372.9 413.9 394.3 401 410.8C383.9 432.6 359.6 444.4 328.3 446.1C304.7 447.4 282 441.7 264.4 430.1C243.6 "
+              "416.3 231.4 395.3 230.1 370.8C227.6 322.5 265.8 287.8 325.3 284.4C346.4 283.2 366.2 284.1 384.5 "
+              "287.2C382.1 272.4 377.2 260.6 369.9 252C359.9 240.3 344.3 234.3 323.7 234.2L323 234.2C306.4 234.2 284 "
+              "238.8 269.7 260.5L235.3 236.9C254.5 207.8 285.6 191.8 323.1 191.8L323.9 191.8C386.5 192.2 423.8 231.3 "
+              "427.6 299.5L427.4 299.7L427.5 299.7zM271.5 368.5C272.8 393.6 299.9 405.3 326.1 403.8C351.7 402.4 380.7 "
+              "392.4 385.6 330.6C372.4 327.7 357.8 326.2 342.2 326.2C337.4 326.2 332.6 326.3 327.8 326.6C284.9 329 "
+              "270.6 349.8 271.6 368.4L271.5 368.5z")
+# Bluesky's butterfly, on its own 64 x 56.53 grid.
+BLUESKY_BUTTERFLY = ("M13.873 3.805C21.21 9.332 29.103 20.537 32 26.55v15.882c0-.338-.13.044-.41.867-1.512 4.456-7.418 "
+                     "21.847-20.923 7.944-7.111-7.32-3.819-14.64 9.125-16.85-7.405 1.264-15.73-.825-18.014-9.015C1.12 "
+                     "23.022 0 8.51 0 6.55 0-3.268 8.579-.182 13.873 3.805m36.254 0C42.79 9.332 34.897 20.537 32 "
+                     "26.55v15.882c0-.338.13.044.41.867 1.512 4.456 7.418 21.847 20.923 7.944 7.111-7.32 3.819-14.64-9.125"
+                     "-16.85 7.405 1.264 15.73-.825 18.014-9.015C62.88 23.022 64 8.51 64 6.55c0-9.818-8.578-6.732-13.873"
+                     "-2.745")
+# YouTube's play button, and the YouTube Shorts mark (24 x 24; the play triangle is drawn white on top).
+YOUTUBE_MARK = ("M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 "
+                "3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 "
+                "9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502"
+                "-5.814z")
+YOUTUBE_PLAY = "M9.545 15.568V8.432L15.818 12z"
+SHORTS_MARK = ("m18.931 9.99-1.441-.601 1.717-.913a4.48 4.48 0 0 0 1.874-6.078 4.506 4.506 0 0 0-6.09-1.874L4.792 "
+               "5.929a4.504 4.504 0 0 0-2.402 4.193 4.521 4.521 0 0 0 2.666 3.904c.036.012 1.442.6 1.442.6l-1.706.901a4.51 "
+               "4.51 0 0 0-2.369 3.967A4.528 4.528 0 0 0 6.93 24c.725 0 1.437-.174 2.08-.508l10.21-5.406a4.494 4.494 0 "
+               "0 0 2.39-4.192 4.525 4.525 0 0 0-2.678-3.904Z")
+SHORTS_PLAY = "M9.597 15.19V8.824l6.007 3.184z"
 FACEBOOK_MARK = ("M12 2a10 10 0 0 0-1.6 19.9v-7H7.9V12h2.5V9.8c0-2.5 1.5-3.9 3.8-3.9 1.1 0 2.2.2 2.2.2v2.5h-1.3c-1.2 "
                  "0-1.6.8-1.6 1.6V12h2.8l-.4 2.9h-2.3v7A10 10 0 0 0 12 2z")
 
@@ -58,16 +80,11 @@ def _svg(p: QPainter, rect: QRectF, body: str, view: str = "0 0 24 24") -> None:
 
 
 def _youtube(p: QPainter, s: float) -> None:
-    body = QRectF(0, s * 0.18, s, s * 0.64)
-    p.setPen(Qt.NoPen)
-    p.setBrush(QColor("#FF0000"))
-    p.drawRoundedRect(body, s * 0.18, s * 0.18)
-    tri = QPainterPath(QPointF(s * 0.40, s * 0.34))
-    tri.lineTo(s * 0.68, s * 0.50)
-    tri.lineTo(s * 0.40, s * 0.66)
-    tri.closeSubpath()
-    p.setBrush(QColor("#FFFFFF"))
-    p.drawPath(tri)
+    _svg(p, QRectF(0, 0, s, s), f'<path fill="#FF0000" d="{YOUTUBE_MARK}"/><path fill="#FFFFFF" d="{YOUTUBE_PLAY}"/>')
+
+
+def _youtube_shorts(p: QPainter, s: float) -> None:
+    _svg(p, QRectF(0, 0, s, s), f'<path fill="#FF0000" d="{SHORTS_MARK}"/><path fill="#FFFFFF" d="{SHORTS_PLAY}"/>')
 
 
 def _tiktok(p: QPainter, s: float) -> None:
@@ -100,16 +117,17 @@ def _instagram(p: QPainter, s: float) -> None:
 
 
 def _bluesky(p: QPainter, s: float) -> None:
-    _svg(p, QRectF(0, s * 0.02, s, s), f'<path fill="#1185FE" d="{BLUESKY_BUTTERFLY}"/>', "1.6 2.6 21 21")
+    h = s * 56.53 / 64                       # the butterfly is wider than tall: centred in the square
+    _svg(p, QRectF(0, (s - h) / 2, s, h), f'<path fill="#1185FE" d="{BLUESKY_BUTTERFLY}"/>', "0 0 64 56.53")
 
 
 def _threads(p: QPainter, s: float) -> None:
     p.setPen(Qt.NoPen)
     p.setBrush(QColor("#111111"))
     p.drawRoundedRect(QRectF(0, 0, s, s), s * 0.24, s * 0.24)
-    # The ribbon spans y 0.1–20.1 of its grid: a viewBox centred on it keeps it centred in the badge.
-    _svg(p, QRectF(s * 0.2, s * 0.2, s * 0.6, s * 0.6), f'<path fill="#FFFFFF" d="{THREADS_AT}"/>',
-         "0.9 -0.9 22 22")
+    # The @ spans x 112–526 and y 80–560 of its grid: a square view centred on it keeps it centred in the badge.
+    _svg(p, QRectF(s * 0.17, s * 0.17, s * 0.66, s * 0.66), f'<path fill="#FFFFFF" d="{THREADS_AT}"/>',
+         "79 80 480 480")
 
 
 def _facebook(p: QPainter, s: float) -> None:
@@ -138,8 +156,8 @@ def _snapchat(p: QPainter, s: float) -> None:
     p.drawPath(ghost)
 
 
-DRAW = {"youtube": _youtube, "tiktok": _tiktok, "instagram": _instagram, "bluesky": _bluesky,
-        "threads": _threads, "facebook": _facebook, "snapchat": _snapchat}
+DRAW = {"youtube": _youtube, "youtube_shorts": _youtube_shorts, "tiktok": _tiktok, "instagram": _instagram,
+        "bluesky": _bluesky, "threads": _threads, "facebook": _facebook, "snapchat": _snapchat}
 
 
 @lru_cache(maxsize=64)

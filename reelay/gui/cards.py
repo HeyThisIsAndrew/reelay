@@ -5,8 +5,9 @@ Everything here is painted (no widget per card), so thousands of videos scroll s
 - ``draw_thumbnail``: a 16:9 frame. Landscape covers fill it; vertical covers (Shorts, Reels, TikToks) sit
   as a 9:16 frame on a blurred, dimmed copy of themselves, so you can tell short-form from long-form at a
   glance without reading a label.
-- ``draw_pill``: the small badges laid over a thumbnail (duration, format).
-- ``media_label``: "Short · 1080p", "Long-form · 4K"…
+- ``draw_pill``: the small text badge laid over a thumbnail (its length).
+- ``source_badge`` / ``draw_source_badge``: where a video came from, as the platform's logo on a light chip
+  (YouTube Shorts has its own mark), with hover text such as "From YouTube · Short · 1080p".
 - ``MediaGrid`` + ``LibraryCardDelegate``: the Library's responsive grid.
 - ``HoverFader``: eases a card's hover highlight in and out (120 ms).
 """
@@ -17,13 +18,12 @@ import time
 
 from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QBrush, QColor, QFont, QFontMetrics, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap
-from PySide6.QtWidgets import QAbstractItemView, QListView, QStyle, QStyledItemDelegate
+from PySide6.QtWidgets import QAbstractItemView, QListView, QStyle, QStyledItemDelegate, QToolTip
 
 from ..models import Status, VideoItem
 from . import icons, theme
 from .table_model import fmt_count, fmt_duration, short_date
 
-from ..readiness import SHORT_FORM_MAX_SECONDS as SHORT_MAX_SECONDS   # Shorts top out at 3 minutes
 CARD_MIN_WIDTH = 240             # the default tile size (Medium)
 TILE_SIZES = {"Small": 180, "Medium": 240, "Large": 320, "XL": 400}
 TILE_MIN, TILE_MAX = 180, 400
@@ -55,15 +55,44 @@ def is_vertical(item: VideoItem, cover: QPixmap | None = None) -> bool:
     return item.platform.lower() in ("tiktok", "instagram")
 
 
-def media_label(item: VideoItem, cover: QPixmap | None = None) -> str:
-    """What kind of video this is, for the badge on its thumbnail."""
-    seconds = float(item.duration or 0)
-    if is_vertical(item, cover):
-        kind = "Short" if not seconds or seconds <= SHORT_MAX_SECONDS else "Vertical"
-    else:
-        kind = "Long-form" if seconds > SHORT_MAX_SECONDS else "Video"
-    res = resolution_label(item)
-    return f"{kind} · {res}" if res else kind
+def source_badge(item: VideoItem, cover: QPixmap | None = None) -> tuple[str, str]:
+    """The logo for where a video came from (YouTube Shorts has its own), and its hover text:
+    e.g. ("youtube_shorts", "From YouTube · Short · 1080p")."""
+    from ..readiness import SHORT_FORM, video_form
+    key = (item.platform or "").lower()
+    short = video_form(item) == SHORT_FORM
+    if key == "youtube" and short:
+        key = "youtube_shorts"
+    form = "Short" if short else "Long-form"
+    parts = [f"From {item.platform or 'an unknown platform'}", form, resolution_label(item)]
+    return key, " · ".join(p for p in parts if p)
+
+
+BADGE = 24                                  # the source badge on a thumbnail: a light chip with the logo
+
+
+def badge_rect(thumb: QRectF) -> QRectF:
+    return QRectF(thumb.left() + 8, thumb.top() + 8, BADGE, BADGE)
+
+
+def draw_source_badge(p: QPainter, thumb: QRectF, item: VideoItem, cover: QPixmap | None = None,
+                      size: float = BADGE, inset: float = 8) -> QRectF:
+    """Where the video came from, top left of its thumbnail: the platform's logo on a light chip (so dark
+    logos read on a dark picture). Returns the chip's rect, for its hover text."""
+    from .logos import platform_pixmap
+    rect = QRectF(thumb.left() + inset, thumb.top() + inset, size, size)
+    key, _tip = source_badge(item, cover)
+    p.save()
+    p.setPen(Qt.NoPen)
+    chip = QColor(Qt.white)
+    chip.setAlphaF(0.92)
+    p.setBrush(chip)
+    p.drawRoundedRect(rect, size * 0.3, size * 0.3)
+    pad = max(2, round(size / 6))
+    logo = rect.adjusted(pad, pad, -pad, -pad).toRect()
+    p.drawPixmap(logo, platform_pixmap(key, logo.width()))
+    p.restore()
+    return rect
 
 
 # ---------------------------------------------------------------- painting primitives
@@ -384,6 +413,16 @@ class LibraryCardDelegate(QStyledItemDelegate):
     def item_at(self, index) -> VideoItem:
         return self.page.model.item(self.page.pager.to_model_row(index))
 
+    def helpEvent(self, event, view, option, index) -> bool:  # noqa: N802
+        """Hovering the source badge says where the video came from and what it is."""
+        if event.type() == QEvent.ToolTip and index.isValid():
+            rect = QRectF(option.rect.topLeft(), QSize(self.grid.card_size)).adjusted(0.5, 0.5, -0.5, -0.5)
+            thumb = QRectF(rect.left(), rect.top(), rect.width(), rect.width() * 9 / 16)
+            if badge_rect(thumb).contains(QPointF(event.pos())):
+                QToolTip.showText(event.globalPos(), source_badge(self.item_at(index))[1], view)
+                return True
+        return super().helpEvent(event, view, option, index)
+
     def _file_size(self, item: VideoItem) -> int:
         if not item.is_downloaded:
             return 0
@@ -424,9 +463,7 @@ class LibraryCardDelegate(QStyledItemDelegate):
             wash.setAlphaF(0.05 * hover)
             p.fillRect(thumb, wash)
 
-        badge_font = small_font(option.font, -3, bold=True)
-        draw_pill(p, media_label(item, cover), QPointF(thumb.left() + 8, thumb.top() + 8),
-                  Qt.AlignLeft | Qt.AlignTop, badge_font)
+        draw_source_badge(p, thumb, item, cover)
         if item.duration:
             draw_pill(p, fmt_duration(item.duration), QPointF(thumb.right() - 8, thumb.bottom() - 8),
                       Qt.AlignRight | Qt.AlignBottom, small_font(option.font, -2, bold=True))

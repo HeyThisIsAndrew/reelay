@@ -317,6 +317,13 @@ class DownloadPage(QWidget):
         self.filter_popover.add_section("Hashtag", "Only videos with this hashtag", self.tag_filter)
         self.filter_popover.add_section("Brand and product", "Only videos tagged with a brand's products, or one "
                                         "product (TikTok Shop)", self.products_filter)
+        from ..readiness import LONG_FORM, SHORT_FORM
+        self.form_filter = tip(QComboBox(), "Show only Shorts and other short vertical videos (3 minutes or less), "
+                                            "or only long-form videos")
+        for key, label in (("", "All formats"), (SHORT_FORM, "Short-form"), (LONG_FORM, "Long-form")):
+            self.form_filter.addItem(label, key)
+        self.filter_popover.add_section("Format", "Short-form (vertical, 3 minutes or less) or long-form",
+                                        self.form_filter)
         self.filter_popover.add_section("Sort by", "The order videos are shown in", self.sort_box)
 
         # ---- platform tabs: All · TikTok · YouTube…, shown once the list holds more than one platform
@@ -607,6 +614,11 @@ class DownloadPage(QWidget):
         if not item.is_downloaded:
             self.model.set_checked([item.key], not item.checked)
 
+    def _on_form_filter(self) -> None:
+        self.proxy.set_form(self.form_filter.currentData())
+        self.pager.set_page(0)
+        self._update_counts()
+
     def _on_show_filter(self) -> None:
         self.proxy.set_state(self.show_filter.currentData())
         self.pager.set_page(0)
@@ -652,7 +664,7 @@ class DownloadPage(QWidget):
     def _sync_filter_count(self) -> None:
         brand, product = self.products_filter.brand.currentData(), self.products_filter.product.currentData()
         n = sum(bool(x) for x in (self.tag_filter.currentData(), self.show_filter.currentData(),
-                                  brand or product))
+                                  self.form_filter.currentData(), brand or product))
         self.filter_btn.set_count(n)
 
     def _build_empty_state(self) -> QWidget:
@@ -695,6 +707,7 @@ class DownloadPage(QWidget):
         self.platform_tabs.currentChanged.connect(lambda _i: self._on_platform_tab())
         self.products_filter.changed.connect(self._on_product_filter)
         self.show_filter.currentIndexChanged.connect(self._on_show_filter)
+        self.form_filter.currentIndexChanged.connect(self._on_form_filter)
         self.sort_box.currentIndexChanged.connect(self._apply_sort)
         self.detail.productClicked.connect(self.filter_by_product)
         self.detail.tagClicked.connect(self.filter_by_tag)

@@ -291,7 +291,8 @@ class VideoTableModel(QAbstractTableModel):
             return ("Selected: downloads when you click Download. Click to unselect." if item.checked else
                     "Not selected. Click to select it for downloading.")
         if col == Col.COVER:
-            return "Click the row to see this video's caption, details and file name on the right."
+            from .cards import source_badge
+            return f"{source_badge(item)[1]}. Click the row for its caption, details and file name."
         if col == Col.HOOK:
             return item.hook
         if col == Col.DATE and item.upload_date:
@@ -353,6 +354,7 @@ class VideoFilterProxy(QSortFilterProxyModel):
         self._product_ids: set | None = None
         self._state = ""            # "" all · "pending" not downloaded yet · "downloaded"
         self._platform = ""         # "" every platform · "tiktok", "youtube"… (the Library's platform tabs)
+        self._form = ""             # "" every format · readiness.SHORT_FORM · readiness.LONG_FORM
         self.setSortRole(SORT_ROLE)
         self.setDynamicSortFilter(False)  # don't reshuffle rows while downloading
 
@@ -379,14 +381,22 @@ class VideoFilterProxy(QSortFilterProxyModel):
         """Only videos that came from this platform ("tiktok", "youtube"…); empty shows every platform."""
         _refilter(self, lambda: setattr(self, "_platform", (platform or "").lower()))
 
+    def set_form(self, form: str) -> None:
+        """Only Short-form or only Long-form videos (readiness.video_form); empty shows both."""
+        _refilter(self, lambda: setattr(self, "_form", form or ""))
+
     @property
     def filtering(self) -> bool:
-        return bool(self._query or self._tag or self._product_ids or self._state or self._platform)
+        return bool(self._query or self._tag or self._product_ids or self._state or self._platform or self._form)
 
     def filterAcceptsRow(self, source_row: int, source_parent) -> bool:
         item = self.sourceModel().item(source_row)
         if self._platform and (item.platform or "").lower() != self._platform:
             return False
+        if self._form:
+            from ..readiness import video_form
+            if video_form(item) != self._form:
+                return False
         if self._state and item.is_downloaded != (self._state == "downloaded"):
             return False
         if self._tag and self._tag not in item.hashtags:
@@ -436,6 +446,8 @@ class CoverDelegate(QStyledItemDelegate):
         if not item.checked and not item.is_downloaded:
             painter.fillPath(path, QColor(0, 0, 0, 120))  # dim skipped videos
         painter.restore()
+        from .cards import draw_source_badge
+        draw_source_badge(painter, box, item, None, size=16, inset=2)     # where it came from
 
 
 class PageProxy(QSortFilterProxyModel):

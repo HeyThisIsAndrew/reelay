@@ -105,13 +105,6 @@ def test_up_next_countdown():
     assert far[-2:] in ("am", "pm") and "%" not in far
 
 
-def test_media_labels():
-    from reelay.gui.cards import media_label
-    short = VideoItem(platform="TikTok", video_id="1", url="u", duration=20, width=1080, height=1920)
-    long = VideoItem(platform="YouTube", video_id="2", url="u", duration=3700, width=3840, height=2160)
-    assert media_label(short) == "Short · 1080p" and media_label(long) == "Long-form · 4K"
-
-
 # ------------------------------------------------------------------ the Library grid
 def test_library_grid_is_the_default_and_shares_the_selection(app_window, qtbot, monkeypatch):
     window, store, _ = app_window

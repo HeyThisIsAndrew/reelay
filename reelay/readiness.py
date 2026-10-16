@@ -34,6 +34,17 @@ def is_short_form(width: int | None, height: int | None, duration: float | None)
         return False
     return not (width and height and width > height)
 
+
+SHORT_FORM, LONG_FORM = "short", "long"
+
+
+def video_form(item) -> str:
+    """SHORT_FORM or LONG_FORM, by YouTube's rule for Shorts (above). A /shorts/ link is a Short whatever
+    its size: the platform has already said so."""
+    if "/shorts/" in (getattr(item, "url", "") or ""):
+        return SHORT_FORM
+    return SHORT_FORM if is_short_form(item.width, item.height, item.duration) else LONG_FORM
+
 PASS, WARN = "pass", "warn"
 READY, NOT_READY, NOT_CHECKED = "ready", "not_ready", "not_checked"
 

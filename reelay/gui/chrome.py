@@ -155,6 +155,7 @@ class FilterButton(QToolButton):
         self.setIcon(icons.icon("filter", 16))
 
     def set_count(self, n: int) -> None:
+        self.count = n
         self.retint()
         self.setText(f"Filter · {n}" if n else "Filter")
         set_prop(self, "active", bool(n))

@@ -40,7 +40,10 @@ so the renderings can follow it.
    done from the ticket (side panel), with Publish Now / Schedule.
 5. **Board header**: a search field ("Search titles, captions and what was said"), one **Filter** button, a
    refresh button and a ⋯ menu. Not "Show: All" / "All hashtags" dropdowns (those live inside Filter).
-6. **Board cards**: each shows a "Short · 1080p" (or Long-form) badge on the cover, a date · views line, the
+6. **Board cards** (and Library tiles): the top-left badge on the cover is now **where the video came from**: the
+   platform's colour logo on a small light chip (the YouTube Shorts mark for a Short, the YouTube mark for a
+   long-form video), with hover text such as "From YouTube · Short · 1080p". No "Short · 1080p" text pill. Filter
+   has a **Format** section (All formats / Short-form / Long-form). Each card also shows a date · views line, the
    platform marks with status dots, and a status line such as "Ready · pick a channel" or "Ready · not
    started". Replace "Needs copy for 3 platforms" / "Live on 4 platforms" style text with the app's wording.
 7. **Side panel**: the app also has a **Posting to** row of platform chips (ticked = going), one caption box per
