@@ -41,6 +41,7 @@ class PublishJob:
     text: str                                   # resolved platform text ("" for YouTube)
     media_url: Callable[[], str] | None = None  # public expiring link (Threads)
     checkpoint: Callable[[str], None] = field(default=lambda _c: None)
+    media: object | None = None                 # what the file really is (probe.MediaInfo), when it's known
 
 
 @dataclass

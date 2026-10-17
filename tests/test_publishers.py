@@ -24,17 +24,19 @@ PAGE_TOKEN = "EAAB-page-secret"
 
 
 def make_job(tmp_path: Path, platform: str, credentials: dict, text: str = "Letting go 🦋 #growth https://x.co/a",
-             checkpoint: str = "", publish_at: str | None = None, media_url=None, account_id="acct"):
+             checkpoint: str = "", publish_at: str | None = None, media_url=None, account_id="acct",
+             size=(1080, 1920), duration=30, media=None):
     video = tmp_path / "clip.mp4"
     video.write_bytes(b"\0" * 4096)
     saved: list[str] = []
     dispatch = Dispatch(video_row=1, platform=platform, due_at="2026-10-08T12:00:00Z", publish_at=publish_at,
                         checkpoint=checkpoint, id=9)
     job = PublishJob(dispatch=dispatch, post=Post(video_row=1, title="Letting go", description="A short video."),
-                     item=VideoItem(platform="TikTok", video_id="1", url="u", width=1080, height=1920, duration=30),
+                     item=VideoItem(platform="TikTok", video_id="1", url="u", width=size[0], height=size[1],
+                                    duration=duration),
                      video_path=video, account=Account(profile_id=1, platform=platform, external_id=account_id,
                                                        display_name="x"),
-                     credentials=credentials, text=text, media_url=media_url, checkpoint=saved.append)
+                     credentials=credentials, text=text, media_url=media_url, checkpoint=saved.append, media=media)
     return job, saved
 
 
@@ -200,7 +202,7 @@ def test_facebook_schedules_natively(tmp_path):
     when = now + timedelta(days=2)
     s = FakeSession().on("POST", "graph-video.facebook.com/v26.0/1029/videos", FakeResponse(200, {"id": "V77"}))
     job, saved = make_job(tmp_path, "facebook", FB_CREDS, publish_at=when.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                          account_id="1029")
+                          account_id="1029", size=(1920, 1080))
     result = FacebookPublisher(s, now=lambda: now).publish(job)
     assert result.status == DispatchStatus.SCHEDULED and result.remote_url.endswith("/1029/videos/V77")
     call = s.calls[0]
@@ -212,13 +214,13 @@ def test_facebook_schedules_natively(tmp_path):
 
 def test_facebook_publishes_now_when_no_future_time(tmp_path):
     s = FakeSession().on("POST", "/videos", FakeResponse(200, {"id": "V1"}))
-    job, _ = make_job(tmp_path, "facebook", FB_CREDS, account_id="1029")
+    job, _ = make_job(tmp_path, "facebook", FB_CREDS, account_id="1029", size=(1920, 1080))
     assert FacebookPublisher(s).publish(job).status == DispatchStatus.PUBLISHED
     assert "published" not in s.calls[0]["data"]
 
 
 def test_facebook_never_reuploads_after_an_unknown_outcome(tmp_path):
-    job, _ = make_job(tmp_path, "facebook", FB_CREDS, checkpoint=STARTED, account_id="1029")
+    job, _ = make_job(tmp_path, "facebook", FB_CREDS, checkpoint=STARTED, account_id="1029", size=(1920, 1080))
     s = FakeSession()
     with pytest.raises(PermanentError, match="Check the Page"):
         FacebookPublisher(s).publish(job)
@@ -228,7 +230,7 @@ def test_facebook_never_reuploads_after_an_unknown_outcome(tmp_path):
 def test_facebook_error_classification(tmp_path):
     expired = FakeSession().on("POST", "/videos", FakeResponse(400, {"error": {
         "message": "Error validating access token", "code": 190}}))
-    job, saved = make_job(tmp_path, "facebook", FB_CREDS, account_id="1029")
+    job, saved = make_job(tmp_path, "facebook", FB_CREDS, account_id="1029", size=(1920, 1080))
     with pytest.raises(PermanentError, match="access token"):
         FacebookPublisher(expired).publish(job)
     assert saved[-1] == ""  # Facebook answered: nothing was created, safe to retry later
@@ -236,14 +238,91 @@ def test_facebook_error_classification(tmp_path):
     down = FakeSession().on("POST", "/videos", FakeResponse(500, {"error": {"message": "Service unavailable",
                                                                            "code": 2}}))
     with pytest.raises(TransientError):
-        FacebookPublisher(down).publish(make_job(tmp_path, "facebook", FB_CREDS, account_id="1029")[0])
+        FacebookPublisher(down).publish(make_job(tmp_path, "facebook", FB_CREDS, account_id="1029", size=(1920, 1080))[0])
 
     def timeout(*_a):
         raise requests.ReadTimeout(f"read timed out access_token={PAGE_TOKEN}")
     hung = FakeSession().on("POST", "/videos", timeout)
     with pytest.raises(PermanentError) as err:  # may have been created: don't retry blindly
-        FacebookPublisher(hung).publish(make_job(tmp_path, "facebook", FB_CREDS, account_id="1029")[0])
+        FacebookPublisher(hung).publish(make_job(tmp_path, "facebook", FB_CREDS, account_id="1029", size=(1920, 1080))[0])
     assert PAGE_TOKEN not in str(err.value)
+
+
+LANDSCAPE = (1920, 1080)
+
+
+def reel_session(finish=None):
+    s = FakeSession()
+    s.on("POST", "graph.facebook.com/v26.0/1029/video_reels", FakeResponse(200, {
+        "video_id": "R55", "upload_url": "https://rupload.facebook.com/video-upload/R55"}))
+    s.on("POST", "rupload.facebook.com/video-upload/v26.0/R55", FakeResponse(200, {"success": True}))
+    s.on("POST", "graph.facebook.com/v26.0/1029/video_reels", finish or FakeResponse(200, {"success": True}))
+    return s
+
+
+def test_a_short_vertical_video_goes_up_as_a_reel(tmp_path):
+    from reelay.publishers.facebook import REEL_STARTED
+    s = reel_session()
+    job, saved = make_job(tmp_path, "facebook", FB_CREDS, account_id="1029")          # 1080x1920, 30 s
+    result = FacebookPublisher(s).publish(job)
+    assert result.status == DispatchStatus.PUBLISHED and result.remote_url == "https://www.facebook.com/reel/R55"
+    start, upload, finish = s.calls
+    assert start["data"] == {"upload_phase": "start"}
+    assert upload["headers"]["Authorization"] == f"OAuth {PAGE_TOKEN}" and upload["headers"]["offset"] == "0"
+    assert upload["headers"]["file_size"] == "4096"
+    assert finish["data"]["upload_phase"] == "finish" and finish["data"]["video_state"] == "PUBLISHED"
+    assert finish["data"]["video_id"] == "R55" and finish["data"]["description"] == "A short video."
+    assert saved == [REEL_STARTED]
+    no_secret_in_urls(s, PAGE_TOKEN)
+
+
+def test_a_reel_is_scheduled_by_facebook_within_29_days(tmp_path):
+    now = datetime(2026, 10, 8, 12, 0, tzinfo=timezone.utc)
+    when = now + timedelta(days=3)
+    s = reel_session()
+    job, _ = make_job(tmp_path, "facebook", FB_CREDS, account_id="1029", publish_at=when.strftime("%Y-%m-%dT%H:%M:%SZ"))
+    assert FacebookPublisher(s, now=lambda: now).publish(job).status == DispatchStatus.SCHEDULED
+    finish = s.calls[-1]["data"]
+    assert finish["video_state"] == "SCHEDULED" and finish["scheduled_publish_time"] == str(int(when.timestamp()))
+    later = now + timedelta(days=40)          # Reels can't be scheduled that far ahead: a Page video can
+    s = FakeSession().on("POST", "graph-video.facebook.com/v26.0/1029/videos", FakeResponse(200, {"id": "V9"}))
+    job, _ = make_job(tmp_path, "facebook", FB_CREDS, account_id="1029", publish_at=later.strftime("%Y-%m-%dT%H:%M:%SZ"))
+    assert FacebookPublisher(s, now=lambda: now).publish(job).remote_url.endswith("/videos/V9")
+
+
+def test_the_real_file_decides_reel_or_page_video(tmp_path):
+    from reelay.probe import MediaInfo
+    # the platform said vertical, but the file to be posted is landscape: a Page video
+    s = FakeSession().on("POST", "/videos", FakeResponse(200, {"id": "V2"}))
+    job, _ = make_job(tmp_path, "facebook", FB_CREDS, account_id="1029",
+                      media=MediaInfo(size=4096, duration=30, width=1920, height=1080))
+    assert FacebookPublisher(s).publish(job).remote_url.endswith("/videos/V2")
+    s = FakeSession().on("POST", "/videos", FakeResponse(200, {"id": "V3"}))         # too long for a Reel
+    job, _ = make_job(tmp_path, "facebook", FB_CREDS, account_id="1029", duration=120)
+    assert FacebookPublisher(s).publish(job).remote_url.endswith("/videos/V3")
+
+
+def test_reel_failures_before_the_finish_step_are_safe_to_retry(tmp_path):
+    from reelay.publishers.facebook import REEL_STARTED
+
+    def drop(*_a):
+        raise requests.ConnectionError("reset")
+    s = FakeSession().on("POST", "1029/video_reels", FakeResponse(200, {"video_id": "R1"}))
+    s.on("POST", "rupload.facebook.com", drop)
+    job, saved = make_job(tmp_path, "facebook", FB_CREDS, account_id="1029")
+    with pytest.raises(TransientError):
+        FacebookPublisher(s).publish(job)
+    assert REEL_STARTED not in saved                     # nothing was posted: a retry starts over
+
+    def hang(*_a):
+        raise requests.ReadTimeout("no answer")
+    s = reel_session(finish=hang)
+    job, saved = make_job(tmp_path, "facebook", FB_CREDS, account_id="1029")
+    with pytest.raises(PermanentError, match="Check the Page"):
+        FacebookPublisher(s).publish(job)                # the finish may have posted it: a person decides
+    job, _ = make_job(tmp_path, "facebook", FB_CREDS, account_id="1029", checkpoint=REEL_STARTED)
+    with pytest.raises(PermanentError, match="Check the Page"):
+        FacebookPublisher(FakeSession()).publish(job)    # and a retry never posts it twice
 
 
 # ====================================================================== verify + redact
@@ -268,7 +347,7 @@ def test_redact():
 
 def test_facebook_uses_its_own_copy_when_set(tmp_path):
     s = FakeSession().on("POST", "/videos", FakeResponse(200, {"id": "V2"}))
-    job, _ = make_job(tmp_path, "facebook", FB_CREDS, account_id="1029")
+    job, _ = make_job(tmp_path, "facebook", FB_CREDS, account_id="1029", size=LANDSCAPE)
     job.post.facebook_text = "Facebook-only words."
     FacebookPublisher(s).publish(job)
     assert s.calls[0]["data"]["description"] == "Facebook-only words."

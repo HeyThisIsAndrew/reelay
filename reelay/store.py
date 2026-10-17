@@ -33,7 +33,7 @@ from .models import (TICKET_FIELDS, Account, ApprovalRequest, BrandProfile, Disp
 
 log = logging.getLogger("reelay")
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 # Post fields whose edits are logical metadata commits (logged as revisions).
 # Status, remote ids and errors are publishing state, tracked by dispatches.
@@ -291,6 +291,37 @@ _MIGRATIONS: dict[int, str] = {
         result TEXT
     );
     CREATE INDEX approval_requests_by_status ON approval_requests (profile_id, status);
+    """,
+    10: """
+    -- What each video file really is (probe.py), read from the file: kept until its size or time changes.
+    CREATE TABLE media_probes (
+        path TEXT PRIMARY KEY,
+        size INTEGER NOT NULL,
+        mtime REAL NOT NULL,
+        duration REAL,
+        width INTEGER,
+        height INTEGER,
+        video_codec TEXT NOT NULL DEFAULT '',
+        audio_codec TEXT NOT NULL DEFAULT '',
+        fps REAL,
+        bitrate INTEGER,
+        probed_at TEXT NOT NULL
+    );
+    -- A different sound for one platform (platform_media.py): the master file is never touched; a copy with
+    -- the new sound is made for that platform only, when it's needed, and rebuilt when its inputs change.
+    CREATE TABLE platform_media (
+        id INTEGER PRIMARY KEY,
+        video_row INTEGER NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
+        platform TEXT NOT NULL,
+        audio_path TEXT NOT NULL,
+        mode TEXT NOT NULL DEFAULT 'replace' CHECK (mode IN ('replace', 'mix')),
+        volume_master REAL NOT NULL DEFAULT 0.25,
+        volume_audio REAL NOT NULL DEFAULT 1.0,
+        output_path TEXT,
+        source_fingerprint TEXT,
+        updated_at TEXT NOT NULL,
+        UNIQUE (video_row, platform)
+    );
     """,
 }
 
@@ -714,6 +745,35 @@ class Store:
             c.execute("INSERT INTO settings (key, value) VALUES (?, ?) "
                       "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (key, value))
         self._emit("setting", (key,))
+
+    # ================================================================ what video files really are (probe.py)
+    def get_probe(self, path: str, size: int, mtime: float):
+        """The remembered facts for `path` if the file still has this size and time, else None."""
+        from .probe import MediaInfo
+        row = self.conn.execute("SELECT * FROM media_probes WHERE path = ? AND size = ? AND mtime = ?",
+                                (path, size, mtime)).fetchone()
+        if row is None:
+            return None
+        return MediaInfo(size=row["size"], duration=row["duration"], width=row["width"], height=row["height"],
+                         video_codec=row["video_codec"], audio_codec=row["audio_codec"], fps=row["fps"],
+                         bitrate=row["bitrate"])
+
+    def media_probed(self, row_id: int, profile_id: int | None = None) -> None:
+        """A video's file was just inspected: tell listeners, so its readiness is checked against it."""
+        self._emit("video", (row_id,), profile_id)
+
+    def save_probe(self, path: str, size: int, mtime: float, info) -> None:
+        if self.read_only:      # view only: probing again next time costs a fraction of a second
+            return
+        with self.tx() as c:
+            c.execute("INSERT INTO media_probes (path, size, mtime, duration, width, height, video_codec, "
+                      "audio_codec, fps, bitrate, probed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                      "ON CONFLICT(path) DO UPDATE SET size = excluded.size, mtime = excluded.mtime, "
+                      "duration = excluded.duration, width = excluded.width, height = excluded.height, "
+                      "video_codec = excluded.video_codec, audio_codec = excluded.audio_codec, fps = excluded.fps, "
+                      "bitrate = excluded.bitrate, probed_at = excluded.probed_at",
+                      (path, size, mtime, info.duration, info.width, info.height, info.video_codec,
+                       info.audio_codec, info.fps, info.bitrate, utcnow()))
 
     # ================================================================ profiles
     def list_profiles(self) -> list[Profile]:

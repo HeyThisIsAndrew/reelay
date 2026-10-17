@@ -298,6 +298,8 @@ def get_edit(store, row_id: int) -> dict | None:
 def set_edit(store, row_id: int, path: Path | str, steps: list[str]) -> dict:
     data = {"file": str(path), "steps": list(steps), "at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
     store.set_setting(EDIT_KEY.format(row=row_id), json.dumps(data))
+    from .probe import probe_soon
+    probe_soon(store, path, row_id)            # the edited copy is what gets posted: check it, not the original
     return data
 
 

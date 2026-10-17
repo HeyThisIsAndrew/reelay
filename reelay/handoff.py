@@ -124,6 +124,13 @@ def prepare(post: Post, platform: str, video: Path | None, duration: float | Non
         checks.append(Step("Length", BLOCK, "TikTok uploads can be at most 60 minutes long."))
     if platform == Platform.INSTAGRAM and duration and duration > 15 * 60:
         checks.append(Step("Length", WARN, "Reels over 15 minutes post as a regular video."))
+    if platform == Platform.INSTAGRAM and exists:
+        from .readiness import INSTAGRAM_MAX_BYTES
+        size = Path(video).stat().st_size
+        if size > INSTAGRAM_MAX_BYTES:
+            checks.append(Step("File size", WARN, f"{size / (1024 * 1024):,.0f} MB: over the 300 MB Instagram allows "
+                                                  "apps to post. Its own app may still take it; if not, export a "
+                                                  "smaller copy."))
     return HandoffPlan(platform, caption, Path(video) if exists else None, UPLOAD_URLS.get(platform, ""),
                        UPLOAD_HINTS.get(platform, ""), checks)
 

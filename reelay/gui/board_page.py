@@ -1441,7 +1441,9 @@ class BoardPage(QWidget):
                 return
         else:
             post, _saved = self.pipeline.post_or_default(row)
-        plan = handoff.prepare(post, platform, self.pipeline.video_path(row), row.item.duration)
+        media = self.pipeline.media_info(row)              # the file's own length, when it's been inspected
+        plan = handoff.prepare(post, platform, self.pipeline.video_path(row),
+                               (media.duration if media and media.duration else None) or row.item.duration)
         dialog = HandoffDialog(plan, self)
         if dialog.exec() != HandoffDialog.Accepted:
             if dialog.started:

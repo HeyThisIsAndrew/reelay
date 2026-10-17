@@ -1496,6 +1496,10 @@ class DownloadPage(QWidget):
         except OSError as exc:
             log.warning("Couldn't write metadata: %s", exc)
             self._set_status(f"Couldn't write metadata: {exc}")
+        path = item.path(self.folder)
+        if path is not None:                      # what the downloaded file really is, for readiness
+            from ..probe import probe_soon
+            probe_soon(self.store, path)
         self.thumbs.retry(key)
         self.model.refresh_all()
         if self.detail.item is not None and self.detail.item.key == key:

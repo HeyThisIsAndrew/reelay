@@ -23,8 +23,12 @@ from .models import Platform, Post
 from .platform_text import text_problem
 from .publishing import DESCRIPTION_MAX_BYTES, TAGS_MAX_CHARS, TITLE_MAX
 
-THREADS_MAX_SECONDS = 300
-BLUESKY_MAX_SECONDS = 180
+MB, GB = 1024 * 1024, 1024 * 1024 * 1024
+THREADS_MAX_SECONDS, THREADS_MAX_BYTES = 300, 1 * GB
+BLUESKY_MAX_SECONDS, BLUESKY_MAX_BYTES = 600, 300 * MB      # raised from 3 minutes / 100 MB on 26 Aug 2026
+FACEBOOK_MAX_BYTES = 1 * GB                                 # Reels, and Page videos sent in one piece
+FACEBOOK_REEL_SECONDS = (3, 90)                             # a vertical video this long goes up as a Reel
+INSTAGRAM_MAX_BYTES = 300 * MB                              # Instagram's API limit for a Reel
 SHORT_FORM_MAX_SECONDS = 180     # YouTube Shorts are at most 3 minutes
 
 
@@ -33,6 +37,12 @@ def is_short_form(width: int | None, height: int | None, duration: float | None)
     if duration and duration > SHORT_FORM_MAX_SECONDS:
         return False
     return not (width and height and width > height)
+
+
+def is_facebook_reel(width: int | None, height: int | None, duration: float | None) -> bool:
+    """Facebook Reels are vertical and 3–90 seconds long; anything else goes up as a regular Page video."""
+    low, high = FACEBOOK_REEL_SECONDS
+    return bool(width and height and height > width and duration and low <= duration <= high)
 
 
 SHORT_FORM, LONG_FORM = "short", "long"
@@ -140,8 +150,27 @@ def _description_problem(description: str) -> str | None:
     return None
 
 
-def platform_checks(post: Post, platform: str, video_path: Path | None, duration: float | None) -> list[Check]:
+def _size_check(size: int | None, limit: int, label: str) -> Check | None:
+    if size is None or size <= limit:
+        return None
+    unit = f"{limit // GB} GB" if limit >= GB else f"{limit // MB} MB"
+    return Check("size", "File size", WARN, f"{label} videos can be at most {unit}; this one is "
+                                            f"{size / MB:,.0f} MB.")
+
+
+def platform_checks(post: Post, platform: str, video_path: Path | None, duration: float | None,
+                    media=None) -> list[Check]:
+    """`media` is what the file to be posted really is (probe.MediaInfo); when it's known, its length, size
+    and shape are checked rather than what the platform reported when the video was listed."""
     checks: list[Check] = []
+    if media is not None and media.duration:
+        duration = media.duration
+    size = media.size if media is not None else None
+    if size is None and video_path is not None:
+        try:
+            size = Path(video_path).stat().st_size
+        except OSError:
+            size = None
     if platform == Platform.YOUTUBE:
         checks.append(_check("title", "Title", _title_problem(post.title), "Written, within 100 characters."))
         checks.append(_check("description", "Description", _description_problem(post.description),
@@ -150,7 +179,12 @@ def platform_checks(post: Post, platform: str, video_path: Path | None, duration
         checks.append(_check("tags", "Tags", f"Tags are {tags_len} characters in total; the limit is "
                                              f"{TAGS_MAX_CHARS}." if tags_len > TAGS_MAX_CHARS else None,
                              "Within 500 characters." if post.tags else "None (optional)."))
-        if duration and duration > SHORT_FORM_MAX_SECONDS:
+        if media is not None and media.width and media.height:
+            short = is_short_form(media.width, media.height, duration)
+            checks.append(Check("format", "Format", PASS, "Posts as a Short (square or vertical, 3 minutes or "
+                                                          "less)." if short else "Posts as a regular YouTube "
+                                                          "video."))
+        elif duration and duration > SHORT_FORM_MAX_SECONDS:
             checks.append(Check("format", "Format", PASS, "Posts as a regular YouTube video (longer than 3 "
                                                           "minutes, so not a Short)."))
     elif platform in OWN_BLOCK:
@@ -159,18 +193,29 @@ def platform_checks(post: Post, platform: str, video_path: Path | None, duration
         problem = (f"Write the {label} (otherwise Reelay would fall back to the title)." if not text
                    else text_problem(platform, text))
         checks.append(_check(key, label, problem, "Written, within the limit."))
-        if platform == Platform.THREADS and duration and duration > THREADS_MAX_SECONDS:
-            checks.append(Check("length", "Video length", WARN, "Threads videos can be at most 5 minutes long."))
-        if platform == Platform.BLUESKY and duration and duration > BLUESKY_MAX_SECONDS:
-            checks.append(Check("length", "Video length", WARN, "Bluesky videos can be at most 3 minutes long."))
+        if platform == Platform.THREADS:
+            if duration and duration > THREADS_MAX_SECONDS:
+                checks.append(Check("length", "Video length", WARN, "Threads videos can be at most 5 minutes long."))
+            checks.append(_size_check(size, THREADS_MAX_BYTES, "Threads"))
+        if platform == Platform.BLUESKY:
+            if duration and duration > BLUESKY_MAX_SECONDS:
+                checks.append(Check("length", "Video length", WARN, "Bluesky videos can be at most 10 minutes "
+                                                                     "long."))
+            checks.append(_size_check(size, BLUESKY_MAX_BYTES, "Bluesky"))
+        if platform == Platform.FACEBOOK:
+            checks.append(_size_check(size, FACEBOOK_MAX_BYTES, "Facebook"))
+            if media is not None and media.width and media.height:
+                reel = is_facebook_reel(media.width, media.height, duration)
+                checks.append(Check("format", "Format", PASS, "Posts as a Reel (vertical, 3–90 seconds)." if reel
+                                    else "Posts as a regular Page video."))
     exists = video_path is not None and Path(video_path).is_file()
     checks.append(_check("video", "Video file", None if exists else "The video file is missing. Download it first.",
                          "Downloaded."))
-    return checks
+    return [c for c in checks if c is not None]
 
 
 def evaluate(post: Post, enabled: frozenset[str] | set[str], video_path: Path | None,
-             duration: float | None = None, targets: list[str] | None = None) -> Readiness:
+             duration: float | None = None, targets: list[str] | None = None, media=None) -> Readiness:
     """Readiness for the post's target platforms (or `targets`)."""
     targets = list(dict.fromkeys(targets or post.target_platforms or [Platform.YOUTUBE]))
     platforms = {}
@@ -179,5 +224,6 @@ def evaluate(post: Post, enabled: frozenset[str] | set[str], video_path: Path | 
             continue
         auto = platform in enabled
         platforms[platform] = PlatformReadiness(platform, auto,
-                                                platform_checks(post, platform, video_path, duration) if auto else [])
+                                                platform_checks(post, platform, video_path, duration, media)
+                                                if auto else [])
     return Readiness(platforms)

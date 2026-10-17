@@ -321,7 +321,21 @@ class Pipeline:
     # ================================================================ readiness
     def _readiness(self, row: VideoRow, post: Post | None = None, targets: list[str] | None = None) -> Readiness:
         post = post or self.post_or_default(row)[0]
-        return evaluate(post, self.enabled_platforms(), self.video_path(row), row.item.duration, targets)
+        return evaluate(post, self.enabled_platforms(), self.video_path(row), row.item.duration, targets,
+                        self.media_info(row))
+
+    def media_info(self, row: VideoRow):
+        """What the file this ticket would post really is (probe.MediaInfo), from the database. Never waits: if
+        the file hasn't been inspected yet, that happens in the background and the ticket is reported changed
+        when it's done, so its readiness is checked again. None until then (the platform's numbers are used)."""
+        from .probe import cached_probe, probe_soon
+        path = self.video_path(row)
+        if path is None:
+            return None
+        info = cached_probe(self.store, path, probe=None)
+        if info is None and path.is_file():
+            probe_soon(self.store, path, row.id, row.profile_id)
+        return info
 
     def readiness(self, row_id: int, post: Post | None = None) -> Readiness:
         """Per-platform checklist for the ticket (as saved, or as `post` is edited)."""
@@ -868,7 +882,9 @@ class Pipeline:
                 if not public_base_url(self.store):
                     add("Threads needs a public link to the video: set REELAY_PUBLIC_URL (or Settings → Public "
                         "URL) to your Cloudflare Tunnel address.")
-                if row.item.duration and row.item.duration > THREADS_MAX_SECONDS:
+                media = self.media_info(row)
+                length = (media.duration if media and media.duration else None) or row.item.duration
+                if length and length > THREADS_MAX_SECONDS:
                     add("Threads videos can be at most 5 minutes long.")
             if platform == Platform.FACEBOOK:
                 if not (post.title.strip() or post.description.strip() or (post.facebook_text or "").strip()):
@@ -1238,9 +1254,11 @@ class Pipeline:
         base = public_base_url(self.store)
         if dispatch.platform == Platform.THREADS and base:
             media_url = lambda: self.media.url(self.media.issue(path), base)  # noqa: E731
+        from .probe import cached_probe
         return PublishJob(dispatch=dispatch, post=replace(post, publish_at=dispatch.publish_at), item=row.item,
                           video_path=path, account=account, credentials=credentials, text=text,
-                          media_url=media_url, checkpoint=lambda c: self.store.set_checkpoint(dispatch.id, c))
+                          media_url=media_url, checkpoint=lambda c: self.store.set_checkpoint(dispatch.id, c),
+                          media=cached_probe(self.store, path))    # off the GUI thread, so it may probe now
 
     # ================================================================ YouTube sync
     def sync_plan(self, profile_id: int) -> SyncPlan:

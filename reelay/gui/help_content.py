@@ -325,8 +325,11 @@ BOARD = Category("board", "Board & preparing posts", "Turn videos into ready-to-
           (Detail("What's checked", (
                "Whether each platform's copy is written and within its limit, and whether the video file is "
                "downloaded.",
-               "#Shorts is only added for vertical videos of 3 minutes or less. Bluesky (3 minutes) and "
-               "Threads (5 minutes) say so when a video is too long for them.")),
+               "The video file itself, read from the file rather than what the platform reported: its length, "
+               "size and shape. Bluesky takes up to 10 minutes and 300 MB, Threads 5 minutes and 1 GB, "
+               "Facebook 1 GB.",
+               "How it will post: a Short on YouTube (square or vertical, 3 minutes or less), a Reel on Facebook "
+               "(vertical, 3–90 seconds), otherwise a regular video. #Shorts is only added for Shorts.")),
            Detail("Finding what's blocked", (
                "**Filter → Show** narrows the Board to tickets that are ready, not ready, or blocked on one "
                "platform.",
@@ -338,7 +341,7 @@ BOARD = Category("board", "Board & preparing posts", "Turn videos into ready-to-
           Visual("ticket-details", "A ticket's Details and provenance section open, showing the transcript, "
                                    "cover and topic fields."),
           (Step("Open **Details and provenance** for the transcript, cover, topic, keywords and where the video "
-                "came from.", "details"),
+                "came from. The cover becomes the YouTube thumbnail when Reelay uploads it.", "details"),
            Step("**Video** (above it) removes or replaces the sound, or adds captions to the picture."),
            Step("**Where it's been posted** (below it) lists every post of this video.")),
           "Video edits make one edited copy that Reelay posts; the original download is never changed.",
@@ -427,7 +430,12 @@ PUBLISHING = Category("publishing", "Publishing & accounts",
            Step("Check the line above the buttons, then click **Publish Now** or **Schedule**.", "post")),
           "YouTube and Facebook get the video now and publish it at your time, even if Reelay is closed. "
           "Bluesky and Threads are posted by Reelay at the time, so it must be running then.",
-          (Detail("If something isn't ready", (
+          (Detail("What each platform gets", (
+               "YouTube: the video, with the ticket's cover as its thumbnail (channels need to be verified for "
+               "custom thumbnails; if YouTube refuses, the video still goes up).",
+               "Facebook: a vertical video of 3–90 seconds goes up as a Reel (schedule up to 29 days ahead); "
+               "anything else as a regular Page video (up to 6 months ahead).")),
+           Detail("If something isn't ready", (
                "Reelay lists the problems and asks before going ahead. Copying and pasting is never blocked.",)),
            Detail("Checking YouTube", (
                "The refresh button on the Board checks YouTube and moves cards to Published once they're "
