@@ -126,7 +126,7 @@ def test_naming_picker_shows_friendly_names_and_a_live_example(ui):
     picker = page.naming
     assert picker.template() == DEFAULT_TEMPLATE and picker.example.text().startswith("Example: TikTok_")
     picker.set_template("{date}_{custom}")
-    assert picker.combo.currentText() == "Date and your name" and not picker.pattern.isVisibleTo(picker)
+    assert picker.combo.currentText() == "Date and file label" and not picker.pattern.isVisibleTo(picker)
     assert store.get_profile(window.profile.id).template == "{date}_{custom}"
     assert "letting-go.mp4" in picker.example.text()
     picker.set_template("{uploader}-{id}")                            # anything else → power-user box

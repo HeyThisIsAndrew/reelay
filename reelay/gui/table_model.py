@@ -25,23 +25,39 @@ class Col(IntEnum):
     CUSTOM = 6
     FILENAME = 7
     STATUS = 8
+    PLATFORM = 9            # added last, so saved sorts and the other columns keep their numbers
 
 
 HEADERS = {
-    Col.CHECK: "", Col.COVER: "", Col.DATE: "DATE", Col.HOOK: "CAPTION",
-    Col.LENGTH: "LENGTH", Col.VIEWS: "VIEWS", Col.CUSTOM: "YOUR NAME",
-    Col.FILENAME: "FILE NAME", Col.STATUS: "STATUS",
+    Col.CHECK: "", Col.COVER: "", Col.DATE: "DATE", Col.HOOK: "CAPTION / HOOK",
+    Col.LENGTH: "LENGTH", Col.VIEWS: "VIEWS", Col.CUSTOM: "FILE LABEL",
+    Col.FILENAME: "FILE NAME", Col.STATUS: "STATUS", Col.PLATFORM: "PLATFORM",
 }
+# What each column is called in the Columns menu (the header itself is often blank or in capitals)
+COLUMN_NAMES = {
+    Col.CHECK: "Checkbox", Col.COVER: "Thumbnail", Col.DATE: "Date", Col.HOOK: "Caption / Hook",
+    Col.LENGTH: "Length", Col.VIEWS: "Views", Col.CUSTOM: "File Label", Col.FILENAME: "File Name",
+    Col.STATUS: "Status", Col.PLATFORM: "Platform",
+}
+# The clean default list, in this order; the rest can be switched on from Columns.
+DEFAULT_COLUMNS = (Col.CHECK, Col.COVER, Col.DATE, Col.FILENAME, Col.PLATFORM, Col.STATUS)
+DEFAULT_WIDTHS = {Col.CHECK: 34, Col.COVER: 50, Col.DATE: 112, Col.HOOK: 280, Col.LENGTH: 72, Col.VIEWS: 76,
+                  Col.CUSTOM: 150, Col.FILENAME: 260, Col.PLATFORM: 150, Col.STATUS: 150}
+PLATFORM_NAMES = {"youtube_shorts": "YouTube Short", "youtube": "YouTube", "tiktok": "TikTok",
+                  "instagram": "Instagram", "facebook": "Facebook", "threads": "Threads", "bluesky": "Bluesky",
+                  "snapchat": "Snapchat"}
 HEADER_TIPS = {
     Col.CHECK: "Selected videos download when you click Download. Click a box to select or unselect a video.",
     Col.COVER: "Cover image",
     Col.DATE: "When the video was first posted",
-    Col.HOOK: "The start of the video's caption",
+    Col.HOOK: "The start of the video's caption, without the hashtags it opens with",
     Col.LENGTH: "How long the video is",
     Col.VIEWS: "Views on the original platform",
-    Col.CUSTOM: "Your own short name for the video. Double-click a cell (or use the side panel) to set it.",
+    Col.CUSTOM: "Optional custom label used when renaming files on disk. Double-click a cell (or use the side "
+                "panel) to set it.",
     Col.FILENAME: "What the file is (or will be) called on disk",
-    Col.STATUS: "Whether the video will download, is downloading, is done, or failed",
+    Col.STATUS: "Whether the video is downloaded, ready to download (ticked), downloading, or failed",
+    Col.PLATFORM: "Where the video came from (a YouTube Short or a regular YouTube video)",
 }
 SORT_ROLE = Qt.UserRole + 1
 COVER_W, COVER_H = 34, 60
@@ -63,6 +79,15 @@ def short_date(yyyymmdd: str) -> str:
     except (ValueError, TypeError):
         return ""
     return f"{d:%b} {d.day}" + ("" if d.year == datetime.now().year else f", {d.year}")
+
+
+def readable_hook(text: str) -> str:
+    """One line of the caption without the cluster of hashtags it often opens with ("#tiktoklive #highlights
+    The best lens…" → "The best lens…"); the caption as it is when it's nothing but hashtags."""
+    import re
+    line = " ".join((text or "").split())
+    rest = re.sub(r"^(?:#\S+\s*)+", "", line)
+    return rest or line
 
 
 def fmt_duration(seconds) -> str:
@@ -208,6 +233,9 @@ class VideoTableModel(QAbstractTableModel):
             return Qt.Checked if item.checked else Qt.Unchecked
         if role == Qt.DisplayRole:
             return self._display(item, col)
+        if role == Qt.DecorationRole and col == Col.PLATFORM:
+            from .logos import platform_icon
+            return platform_icon(self._source_key(item), 16)
         if role == Qt.EditRole and col == Col.CUSTOM:
             return item.custom_name
         if role == SORT_ROLE:
@@ -242,10 +270,12 @@ class VideoTableModel(QAbstractTableModel):
 
     # ---------------------------------------------------------------- cells
     def _display(self, item: VideoItem, col: Col):
-        if col == Col.DATE:
-            return short_date(item.upload_date) if item.upload_date else ("…" if item.status != Status.DOWNLOADED else "—")
+        if col == Col.DATE:      # always with the year: a list is often sorted across years
+            return fmt_date(item.upload_date) if item.upload_date else ("…" if item.status != Status.DOWNLOADED else "—")
         if col == Col.HOOK:
-            return " ".join(item.hook.split())
+            return readable_hook(item.hook)
+        if col == Col.PLATFORM:
+            return PLATFORM_NAMES.get(self._source_key(item), item.platform or "")
         if col == Col.LENGTH:
             return fmt_duration(item.duration)
         if col == Col.VIEWS:
@@ -270,7 +300,7 @@ class VideoTableModel(QAbstractTableModel):
             return "Failed"
         if item.availability in ("private", "scheduled"):
             return "Private on YouTube" if item.availability == "private" else "Scheduled on YouTube"
-        return "Will download" if item.checked else "Not selected"
+        return "Ready to download" if item.checked else "Not downloaded"
 
     def _sort_value(self, item: VideoItem, col: Col):
         return {
@@ -282,7 +312,13 @@ class VideoTableModel(QAbstractTableModel):
             Col.CUSTOM: item.custom_name.lower(),
             Col.FILENAME: self.planned_filename(item).lower(),
             Col.STATUS: item.status,
+            Col.PLATFORM: PLATFORM_NAMES.get(self._source_key(item), item.platform or "").lower(),
         }.get(col, "")
+
+    @staticmethod
+    def _source_key(item: VideoItem) -> str:
+        from .cards import source_badge
+        return source_badge(item)[0]
 
     def _tooltip(self, item: VideoItem, col: Col):
         if col == Col.CHECK:
@@ -295,6 +331,9 @@ class VideoTableModel(QAbstractTableModel):
             return f"{source_badge(item)[1]}. Click the row for its caption, details and file name."
         if col == Col.HOOK:
             return item.hook
+        if col == Col.PLATFORM:
+            from .cards import source_badge
+            return source_badge(item)[1]
         if col == Col.DATE and item.upload_date:
             return fmt_date(item.upload_date)
         if col == Col.STATUS and item.status == Status.FAILED:
@@ -305,14 +344,14 @@ class VideoTableModel(QAbstractTableModel):
         if col == Col.FILENAME and item.is_downloaded and self.planned_filename(item) != item.filename:
             return f"Currently: {item.filename}\nClick “Rename Files…” to rename it."
         if col == Col.CUSTOM and not item.custom_name:
-            return "Double-click to give this video your own name"
+            return "Optional custom label used when renaming files on disk. Double-click to set one."
         if col == Col.STATUS:
             if item.status == Status.DOWNLOADED:
                 return "Downloaded. Find it on the Board, in Backlog."
             if item.status in (Status.DOWNLOADING, Status.QUEUED):
                 return "Downloading now, or waiting its turn."
-            return ("Selected: downloads when you click Download." if item.checked else
-                    "Not selected, so it won't download. Tick its box or click Select All.")
+            return ("Ticked: it downloads when you click Download." if item.checked else
+                    "Not downloaded yet. Tick its box (or click Select All) to download it.")
         if col == Col.VIEWS:
             return "Views on the original platform when the list was made"
         if col == Col.LENGTH:
@@ -322,6 +361,9 @@ class VideoTableModel(QAbstractTableModel):
     def _foreground(self, item: VideoItem, col: Col):
         if col == Col.STATUS and item.status == Status.FAILED:
             return QColor(theme.P.danger)
+        if col == Col.STATUS and not item.checked and not item.is_downloaded and item.status not in (
+                Status.DOWNLOADING, Status.QUEUED):
+            return QColor(theme.P.text_muted)                  # "Not downloaded": quiet, never alarming
         if not item.checked and not item.is_downloaded and col not in (Col.CHECK, Col.STATUS):
             return QColor(theme.P.text_muted)
         if col in (Col.DATE, Col.LENGTH, Col.VIEWS, Col.FILENAME, Col.STATUS):

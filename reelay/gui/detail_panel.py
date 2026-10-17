@@ -3,7 +3,7 @@
 Top to bottom: the title; Details (every known fact once, as label and value
 rows: platform with its logo, creator, date, length, views, likes, comments,
 resolution); what the post says (caption, hashtags, tagged products); then the
-file (your name for it, the file name) and what to do with it."""
+file (its file label, the file name) and what to do with it."""
 
 from __future__ import annotations
 
@@ -167,10 +167,11 @@ class DetailPanel(QFrame):
         lay.addWidget(self.products_header)
         lay.addWidget(self.products)
 
-        # ---- the file: your name for it, and what to do with it
+        # ---- the file: its label, and what to do with it
         lay.addSpacing(6)
-        lay.addWidget(tip(_label("YOUR NAME FOR THIS VIDEO", prop="section"),
-                          "A short name you choose. It's used in the file name when Name files includes your name."))
+        lay.addWidget(tip(_label("FILE LABEL (OPTIONAL)", prop="section"),
+                          "Optional custom label used when renaming files on disk: it goes into the file name when "
+                          "Name files includes the file label."))
         self.custom = QLineEdit()
         self.custom.setPlaceholderText("e.g. letting-go-of-who-you-were")
         tip(self.custom, "Type a short name for this video. Saved automatically.")

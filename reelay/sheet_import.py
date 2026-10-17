@@ -2,7 +2,7 @@
 
 The manual workflow this replaces: a sheet with one row per video and columns
 for the title, captions, hashtags and so on. Each row is matched to a video on
-the profile (by the video's link, its ID, the file name, or your name for it),
+the profile (by the video's link, its ID, the file name, or its file label),
 each column is mapped to a ticket field, and the result is previewed before
 anything is written. The import then lands in ONE transaction: every row or
 none, each change logged with origin "import".
@@ -57,7 +57,7 @@ MATCH_KEYS: dict[str, tuple[str, ...]] = {
                   "tiktok link", "post url", "original link"),
     "match_id": ("video id", "id", "tiktok id"),
     "match_file": ("file", "file name", "filename"),
-    "match_name": ("your name", "custom name", "name", "short name", "slug"),
+    "match_name": ("file label", "your name", "custom name", "name", "short name", "slug", "label"),
 }
 LABELS = {
     "title": "YouTube title", "description": "YouTube description", "tags": "YouTube tags",
@@ -66,7 +66,7 @@ LABELS = {
     "facebook_text": "Facebook post", "hashtags": "Hashtags", "transcript": "Transcript", "topic": "Topic",
     "keywords": "Keywords", "creator": "Creator", "content_type": "Type", "original_publish_date": "First published",
     "authorization": "Permission", "thumbnail_path": "Cover image", "match_url": "Video link (to match)",
-    "match_id": "Video ID (to match)", "match_file": "File name (to match)", "match_name": "Your name (to match)",
+    "match_id": "Video ID (to match)", "match_file": "File name (to match)", "match_name": "File label (to match)",
 }
 POST_FIELDS = ("title", "description", "tags", "target_platforms", "tiktok_text", "instagram_text", "bluesky_text",
                "threads_text", "facebook_text", "hashtags")
@@ -216,7 +216,7 @@ def convert(target: str, value: str) -> tuple[object, str | None]:
 class RowPlan:
     number: int                         # the sheet's row number (header = 1)
     video_id: int | None = None
-    matched_by: str = ""                # "link" | "video ID" | "file name" | "your name"
+    matched_by: str = ""                # "link" | "video ID" | "file name" | "file label"
     title: str = ""                     # the matched video, for people
     post_changes: dict = field(default_factory=dict)
     ticket_changes: dict = field(default_factory=dict)
@@ -276,7 +276,7 @@ def plan_import(headers: list[str], rows: list[list[str]], mapping: dict[str, st
         if item.custom_name:
             by_key["match_name"][item.custom_name.lower()] = v
     columns = {target: headers.index(h) for h, target in mapping.items() if target and h in headers}
-    how = {"match_url": "link", "match_id": "video ID", "match_file": "file name", "match_name": "your name"}
+    how = {"match_url": "link", "match_id": "video ID", "match_file": "file name", "match_name": "file label"}
     plans: list[RowPlan] = []
     seen: dict[int, int] = {}
     for n, cells in enumerate(rows, start=2):
@@ -295,7 +295,7 @@ def plan_import(headers: list[str], rows: list[list[str]], mapping: dict[str, st
                 break
         if plan.video_id is None:
             plan.problems.append("No video on this profile matches this row." if any(
-                k in columns for k in by_key) else "Map a column to the video's link, ID, file name or your name.")
+                k in columns for k in by_key) else "Map a column to the video's link, ID, file name or file label.")
             plans.append(plan)
             continue
         if plan.video_id in seen:

@@ -1098,7 +1098,7 @@ def create_app(store: Store, pipeline: Pipeline, accounts: AccountService, token
                      profile: str = Query(..., description="Profile name exactly as shown in Reelay's sidebar."),
                      dry_run: bool = Query(True, description="true (default) only reports what would change.")
                      ) -> ImportReport:
-        """Matches each row to a video (by link, video ID, file name or your name for it), maps columns to ticket
+        """Matches each row to a video (by link, video ID, file name or file label), maps columns to ticket
         fields, and fills them. Empty cells never clear anything; over-limit or invalid rows are skipped and
         reported. dry_run=true (the default) only reports. dry_run=false asks to apply it: **needs a person's
         approval** (202 with an approval_id); when approved, every changing row is written in one transaction,

@@ -75,7 +75,7 @@ class VideoListDialog(QDialog):
         head.addWidget(self.count)
         head.addStretch()
         self.search = search_field("Search titles, names and files",
-                                   "Show only videos whose title, your name for it, platform or file name match",
+                                   "Show only videos whose title, file label, platform or file name match",
                                    width=300)
         self.search.textChanged.connect(self._filter)
         head.addWidget(self.search)
@@ -243,7 +243,7 @@ class VideoListDialog(QDialog):
         try:
             with target.open("w", newline="", encoding="utf-8") as fh:
                 writer = csv.writer(fh)
-                writer.writerow(["Date", "Title", "Your name", "Platform", "Length (seconds)", "Views",
+                writer.writerow(["Date", "Title", "File label", "Platform", "Length (seconds)", "Views",
                                  "Size (bytes)", "File name", "Original link"])
                 for item in self.visible_items():
                     writer.writerow([item.upload_date, item.hook, item.custom_name, item.platform,

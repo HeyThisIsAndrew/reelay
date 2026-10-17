@@ -210,7 +210,7 @@ LIBRARY = Category("library", "Library & downloads", "Bring videos in, choose wh
     Guide("library-views", "Filters and pages", "Find the videos you want in a big library.",
           Visual("library", "The Library's search field, Filter button, tile-size slider, grid/list toggle and "
                             "per-page menu."),
-          (Step("Type in search to match captions, hashtags, product names, your names and file names.", "search"),
+          (Step("Type in search to match captions, hashtags, product names, file labels and file names.", "search"),
            Step("**Filter** shows all, not downloaded or downloaded videos, Short-form or Long-form, one hashtag, "
                 "a brand or product, and the sort order.", "filter"),
            Step("Drag the slider (or press ⌘+ and ⌘−) for smaller or bigger tiles.", "tiles"),
@@ -227,6 +227,10 @@ LIBRARY = Category("library", "Library & downloads", "Bring videos in, choose wh
                "Reelay looks up which products are tagged on each TikTok video, in the background. Filter "
                "by a brand or product, or type a brand in search.",
                "YouTube and Instagram product tags aren't read yet.")),
+           Detail("The list's columns", (
+               "In the list, **Columns ▾** (or right-click a column's header) shows or hides any column: Caption / "
+               "Hook, Length, Views and File Label are off at first. Drag a header to move a column, or its edge to "
+               "resize it; Reelay remembers. **Reset Columns to Default** puts them back.",)),
            Detail("Pages and selecting", (
                "**Select All** still selects every matching video, on every page.",))),
           ("library-select", "library-files"),
@@ -243,8 +247,9 @@ LIBRARY = Category("library", "Library & downloads", "Bring videos in, choose wh
           (Detail("Naming files", (
                "The default is platform, date and video ID, such as TikTok_20261002_7692175258450677023.mp4.",
                "**Custom pattern…** combines {date}, {custom}, {platform}, {id}, {title} and {uploader}.",
-               "Your own short name for a video: double-click its **Your name** cell, type it in the side "
-               "panel, or use **Suggest Names ▾** to fill names from captions.")),
+               "An optional **file label** for a video, used when renaming files on disk: double-click its **File "
+               "label** cell (switch the column on from **Columns ▾**), type it in the side panel, or use "
+               "**Suggest Names ▾** to fill labels from captions.")),
            Detail("The video list", (
                "**Show in Finder**, **Copy Video Link** and **Play Preview** for any video.",
                "Export the list as a CSV spreadsheet or as a Markdown manifest.",

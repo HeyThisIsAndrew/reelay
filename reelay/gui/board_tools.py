@@ -174,7 +174,7 @@ class ImportDialog(QDialog):
         lay.setContentsMargins(20, 16, 20, 14)
         lay.setSpacing(10)
         lay.addWidget(_label("Fill tickets from a sheet with one row per video. Each row is matched to a video on "
-                             f"{profile.name}'s board by its link, video ID, file name or your name for it. "
+                             f"{profile.name}'s board by its link, video ID, file name or file label. "
                              "Nothing is written until you click Import, and empty cells never erase anything.",
                              "muted"))
         src = QHBoxLayout()

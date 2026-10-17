@@ -17,10 +17,10 @@ DEFAULT_TEMPLATE = "{platform}_{date}_{id}"
 # (plain-language label shown in the GUI, template)
 PRESETS: list[tuple[str, str]] = [
     ("Platform, date and video ID", DEFAULT_TEMPLATE),
-    ("Date and your name", "{date}_{custom}"),
-    ("Your name only", "{custom}"),
+    ("Date and file label", "{date}_{custom}"),
+    ("File label only", "{custom}"),
     ("Date and first words of the caption", "{date}_{title}"),
-    ("Creator, date and your name", "{uploader}_{date}_{custom}"),
+    ("Creator, date and file label", "{uploader}_{date}_{custom}"),
 ]
 
 TOKENS: dict[str, str] = {
@@ -28,7 +28,7 @@ TOKENS: dict[str, str] = {
     "date": "Upload date, YYYYMMDD",
     "ymd": "Upload date, YYYY-MM-DD",
     "id": "The platform's video ID",
-    "custom": "Your name for the video (the video ID if you haven't named it)",
+    "custom": "The video's file label (its video ID if it has none)",
     "title": "First words of the caption, as a slug",
     "uploader": "Creator handle",
     "n": "Position in the list: 001, 002…",

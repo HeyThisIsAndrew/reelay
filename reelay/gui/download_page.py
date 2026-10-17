@@ -37,7 +37,8 @@ from .scrub import ScrubCache
 from .sources_panel import SourcesDialog, apply_button_state
 from .dialogs import RenamePreviewDialog, tokens_help_html
 from .cards import CARD_MIN_WIDTH, TILE_MAX, TILE_MIN, TILE_SIZES, LibraryCardDelegate, MediaGrid
-from .table_model import ROW_HEIGHT, Col, CoverDelegate, PageProxy, VideoFilterProxy, VideoTableModel
+from .table_model import (COLUMN_NAMES, DEFAULT_COLUMNS, DEFAULT_WIDTHS, ROW_HEIGHT, Col, CoverDelegate, PageProxy,
+                          VideoFilterProxy, VideoTableModel)
 from .theme import set_prop
 from .tips import tip
 from .widgets import GrowingSearch, NamingPicker, ProductFilter
@@ -72,6 +73,9 @@ def muted(text: str, prop: str = "muted") -> QLabel:
     lab = QLabel(text)
     lab.setProperty(prop, True)
     return lab
+
+
+COLUMNS_SETTING = "library/columns"      # the list's column layout: order, widths, which are shown
 
 
 class VideoTable(QTableView):
@@ -236,6 +240,14 @@ class DownloadPage(QWidget):
         self.view_toggle = ViewToggle(self.store, "library")
         self.view_toggle.changed.connect(self._set_view)
         head.addWidget(self.view_toggle)
+        self.columns_btn = tip(QToolButton(text="Columns  ▾"), "Show, hide or reset the list's columns. Drag a "
+                                                                "column's header to move it, or its edge to resize it.")
+        self.columns_btn.setPopupMode(QToolButton.InstantPopup)
+        columns_menu = QMenu(self.columns_btn)
+        columns_menu.aboutToShow.connect(lambda: self.column_menu(columns_menu))
+        self.columns_btn.setMenu(columns_menu)
+        head.insertWidget(head.indexOf(self.view_toggle), self.columns_btn)
+        self.columns_btn.setVisible(self.view_toggle.mode == "list")
         self.settings_btn = icon_button("gear", "Download settings: where videos are saved, quality, browser "
                                                 "sign-in and how files are named")
         head.addWidget(self.settings_btn)
@@ -378,25 +390,19 @@ class DownloadPage(QWidget):
         hh = self.table.horizontalHeader()
         hh.setHighlightSections(False)
         hh.setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        hh.setStretchLastSection(False)
-        # Fixed-width data columns; the three text columns share the rest.
-        widths = {Col.CHECK: 34, Col.COVER: 50, Col.DATE: 86, Col.LENGTH: 72, Col.VIEWS: 64, Col.STATUS: 132}
-        for col, w in widths.items():
-            hh.setSectionResizeMode(col, QHeaderView.Fixed)
-            self.table.setColumnWidth(col, w)
-        hh.setSectionResizeMode(Col.FILENAME, QHeaderView.Interactive)
-        self.table.setColumnWidth(Col.FILENAME, 150)
+        hh.setMinimumSectionSize(34)
+        # Like an editing app's bins: drag a column to move it, drag any divider to resize it, right-click (or
+        # Columns ▾) to show or hide columns. Only the checkbox and the thumbnail keep a fixed width.
+        hh.setSectionsMovable(True)
+        hh.setStretchLastSection(True)
         hh.setContextMenuPolicy(Qt.CustomContextMenu)
         hh.customContextMenuRequested.connect(self._column_menu)
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._row_menu)
-        hidden = QSettings().value("hidden_columns", []) or []
-        for col in hidden:
-            if int(col) in (Col.LENGTH, Col.VIEWS, Col.CUSTOM, Col.FILENAME, Col.STATUS):
-                self.table.setColumnHidden(int(col), True)
-        for col in (Col.HOOK, Col.CUSTOM):
-            hh.setSectionResizeMode(col, QHeaderView.Stretch)
-        hh.setMinimumSectionSize(34)
+        self._columns_timer = QTimer(self, singleShot=True, interval=400, timeout=self.save_columns)
+        self._apply_columns(QSettings().value(COLUMNS_SETTING))
+        hh.sectionMoved.connect(lambda *_: self._columns_timer.start())
+        hh.sectionResized.connect(lambda *_: self._columns_timer.start())
 
         self.list_stack = QStackedWidget()
         self.list_stack.addWidget(self._build_empty_state())
@@ -498,16 +504,56 @@ class DownloadPage(QWidget):
         auto.addAction("Custom Naming Patterns (Advanced)…", self.show_tokens_help)
         self.autoname_btn.setMenu(auto)
 
-    def _column_menu(self, pos) -> None:
-        """Right-click the header to show or hide optional columns."""
-        menu = QMenu(self)
-        for col, label in ((Col.LENGTH, "Length"), (Col.VIEWS, "Views"), (Col.CUSTOM, "Your Name"),
-                           (Col.FILENAME, "File Name"), (Col.STATUS, "Status")):
-            act = menu.addAction(label)
+    # ================================================================ list columns
+    def _apply_columns(self, state=None) -> None:
+        """The saved column layout (order, widths, which are shown), or the clean default."""
+        hh = self.table.horizontalHeader()
+        restored = bool(state) and hh.restoreState(state)
+        if not restored:
+            for visual, col in enumerate(list(DEFAULT_COLUMNS) + [c for c in Col if c not in DEFAULT_COLUMNS]):
+                hh.moveSection(hh.visualIndex(col), visual)
+            for col in Col:
+                self.table.setColumnHidden(col, col not in DEFAULT_COLUMNS)
+                self.table.setColumnWidth(col, DEFAULT_WIDTHS[col])
+        for col in Col:            # resize modes are ours to set, whatever was saved
+            hh.setSectionResizeMode(col, QHeaderView.Fixed if col in (Col.CHECK, Col.COVER) else QHeaderView.Interactive)
+        for col in (Col.CHECK, Col.COVER):
+            self.table.setColumnWidth(col, DEFAULT_WIDTHS[col])
+        self.table.setColumnHidden(Col.CHECK, False)          # the checkbox is how videos are chosen
+
+    def save_columns(self) -> None:
+        QSettings().setValue(COLUMNS_SETTING, self.table.horizontalHeader().saveState())
+
+    def reset_columns(self) -> None:
+        QSettings().remove(COLUMNS_SETTING)
+        self._apply_columns(None)
+
+    def set_column_visible(self, col: int, visible: bool) -> None:
+        if col == Col.CHECK:
+            return
+        self.table.setColumnHidden(col, not visible)
+        self.save_columns()
+
+    def column_menu(self, menu: QMenu | None = None) -> QMenu:
+        """Show or hide any column but the checkbox, in the order they're shown, and get the default back."""
+        menu = menu or QMenu(self)
+        menu.clear()
+        hh = self.table.horizontalHeader()
+        for visual in range(hh.count()):
+            col = Col(hh.logicalIndex(visual))
+            if col == Col.CHECK:
+                continue
+            act = menu.addAction(COLUMN_NAMES[col])
             act.setCheckable(True)
             act.setChecked(not self.table.isColumnHidden(col))
-            act.toggled.connect(lambda on, c=col: self._set_column_visible(c, on))
-        menu.exec(self.table.horizontalHeader().mapToGlobal(pos))
+            act.toggled.connect(lambda on, c=col: self.set_column_visible(c, on))
+        menu.addSeparator()
+        menu.addAction("Reset Columns to Default", self.reset_columns)
+        return menu
+
+    def _column_menu(self, pos) -> None:
+        """Right-click the header: show, hide or reset columns."""
+        self.column_menu().exec(self.table.horizontalHeader().mapToGlobal(pos))
 
     def _row_menu(self, pos, view=None) -> None:
         """Right-click a video (or highlighted videos), in the grid or the list."""
@@ -553,10 +599,6 @@ class DownloadPage(QWidget):
         self._set_status(f"Archived {n} video{'s' if n > 1 else ''}. Board → Archived… brings them back.")
         self.reload()
 
-    def _set_column_visible(self, col: int, visible: bool) -> None:
-        self.table.setColumnHidden(col, not visible)
-        hidden = [c for c in range(len(Col)) if self.table.isColumnHidden(c)]
-        QSettings().setValue("hidden_columns", hidden)
 
     # ================================================================ grid / list
     def _build_grid(self) -> MediaGrid:
@@ -603,6 +645,7 @@ class DownloadPage(QWidget):
 
     def _set_view(self, mode: str) -> None:
         self.tile_controls.setVisible(mode == "grid")
+        self.columns_btn.setVisible(mode == "list")           # columns only mean something in the list
         if self.model.items():
             self.list_stack.setCurrentIndex(self._view_index())
         current = self.table.selectionModel().currentIndex()
@@ -1354,7 +1397,7 @@ class DownloadPage(QWidget):
         self.model.set_custom_names({i.key: slugify(i.hook) for i in targets if slugify(i.hook)})
         if "{custom}" not in self.naming.template():
             self._set_status(f"Named {len(targets)} videos. To use these names in the file names, set "
-                             "Name files to “Date and your name”.")
+                             "Name files to “Date and file label”.")
         else:
             self._set_status(f"Named {len(targets)} videos from their captions.")
 
