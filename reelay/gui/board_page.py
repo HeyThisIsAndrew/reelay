@@ -15,7 +15,7 @@ from PySide6.QtCore import (QAbstractListModel, QItemSelectionModel, QMimeData, 
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QKeySequence, QPainter, QPainterPath, QPen, QShortcut
 from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFrame, QHBoxLayout, QLabel, QListView, QMenu,
                                QMessageBox, QPushButton, QScrollArea, QSplitter, QStackedWidget, QStyle,
-                               QStyledItemDelegate, QToolButton, QVBoxLayout, QWidget)
+                               QStyledItemDelegate, QToolButton, QVBoxLayout, QWidget, QLineEdit)
 
 from ..models import Platform, Post, PostStatus, Profile, Stage
 from ..coverage import needs_work as coverage_needs_work, short_summary
@@ -25,7 +25,7 @@ from ..text import clock, local_text
 from ..uploads import UploadManager
 from . import theme
 from .theme import set_prop
-from ..columns import ColumnError, column_for, default_columns, is_custom
+from ..columns import NAME_MAX, SUBTITLE_MAX, ColumnError, column_for, default_columns, is_custom
 from ..columns import add as add_column
 from ..columns import load as load_columns
 from ..columns import remove as remove_column
@@ -469,18 +469,78 @@ STEP_TIPS = {
     Stage.SCHEDULED: "videos waiting to go live (cards move here once every platform is scheduled)",
     Stage.PUBLISHED: "videos that are live (cards move here once every platform is posted)",
 }
-# One line under each column's title saying what it holds (the full sentence is the title's tooltip)
-COLUMN_PURPOSE = {
-    Stage.BACKLOG: "Downloaded, not started",
-    Stage.STAGING: "Writing the posts",
-    Stage.SCHEDULED: "Waiting to go live",
-    Stage.PUBLISHED: "Live",
-}
 
 
 def column_purpose(column) -> str:
-    """The purpose line for a column: its built-in steps' purposes, or a column you added."""
-    return " · ".join(COLUMN_PURPOSE[s] for s in column.builtin) or "Your own step"
+    """The line under a column's title: its own subtitle, else what its built-in steps hold."""
+    return column.purpose
+
+
+class InlineEdit(QStackedWidget):
+    """A label you double-click to edit in place: Return or clicking away keeps the change, Esc drops it."""
+
+    edited = Signal(str)
+
+    def __init__(self, text: str, object_name: str, placeholder: str, limit: int, parent=None):
+        super().__init__(parent)
+        self.label = QLabel(text, objectName=object_name)
+        self.label.setCursor(Qt.IBeamCursor)
+        self.field = tip(QLineEdit(text, objectName="InlineEdit"), placeholder)
+        self.field.setPlaceholderText(placeholder)
+        self.field.setMaxLength(limit)
+        self.field.setProperty("role", object_name)          # styled like the label it replaces
+        self.field.installEventFilter(self)
+        self.field.returnPressed.connect(self._commit)
+        self.field.editingFinished.connect(self._commit)
+        self.addWidget(self.label)
+        self.addWidget(self.field)
+        self.setSizePolicy(self.label.sizePolicy())
+
+    def sizeHint(self):
+        return self.currentWidget().sizeHint()
+
+    def minimumSizeHint(self):
+        return self.currentWidget().minimumSizeHint()
+
+    def text(self) -> str:
+        return self.label.text()
+
+    def setToolTip(self, text: str) -> None:
+        self.label.setToolTip(text)
+
+    def mouseDoubleClickEvent(self, event) -> None:
+        self.start()
+
+    def start(self, text: str | None = None) -> None:
+        self.field.setText(self.label.text() if text is None else text)
+        self.setCurrentWidget(self.field)
+        self.field.setFocus()
+        self.field.selectAll()
+        self.updateGeometry()
+
+    def editing(self) -> bool:
+        return self.currentWidget() is self.field
+
+    def _commit(self) -> None:
+        if not self.editing():
+            return
+        self._close()
+        text = self.field.text().strip()
+        if text != self.label.text():
+            self.edited.emit(text)
+
+    def _close(self) -> None:
+        self.setCurrentWidget(self.label)
+        self.updateGeometry()
+
+    def eventFilter(self, obj, event) -> bool:
+        # Esc drops the edit (claimed before the Board's own Esc shortcut sees it)
+        if obj is self.field and event.type() in (QEvent.ShortcutOverride, QEvent.KeyPress) and \
+                event.key() == Qt.Key_Escape:
+            event.accept()
+            self._close()
+            return True
+        return super().eventFilter(obj, event)
 
 
 EMPTY_TEXT = {
@@ -493,6 +553,8 @@ EMPTY_TEXT = {
 
 class BoardColumn(QFrame):
     renameRequested = Signal(str)        # column id
+    titleEdited = Signal(str, str)       # column id, new title (edited in place)
+    subtitleEdited = Signal(str, str)    # column id, new subtitle ("" puts the default back)
     addRequested = Signal(str)           # add a column after this one
     removeRequested = Signal(str)
     editRequested = Signal()
@@ -506,20 +568,35 @@ class BoardColumn(QFrame):
         lay.setContentsMargins(10, 12, 10, 6)
         lay.setSpacing(6)
         head = QHBoxLayout()
-        title = QLabel(column.name, objectName="ColumnTitle")
+        head.setSpacing(4)
+        title = InlineEdit(column.name, "ColumnTitle", "Column title", NAME_MAX)
         holds = [STEP_TIPS[s] for s in column.builtin]
         title.setToolTip((f"{column.name}: " + "; ".join(holds) if holds else
                           f"{column.name}: your own column. Drag cards in and out.") +
-                         "\nRight-click to rename, add or remove columns.")
-        title.setContextMenuPolicy(Qt.CustomContextMenu)
-        title.customContextMenuRequested.connect(lambda pos: self._menu(title.mapToGlobal(pos)))
+                         "\nDouble-click to rename it. Right-click to add or remove columns.")
+        title.edited.connect(lambda text: self.titleEdited.emit(self.column.id, text))
+        title.label.setContextMenuPolicy(Qt.CustomContextMenu)
+        title.label.customContextMenuRequested.connect(lambda pos: self._menu(title.label.mapToGlobal(pos)))
         self.title = title
         self.count = QLabel("0", objectName="ColumnCount")     # a small pill, like the website draws it
+        self.menu_btn = icon_button("more", f"Change “{column.name}”: rename it, edit its subtitle, add a column "
+                                            "after it or remove it", 14)
+        self.menu_btn.setObjectName("IconButton")
+        self.menu_btn.setProperty("subtle", True)
+        self.menu_btn.clicked.connect(lambda: self._menu(self.menu_btn.mapToGlobal(self.menu_btn.rect().bottomLeft())))
         head.addWidget(title)
         head.addStretch()
         head.addWidget(self.count)
+        head.addWidget(self.menu_btn)
         lay.addLayout(head)
-        self.purpose = QLabel(column_purpose(column), objectName="ColumnPurpose")
+        self.purpose = InlineEdit(column.purpose, "ColumnPurpose", "What this column holds (empty for the "
+                                  "default)", SUBTITLE_MAX)
+        self.purpose.setToolTip("What this column holds. Double-click to change it; clear it to get the default "
+                                "back.")
+        self.purpose.edited.connect(self._subtitle_edited)
+        self.purpose.label.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.purpose.label.customContextMenuRequested.connect(
+            lambda pos: self._menu(self.purpose.label.mapToGlobal(pos)))
         lay.addWidget(self.purpose)
         self.model = BoardModel(stage, self)
         self.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -546,9 +623,17 @@ class BoardColumn(QFrame):
         lay.addWidget(self.view, 1)
         lay.addWidget(self.empty)
 
+    def _subtitle_edited(self, text: str) -> None:
+        default = replace(self.column, subtitle="").purpose
+        self.subtitleEdited.emit(self.column.id, "" if text == default else text)
+
     def _menu(self, global_pos) -> None:
         menu = QMenu(self)
-        menu.addAction(f"Rename “{self.column.name}”…", lambda: self.renameRequested.emit(self.column.id))
+        menu.addAction(f"Rename “{self.column.name}”", self.title.start)
+        menu.addAction("Edit Subtitle", lambda: self.purpose.start(self.column.subtitle or self.column.purpose))
+        if self.column.subtitle:
+            menu.addAction("Use the Default Subtitle", lambda: self.subtitleEdited.emit(self.column.id, ""))
+        menu.addSeparator()
         menu.addAction("Add a Column After This…", lambda: self.addRequested.emit(self.column.id))
         menu.addAction("Remove This Column…", lambda: self.removeRequested.emit(self.column.id))
         menu.addSeparator()
@@ -679,6 +764,12 @@ class BoardPage(QWidget):
         self.filter_popover.add_section("Cards", "How big the Board's cards are", self.density_box)
         self.filter_btn = FilterButton(self.filter_popover)
         head.addWidget(self.filter_btn)
+        self.columns_btn = tip(QToolButton(text="Columns", objectName="FilterButton"),
+                               "Customize the Board: rename columns, change their subtitles, add, remove or "
+                               "reorder them")
+        self.columns_btn.setCursor(Qt.PointingHandCursor)
+        self.columns_btn.clicked.connect(self.edit_columns)
+        head.addWidget(self.columns_btn)
 
         # Less frequent board actions live in ⋯; checking YouTube is one click
         self.more_btn = icon_button("more", "More: import tickets from a spreadsheet, edit the columns, or see "
@@ -690,7 +781,7 @@ class BoardPage(QWidget):
         more.addAction("Archived Videos…", self.open_archived)
         self.more_btn.setMenu(more)
         self.sync_btn = icon_button("refresh", "Check YouTube for updates: whether scheduled videos have gone live "
-                                               "(moves them to Published)")
+                                               "(moves them to Posted)")
         self.sync_btn.clicked.connect(lambda: self.sync(force=True))
         head.addWidget(self.sync_btn)
         head.addWidget(self.more_btn)
@@ -802,6 +893,11 @@ class BoardPage(QWidget):
             col.addRequested.connect(self._add_column)
             col.removeRequested.connect(self._remove_column)
             col.editRequested.connect(self.edit_columns)
+            # the column is rebuilt by the change, so apply it after the edit field has finished with itself
+            col.titleEdited.connect(lambda cid, text: QTimer.singleShot(
+                0, lambda: self._edit_column_text(cid, title=text)))
+            col.subtitleEdited.connect(lambda cid, text: QTimer.singleShot(
+                0, lambda: self._edit_column_text(cid, subtitle=text)))
             col.setMinimumWidth(COLUMN_MIN_WIDTH)
             self.columns[column.id] = col
             self.columns_splitter.addWidget(col)
@@ -851,6 +947,20 @@ class BoardPage(QWidget):
         self._build_columns()
         self.reload()
         return True
+
+    def _edit_column_text(self, column_id: str, title: str | None = None, subtitle: str | None = None) -> None:
+        """A title or subtitle edited in place on the Board."""
+        columns = [replace(c, stages=list(c.stages)) for c in self.column_config]
+        col = next((c for c in columns if c.id == column_id), None)
+        if col is None:
+            return
+        if title is not None:
+            if not title:
+                return                       # an empty title keeps the old one
+            col.name = title
+        if subtitle is not None:
+            col.subtitle = subtitle
+        self._apply_columns(columns)
 
     def _rename_column(self, column_id: str) -> None:
         from PySide6.QtWidgets import QInputDialog

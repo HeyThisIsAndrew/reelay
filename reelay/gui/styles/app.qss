@@ -29,6 +29,11 @@ QLabel#ColumnCount[filtered="true"] { color: {text_primary}; border-color: {text
 /* The column's name leads; what it holds sits under it, quietly */
 QLabel#ColumnTitle { color: {text_primary}; font-size: {font_lg}pt; font-weight: 700; padding-top: 4px; }
 QLabel#ColumnPurpose { color: {text_muted}; font-size: {font_xs}pt; padding-bottom: 2px; }
+QLineEdit#InlineEdit { background: {bg_surface}; color: {text_primary}; border: 1px solid {accent_ring};
+    border-radius: {radius}px; padding: 2px 6px; }
+QToolButton#IconButton[subtle="true"] { padding: 3px; }
+QLineEdit#InlineEdit[role="ColumnTitle"] { font-size: {font_lg}pt; font-weight: 700; }
+QLineEdit#InlineEdit[role="ColumnPurpose"] { font-size: {font_xs}pt; }
 
 /* The contextual inspector (right-hand panel) and its header */
 QFrame#Inspector { background: {bg_surface}; border: 1px solid {divider}; border-radius: {radius_card}px; }
@@ -302,6 +307,9 @@ QPushButton#HelpBack:hover, QPushButton#HelpBack:focus { color: {text_primary}; 
 QPushButton#TourChip { background: transparent; border: 1px solid {divider}; border-radius: 13px; padding: 4px 11px;
                        color: {text_secondary}; font-size: {font_sm}pt; }
 QPushButton#TourChip:hover { color: {text_primary}; border-color: {border}; }
+QPushButton#VariableChip { background: transparent; border: 1px solid {divider}; border-radius: 11px;
+                           padding: 2px 9px; min-height: 0; color: {text_secondary}; font-size: {font_xs}pt; }
+QPushButton#VariableChip:hover { color: {text_primary}; border-color: {accent_ring}; background: {accent_soft}; }
 QPushButton#TourChip:checked { background: {accent_color}; color: {on_accent}; border-color: {accent_color};
                                font-weight: 600; }
 QPushButton#TourChip:focus { border: 2px solid {accent_ring}; }

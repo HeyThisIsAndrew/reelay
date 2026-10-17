@@ -323,7 +323,7 @@ class VideoTableModel(QAbstractTableModel):
     def _tooltip(self, item: VideoItem, col: Col):
         if col == Col.CHECK:
             if item.is_downloaded:
-                return "Already downloaded. It's on the Board, in Backlog."
+                return "Already downloaded. It's on the Board, in Inbox."
             return ("Selected: downloads when you click Download. Click to unselect." if item.checked else
                     "Not selected. Click to select it for downloading.")
         if col == Col.COVER:
@@ -347,7 +347,7 @@ class VideoTableModel(QAbstractTableModel):
             return "Optional custom label used when renaming files on disk. Double-click to set one."
         if col == Col.STATUS:
             if item.status == Status.DOWNLOADED:
-                return "Downloaded. Find it on the Board, in Backlog."
+                return "Downloaded. Find it on the Board, in Inbox."
             if item.status in (Status.DOWNLOADING, Status.QUEUED):
                 return "Downloading now, or waiting its turn."
             return ("Ticked: it downloads when you click Download." if item.checked else

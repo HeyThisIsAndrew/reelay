@@ -132,14 +132,14 @@ TOUR: tuple[TourStep, ...] = (
               "caption, opens the uploader and shows the video file.", "publish"),
          Step("For YouTube (and Bluesky, Threads or Facebook once turned on), choose when, then click "
               "**Schedule** or **Publish Now**.", "post")),
-        "Cards move to Scheduled and Published by themselves as each platform goes live.",
+        "Cards move to Scheduled and Posted by themselves as each platform goes live.",
         go="board", go_label="Open the Board", short="Publish"),
     TourStep(
         "find", "Find your work",
         "Every video keeps its status, its posts and its history, and nothing is ever deleted by archiving.",
-        Visual("board-more", "The Board's Published column, the search field, and the ⋯ menu open showing "
+        Visual("board-more", "The Board's Posted column, the search field, and the ⋯ menu open showing "
                              "Archived Videos…"),
-        (Step("**Scheduled** holds videos waiting to go live; **Published**, the ones live everywhere they "
+        (Step("**Scheduled** holds videos waiting to go live; **Posted**, the ones live everywhere they "
               "were going.", "published"),
          Step("Search finds a video by its title, any caption, or what's said in it.", "search"),
          Step("**⋯ → Archived Videos…** brings back anything you archived.", "archived"),
@@ -272,16 +272,18 @@ LIBRARY = Category("library", "Library & downloads", "Bring videos in, choose wh
 
 BOARD = Category("board", "Board & preparing posts", "Turn videos into ready-to-post tickets.", "board", (
     Guide("board-overview", "The Board", "Follow every video from downloaded to posted.",
-          Visual("board", "The Board's four columns, with search, Filter, refresh and ⋯ along the top."),
-          (Step("Downloaded videos start in **Backlog**.", "backlog"),
-           Step("Drag a card to **Staging** when you start preparing it.", "staging"),
-           Step("Cards move to Scheduled and **Published** by themselves as platforms go live.", "published"),
-           Step("**⋯ → Edit Columns…** renames, adds, removes or reorders columns.", "more")),
+          Visual("board", "The Board's four columns, with search, Filter, Columns, refresh and ⋯ along the top."),
+          (Step("Downloaded videos start in **Inbox**.", "backlog"),
+           Step("Drag a card to **In Prep** when you start preparing it.", "staging"),
+           Step("Cards move to Scheduled and **Posted** by themselves as platforms go live.", "published"),
+           Step("**Columns** renames, adds, removes or reorders columns. Double-click a column's title or the line "
+                "under it to change it right there.", "columns")),
           "Each profile has its own Board and its own columns.",
           (Detail("Your own columns", (
                "Removing a column hands its cards to the neighbouring column, so cards still move by "
                "themselves when they're scheduled or posted.",
-               "Columns you add are steps you drag cards in and out of.")),
+               "Columns you add are steps you drag cards in and out of.",
+               "A board has 2 to 6 columns. Clear a column's subtitle to get the default line back.")),
            Detail("Marks on cards", (
                "⚡ an Automation acted on the video, ⏳ an AI assistant's change is waiting for your approval "
                "(review it under **Approvals** at the top of the Board), ✦ an AI assistant last edited the caption.",
@@ -290,7 +292,7 @@ BOARD = Category("board", "Board & preparing posts", "Turn videos into ready-to-
                "**Filter → Cards** switches between large cards and compact ones.",
                "The sidebar's **Up next** shows the next post going out for this profile."))),
           ("board-captions", "board-readiness", "board-find"),
-          "board columns backlog staging scheduled published drag cards edit columns",
+          "board columns inbox in prep backlog staging scheduled posted published drag cards edit columns subtitle rename",
           "board", "Open the Board"),
     Guide("board-captions", "Write captions", "Write each platform's caption once, within its limits.",
           Visual("ticket-copy", "A ticket's Fill Empty from Original Post button, the YouTube caption section, "
@@ -371,9 +373,9 @@ BOARD = Category("board", "Board & preparing posts", "Turn videos into ready-to-
           "details transcript cover topic keywords provenance video sound music captions subtitles srt edit "
           "different sound per platform audio voice-over thumbnail"),
     Guide("board-find", "Find, filter and archive", "Find any video and keep the Board tidy.",
-          Visual("board-more", "The Board's search, Published column, and the ⋯ menu with Archived Videos…"),
+          Visual("board-more", "The Board's search, Posted column, and the ⋯ menu with Archived Videos…"),
           (Step("Search by title, any caption, topic, notes or what's said in the video.", "search"),
-           Step("**Published** keeps every video that's gone live.", "published"),
+           Step("**Posted** keeps every video that's gone live.", "published"),
            Step("**⋯ → Archived Videos…** brings archived videos back.", "archived"),
            Step("Right-click a card (or ⌘-click several) to archive, fill, mark as posted or see history.")),
           "Archiving hides a video from the Board and the Library. Its file, ticket and history are kept.",
@@ -452,7 +454,7 @@ PUBLISHING = Category("publishing", "Publishing & accounts",
            Detail("If something isn't ready", (
                "Reelay lists the problems and asks before going ahead. Copying and pasting is never blocked.",)),
            Detail("Checking YouTube", (
-               "The refresh button on the Board checks YouTube and moves cards to Published once they're "
+               "The refresh button on the Board checks YouTube and moves cards to Posted once they're "
                "live.",)),
            Detail("If Reelay is interrupted", (
                "Every send is written down before it starts. Closing Reelay during a YouTube upload pauses it; "
@@ -489,12 +491,15 @@ AUTOMATIONS = Category("automations", "Automations", "Rules that fill, tag and s
                          "and Test this rule on a video."),
           (Step("On **Automations**, click **New Rule**."),
            Step("**When**: a video is added to the board, or moved to a column."),
-           Step("**If**: words in the caption, title, a hashtag, a product or brand, the length, or the source."),
-           Step("**Then**: fill an empty field from a template, add hashtags, choose platforms, set a field, "
-                "move it, or schedule it.")),
+           Step("**If** (optional): words in the caption, title, a hashtag, a product or brand, the length, or "
+                "where it came from (picked from a list)."),
+           Step("**Then**: fill an empty field from a template, add hashtags, toggle the platforms it goes to, "
+                "set a field, move it, or schedule it for a weekday and time.")),
           "Saved rules act on videos added from now on, and everything they do is listed under Activity.",
           (Detail("Template placeholders", (
-               "{hook} {caption} {hashtags} {title} {topic} {creator}",)),
+               "Under a template, **+ Hook**, **+ Original Caption**, **+ Hashtags**, **+ Title** and **+ Topic** "
+               "put the video's own words where the cursor is.",
+               "You can also type them: {hook} {caption} {hashtags} {title} {topic} {creator}")),
            Detail("Rules are careful", (
                "Each rule acts on a video once, so it never undoes your edits.",
                "Templates only fill empty fields.",
@@ -502,17 +507,17 @@ AUTOMATIONS = Category("automations", "Automations", "Rules that fill, tag and s
           ("auto-recipes", "auto-test"),
           "automation automations rule rules when if then template trigger condition action schedule hashtags",
           "automations", "Open Automations"),
-    Guide("auto-recipes", "Quick-start recipes", "Add a ready-made rule in one click.",
+    Guide("auto-recipes", "Quick-start recipes", "Start from a ready-made rule.",
           Visual("automations", "The Automations page with a rule, the Recipes menu and New Rule."),
-          (Step("Click **Recipes ▾** (or a recipe on the empty Automations page).", "recipes"),
-           Step("Pick one; it's added as a rule you can edit.", "rule")),
-          "The recipe starts with videos added from now on.",
+          (Step("Click **Recipes ▾**, or **Use Recipe…** on the empty Automations page.", "recipes"),
+           Step("The rule opens filled in: change anything you like, then click **Save**.", "rule")),
+          "Nothing is added until you save, and the recipe starts with videos added from now on.",
           (Detail("The recipes", (
                "**Cross-post short-form**: TikTok and Instagram videos get YouTube Shorts and Threads captions "
                "with a link-in-bio line.",
                "**Auto-hashtag by topic**: fitness, tech and recipe hashtag bundles. Change the words to suit "
                "you.",
-               "**Ready queue**: tickets moved to Staging are scheduled for the next Tuesday at 9:00, if "
+               "**Ready queue**: tickets moved to In Prep are scheduled for the next Tuesday at 9:00, if "
                "they're ready.")),),
           ("auto-rules", "auto-test"),
           "recipe recipes cross-post hashtag ready queue quick start template",

@@ -592,7 +592,7 @@ class RevisionDialog(QDialog):
 # ====================================================================== platform tags
 POSTING_HINT = ("Tick each place this video is going: its caption box shows below. Untick a platform and it's "
                 "skipped. When every ticked platform is scheduled the card moves to Scheduled; when every one is "
-                "live, to Published.")
+                "live, to Posted.")
 
 
 def _short_when(utc_iso: str | None) -> str:
@@ -778,7 +778,7 @@ class PlatformSection(QFrame):
         menu.setToolTipsVisible(True)
         self.act_scheduled = menu.addAction("Mark as Scheduled…", self._mark_scheduled)
         self.act_scheduled.setToolTip(f"You've scheduled it in {self.label}'s app. Reelay asks when it goes live, "
-                                      "and moves the card to Published after that time.")
+                                      "and moves the card to Posted after that time.")
         self.act_posted = menu.addAction("Mark as Posted…", self._mark_posted)
         self.act_posted.setToolTip(f"It's live on {self.label}. Reelay asks when, and for the link if you have it.")
         self.act_preparing = menu.addAction("Back to Preparing", self._back_to_preparing)
@@ -920,7 +920,7 @@ class WhenDialog(QDialog):
         self.setWindowTitle(f"Scheduled on {platform_label}")
         lay = QVBoxLayout(self)
         lay.setContentsMargins(20, 18, 20, 14)
-        lay.addWidget(_faint(f"When does it go live on {platform_label}? Reelay moves the card to Published once "
+        lay.addWidget(_faint(f"When does it go live on {platform_label}? Reelay moves the card to Posted once "
                              "every platform is live.", "muted"))
         when = parse_utc(default) if default else None
         if when is None:

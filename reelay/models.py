@@ -15,7 +15,8 @@ class Stage:
     SCHEDULED = "scheduled"
     PUBLISHED = "published"
     ALL = (BACKLOG, STAGING, SCHEDULED, PUBLISHED)
-    LABELS = {BACKLOG: "Backlog", STAGING: "Staging", SCHEDULED: "Scheduled", PUBLISHED: "Published"}
+    # What people see (the keys above are what's stored, and never change)
+    LABELS = {BACKLOG: "Inbox", STAGING: "In Prep", SCHEDULED: "Scheduled", PUBLISHED: "Posted"}
 
 
 class PostStatus:

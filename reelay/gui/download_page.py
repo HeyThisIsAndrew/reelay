@@ -478,7 +478,7 @@ class DownloadPage(QWidget):
         self.download_btn.setMinimumHeight(36)
         self.download_btn.setMinimumWidth(190)
         tip(self.download_btn, "Download the selected videos into the folder above. They appear on the Board, in "
-                               "Backlog. Nothing is selected until you choose: use Select All or tick boxes.")
+                               "Inbox. Nothing is selected until you choose: use Select All or tick boxes.")
         brow.addWidget(self.download_btn)
         bl.addLayout(brow)
         outer.addLayout(bl)
@@ -1570,7 +1570,7 @@ class DownloadPage(QWidget):
         msg = f"{'Stopped' if cancelled else 'Done'}: {ok} downloaded"
         if failed:
             msg += f", {failed} failed (hover the Status column to see why)"
-        self._set_status(msg + ". Downloaded videos are in the Board's Backlog.")
+        self._set_status(msg + ". Downloaded videos are in the Board's Inbox.")
         self.videosChanged.emit()
         self._start_details()
         QApplication.alert(self.window())

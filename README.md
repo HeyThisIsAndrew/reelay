@@ -39,7 +39,7 @@ It's a native desktop app for macOS (Windows builds included) in a Light, Dark, 
 - **Provenance:** every imported video records its source platform, the original link, when it was imported, the original publish date and creator, and its permission. Links to the profile's own accounts are recorded as "Own content"; anything else stays unrecorded until you set it on the ticket.
 
 **Board (content tickets)**
-- A Kanban pipeline: **Backlog → Staging → Scheduled → Published**. Drag cards between columns.
+- A Kanban pipeline: **Inbox → In Prep → Scheduled → Posted** (stored as backlog / staging / scheduled / published). Drag cards between columns.
 - Each card is a ticket with **copy blocks**:
   - YouTube title, description and tags
   - TikTok caption and Instagram caption
@@ -60,7 +60,7 @@ It's a native desktop app for macOS (Windows builds included) in a Light, Dark, 
 
   Over-limit text is reported and the save is refused. Nothing is ever cut short.
 - Copying an empty block gives what Reelay would use instead: the title (plus the description if it fits) for Bluesky and Threads, and the description for TikTok, Instagram and Facebook.
-- **Custom columns:** **Edit Columns…** (or right-click a column's name) renames, adds, removes and reorders the Board's columns per profile. The default stays Backlog / Staging / Scheduled / Published.
+- **Custom columns:** the Board's **Columns** button (or a column's ⋯ menu) renames, adds, removes and reorders columns per profile, 2 to 6 of them, each with a title and a one-line subtitle. Double-click a title or subtitle to edit it in place. The default is Inbox / In Prep / Scheduled / Posted; a saved board still using the old default names gets the new ones.
   - Reelay's four steps always live in some column; removing one hands its steps and cards to the neighbour, so automatic moves keep working.
   - Added columns are your own manual steps (`custom:…`, also in the API's `columns`).
 - **Platform tags.** Every ticket has a **Posting to** row of chips, one per platform (YouTube, TikTok, Instagram, Bluesky, Threads, Facebook), each with its logo. Tick a platform and it's going (Preparing), and its caption box appears below; untick it and it's skipped (a platform marked Scheduled or Posted asks first). Each caption box's header says where that platform stands and has a **⋯** menu: **Mark as Scheduled…** (asks when it goes live), **Mark as Posted…** (asks when, and for the link), **Back to Preparing** and **Publish…**.
@@ -94,7 +94,7 @@ It's a native desktop app for macOS (Windows builds included) in a Light, Dark, 
 - **Archive search** (schema v8): an SQLite FTS5 index over every video's title, original caption, **transcript**, every platform's copy, tags, topic, keywords and notes, kept current by triggers. The Board's search uses it (prefix matching, "exact phrases"), and a card found by spoken words shows the quote. `GET /v1/search`.
 - **Writing help, locally:** an **Assist ▾** menu on every caption: spelling and grammar (built-in, or LanguageTool when installed), rewrites through a local model (Ollama or a llama.cpp `.gguf`), and **brand voice** profiles (tone, words to avoid, default hashtags, guidance) sent as the model's system prompt. **Get SEO Suggestions** uses YouTube's search suggestions and scores the title and tags. No paid AI, no tokens.
 - **Video tools** (ffmpeg, on this computer): remove the sound, replace it with a track you have rights to, burn in captions from a .srt/.vtt/.ass (or from faster-whisper when installed). Edits write `<name>.edited.mp4`; the original is never changed, and the edited copy is what gets posted until **Use Original**.
-- **Automations:** when/if/then rules (Automations page; `rules.py`). Triggers: added to the board, moved to a column. Conditions: caption, title, hashtag, product/brand, length, source. Actions: fill an empty field from a template, add hashtags, set platforms, set a ticket field, move, schedule for the next weekday. Once per video per rule, never on existing videos unless asked, templates never overwrite, scheduling respects the Ready gate, and everything is logged.
+- **Automations:** when/if/then rules (Automations page; `rules.py`). Triggers: added to the board, moved to a column. Conditions: caption, title, hashtag, product/brand, length, source. Actions: fill an empty field from a template (with Insert Variable chips), add hashtags, set platforms (logo toggles), set a ticket field, move, schedule for the next weekday at a time (weekday + time picker). Recipes open in the rule editor filled in (**Use Recipe…**) and are only added when saved. Once per video per rule, never on existing videos unless asked, templates never overwrite, scheduling respects the Ready gate, and everything is logged.
 - **Durable sends:** every send is recorded before it runs. Closing mid-upload pauses it (continues next launch). A send cut off by a crash or power loss, or one whose time passed while Reelay was closed or asleep, becomes **interrupted** and waits for a person (**Try Again / It Was Posted / Cancel**), never retried blindly. Bluesky and Threads resume by checkpoint.
 
 **Profiles and accounts**

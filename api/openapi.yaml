@@ -952,8 +952,7 @@ paths:
       tags:
       - import
       summary: Import a spreadsheet (CSV) into tickets (applying needs approval)
-      description: 'Matches each row to a video (by link, video ID, file name or your name for it), maps columns
-        to ticket
+      description: 'Matches each row to a video (by link, video ID, file name or file label), maps columns to ticket
 
         fields, and fills them. Empty cells never clear anything; over-limit or invalid rows are skipped and
 
@@ -2810,7 +2809,8 @@ components:
           type: object
           title: Platform States
           description: 'Every platform''s tag: whether the video is going there and how far it has got. The card
-            moves to Scheduled once every target is scheduled or live, and to Published once every target is live.'
+            moves to Scheduled once every target is scheduled or live, and to Posted (published) once every target
+            is live.'
         coverage:
           additionalProperties:
             $ref: '#/components/schemas/CoverageOut'

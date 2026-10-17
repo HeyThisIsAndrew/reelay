@@ -463,7 +463,7 @@ def capture_help(app, theme: str, store, window, rows: list[int], out: Path) -> 
     board = window.board
     save("board", window.grab(), {
         "search": at(board.search), "filter": at(board.filter_btn), "refresh": at(board.sync_btn),
-        "more": at(board.more_btn), "backlog": at(board.columns[Stage.BACKLOG]),
+        "more": at(board.more_btn), "columns": at(board.columns_btn), "backlog": at(board.columns[Stage.BACKLOG]),
         "staging": at(board.columns[Stage.STAGING]), "published": at(board.columns[Stage.PUBLISHED])})
     more = board.more_btn.menu()
     pix, pos = with_menu(more, board.more_btn)

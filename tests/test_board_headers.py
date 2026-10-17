@@ -17,9 +17,10 @@ pytestmark = pytest.mark.gui
 def test_every_column_says_what_it_holds(board):  # noqa: F811
     _window, _store, b, _rows = board
     assert [b.columns[s].purpose.text() for s in Stage.ALL] == [
-        "Downloaded, not started", "Writing the posts", "Waiting to go live", "Live"]
+        "Downloaded, not started", "Writing captions & picking platforms", "Waiting to go live",
+        "Live on your channels"]
     merged = Column(id="x", name="Done", primary=Stage.PUBLISHED, stages=[Stage.SCHEDULED, Stage.PUBLISHED])
-    assert column_purpose(merged) == "Waiting to go live · Live"
+    assert column_purpose(merged) == "Waiting to go live · Live on your channels"
     assert column_purpose(Column(id="c", name="Edit", primary="custom:edit", stages=["custom:edit"])) == "Your own step"
 
 

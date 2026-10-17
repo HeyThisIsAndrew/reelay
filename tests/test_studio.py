@@ -415,6 +415,10 @@ def test_automations_empty_state_recipes_and_rule_preview(app_window, monkeypatc
     page = window.automations_page
     window.go("automations")
     assert page.empty.isVisibleTo(page) and not page.log.isVisibleTo(page)
+    from PySide6.QtWidgets import QDialog
+
+    from reelay.gui.automations_page import RuleDialog as _Dialog
+    monkeypatch.setattr(_Dialog, "exec", lambda self: QDialog.Accepted)     # Use Recipe… opens it filled in
     page.recipe_buttons["cross_post"].click()
     assert not page.empty.isVisibleTo(page) and page.log.isVisibleTo(page)
     from reelay import rules as R

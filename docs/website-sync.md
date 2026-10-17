@@ -12,8 +12,8 @@ so the renderings can follow it.
   small additions in the app the scene can show: a small "?" (Learn more) beside each card's name, and a
   "Manage…" link on the status line when one account is connected (several accounts show "3 connected" with a
   Manage… button).
-- **Section headings are sentence case**, semibold, secondary colour: Board columns read "Backlog",
-  "Staging"…; side-panel sections read "Platforms", "Caption", "YouTube title". Table column headers stay
+- **Section headings are sentence case**, semibold, secondary colour: Board columns read "Inbox",
+  "In Prep"…; side-panel sections read "Platforms", "Caption", "YouTube title". Table column headers stay
   uppercase (DATE, CAPTION…), as on the site.
 - **Status pills are tinted**: a soft fill in the status colour with darker text (green connected, amber needs
   attention, neutral otherwise).

@@ -330,7 +330,7 @@ class Video(BaseModel):
     readiness: dict[ManualPlatformName, PlatformReadinessOut] = Field(description="Checklist per target platform.")
     platform_states: dict[ManualPlatformName, PlatformStateOut] = Field(
         description="Every platform's tag: whether the video is going there and how far it has got. The card moves to "
-                    "Scheduled once every target is scheduled or live, and to Published once every target is live.")
+                    "Scheduled once every target is scheduled or live, and to Posted (published) once every target is live.")
     coverage: dict[ManualPlatformName, CoverageOut] = Field(
         description="Every platform at a glance: published, scheduled, ready, needs work or not applicable.")
     ticket: TicketFields

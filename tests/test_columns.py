@@ -22,9 +22,11 @@ def world(tmp_path, monkeypatch):
     w.store.close()
 
 
-def test_default_is_the_four_familiar_columns(world):
+def test_default_is_four_columns_in_plain_words(world):
     cols = load(world.store, world.profile.id)
-    assert [c.name for c in cols] == ["Backlog", "Staging", "Scheduled", "Published"]
+    assert [c.name for c in cols] == ["Inbox", "In Prep", "Scheduled", "Posted"]
+    assert [c.purpose for c in cols] == ["Downloaded, not started", "Writing captions & picking platforms",
+                                         "Waiting to go live", "Live on your channels"]
     assert [c.primary for c in cols] == list(Stage.ALL)
 
 
@@ -67,15 +69,45 @@ def test_rules_keep_every_step_somewhere(world):
         validate(cols)
     with pytest.raises(ColumnError):
         validate([])
-    one = default_columns()
-    for cid in ("staging", "scheduled", "published"):
-        remove(one, cid)
-    with pytest.raises(ColumnError):
-        remove(one, "backlog")                    # the last column can't go
+    two = default_columns()
+    for cid in ("staging", "scheduled"):
+        remove(two, cid)
+    with pytest.raises(ColumnError, match="at least 2"):
+        remove(two, "backlog")                    # a board keeps at least two columns
     with pytest.raises(ColumnError):
         validate([*default_columns()[:3], default_columns()[3].__class__("x", "  ", "published", ["published"])])
     world.store.set_setting("board_columns.%d" % world.profile.id, "not json")
-    assert [c.name for c in load(world.store, world.profile.id)] == ["Backlog", "Staging", "Scheduled", "Published"]
+    assert [c.name for c in load(world.store, world.profile.id)] == ["Inbox", "In Prep", "Scheduled", "Posted"]
+
+
+def test_two_to_six_columns_with_their_own_subtitles(world):
+    cols = default_columns()
+    add(cols, "Filming", 1)
+    add(cols, "Editing", 2)
+    with pytest.raises(ColumnError, match="at most 6"):
+        add(cols, "Too many")
+    with pytest.raises(ColumnError, match="at most 6"):
+        validate([*cols, cols[0].__class__("custom:x", "Seven", "custom:x", ["custom:x"])])
+    cols[0].subtitle = "  Fresh from the Library  "
+    cols[1].subtitle = "x" * 61
+    with pytest.raises(ColumnError, match="subtitles"):
+        validate(cols)
+    cols[1].subtitle = ""
+    save(world.store, world.profile.id, cols)
+    loaded = load(world.store, world.profile.id)
+    assert loaded[0].subtitle == "Fresh from the Library" and loaded[0].purpose == "Fresh from the Library"
+    assert loaded[1].purpose == "Your own step"                    # an empty subtitle shows the default
+
+
+def test_a_saved_board_with_the_old_names_gets_the_new_ones(world):
+    import json
+    old = [dict(c.to_record(), name=n) for c, n in zip(default_columns(), ["Backlog", "Staging", "Scheduled",
+                                                                            "Published"])]
+    old[1]["name"] = "Writing"                                      # a name someone chose is kept
+    for c in old:
+        c.pop("subtitle")                                           # saved before subtitles existed
+    world.store.set_setting("board_columns.%d" % world.profile.id, json.dumps(old))
+    assert [c.name for c in load(world.store, world.profile.id)] == ["Inbox", "Writing", "Scheduled", "Posted"]
 
 
 def test_api_reports_columns_and_custom_stages(tmp_path, monkeypatch):
@@ -94,7 +126,7 @@ def test_api_reports_columns_and_custom_stages(tmp_path, monkeypatch):
     try:
         h = {"Authorization": f"Bearer {SECRETS['agent']}"}
         board = requests.get(f"{server.url}/v1/board", params={"profile": "Lydia Livingood"}, headers=h, timeout=10).json()
-        assert [c["name"] for c in board["columns"]][:2] == ["Backlog", "Filming"]
+        assert [c["name"] for c in board["columns"]][:2] == ["Inbox", "Filming"]
         assert next(v for v in board["videos"] if v["id"] == w.rows[0])["stage"] == filming.primary
         only = requests.get(f"{server.url}/v1/board", params={"profile": "Lydia Livingood", "stage": filming.primary},
                             headers=h, timeout=10).json()
@@ -137,7 +169,7 @@ def test_rename_add_and_remove_from_the_board(board):
     monkeypatch.setattr(QInputDialog, "getText", lambda *a, **k: ("Filming", True))
     b._add_column("backlog")
     names = [c.name for c in b.column_config]
-    assert names == ["Ideas", "Filming", "Staging", "Scheduled", "Published"] and len(b.columns) == 5
+    assert names == ["Ideas", "Filming", "In Prep", "Scheduled", "Posted"] and len(b.columns) == 5
     filming = b.column_config[1]
     b.pipeline.move(rows[0], filming.primary)
     b.reload()
@@ -146,7 +178,7 @@ def test_rename_add_and_remove_from_the_board(board):
     assert store.get_video(rows[0]).stage == Stage.BACKLOG and len(b.columns) == 4
     assert b.columns["backlog"].model.rowCount() == 3
     window.switch_profile(store.create_profile("Andrew", store.get_profile(window.profile.id).output_folder))
-    assert [c.name for c in b.column_config] == ["Backlog", "Staging", "Scheduled", "Published"]   # per profile
+    assert [c.name for c in b.column_config] == ["Inbox", "In Prep", "Scheduled", "Posted"]   # per profile
 
 
 def test_edit_columns_dialog(board, monkeypatch):
@@ -154,19 +186,19 @@ def test_edit_columns_dialog(board, monkeypatch):
     _window, _store, b, _rows, *_ = board
     dialog = ColumnsDialog(b.column_config, {"backlog": 3})
     assert dialog.list.count() == 8                                 # name + "holds" hint per column
-    assert "Holds Reelay's Backlog step · 3 cards" in dialog.list.item(1).text()
+    assert "Downloaded, not started  —  Holds Reelay's Inbox step · 3 cards" in dialog.list.item(1).text()
     dialog.list.setCurrentRow(4)                                    # Scheduled
     dialog._remove()
     dialog.list.setCurrentRow(0)
     dialog._add()
     columns, moves = dialog.result_columns()
-    assert [c.name for c in columns] == ["Backlog", "New column", "Staging", "Published"] and moves == []
+    assert [c.name for c in columns] == ["Inbox", "New column", "In Prep", "Posted"] and moves == []
     assert "scheduled" in columns[2].stages                         # handed to its neighbour
     monkeypatch.setattr(ColumnsDialog, "exec", lambda self: ColumnsDialog.Accepted)
     monkeypatch.setattr(ColumnsDialog, "result_columns", lambda self: (columns, []))
     b.edit_columns()
-    assert [c.name for c in b.column_config] == ["Backlog", "New column", "Staging", "Published"]
-    assert b.columns["staging"].title.text() == "Staging" and "Scheduled" not in [
+    assert [c.name for c in b.column_config] == ["Inbox", "New column", "In Prep", "Posted"]
+    assert b.columns["staging"].title.text() == "In Prep" and "Scheduled" not in [
         col.title.text().title() for col in b.columns.values()]
 
 
@@ -181,3 +213,53 @@ def test_dropping_within_a_merged_column_only_reorders(board):
     assert rows[0] in [c.id for c in b.columns["staging"].model.cards]
     b._on_move([rows[0]], Stage.STAGING, 0)                         # dragged within the same column
     assert store.get_video(rows[0]).stage == Stage.SCHEDULED        # not "un-scheduled"
+
+
+def test_the_dialog_edits_titles_subtitles_and_order(board):
+    from reelay.gui.board_tools import ColumnsDialog
+    _window, _store, b, _rows, *_ = board
+    dialog = ColumnsDialog(b.column_config, {})
+    assert dialog.list.currentItem().text() == "Inbox" and dialog.name_edit.text() == "Inbox"
+    assert dialog.subtitle_edit.text() == "" and dialog.subtitle_edit.placeholderText() == "Downloaded, not started"
+    assert not dialog.up_btn.isEnabled() and dialog.down_btn.isEnabled()
+    dialog.name_edit.textEdited.emit("Ideas")
+    dialog.subtitle_edit.textEdited.emit("Fresh from the Library")
+    assert dialog.list.item(0).text() == "Ideas" and "Fresh from the Library" in dialog.list.item(1).text()
+    dialog._move(1)                                                 # Move Down
+    columns, _moves = dialog.result_columns()
+    assert [c.name for c in columns] == ["In Prep", "Ideas", "Scheduled", "Posted"]
+    assert columns[1].subtitle == "Fresh from the Library" and dialog.list.currentItem().text() == "Ideas"
+    dialog.subtitle_edit.textEdited.emit("")                       # cleared: back to the default line
+    assert dialog.result_columns()[0][1].purpose == "Downloaded, not started"
+
+
+def test_columns_button_and_inline_editing_on_the_board(board, qtbot, monkeypatch):
+    from PySide6.QtCore import Qt
+
+    from reelay.gui.board_tools import ColumnsDialog
+    _window, _store, b, _rows, *_ = board
+    assert b.columns_btn.isVisibleTo(b) and b.columns_btn.toolTip()
+    opened = []
+    monkeypatch.setattr(ColumnsDialog, "exec", lambda self: opened.append(self) or ColumnsDialog.Rejected)
+    b.columns_btn.click()
+    assert len(opened) == 1                                         # Columns opens Edit Columns
+    col = b.columns["backlog"]
+    assert col.menu_btn.toolTip()                                   # every header has its own menu
+    qtbot.mouseDClick(col.title.label, Qt.LeftButton)
+    assert col.title.editing() and col.title.field.text() == "Inbox"
+    col.title.field.setText("Ideas")
+    qtbot.keyClick(col.title.field, Qt.Key_Return)
+    qtbot.waitUntil(lambda: b.columns["backlog"].title.text() == "Ideas")
+    assert b.column_config[0].name == "Ideas"
+    col = b.columns["backlog"]
+    qtbot.mouseDClick(col.purpose.label, Qt.LeftButton)
+    col.purpose.field.setText("Fresh from the Library")
+    qtbot.keyClick(col.purpose.field, Qt.Key_Return)
+    qtbot.waitUntil(lambda: b.columns["backlog"].purpose.text() == "Fresh from the Library")
+    col = b.columns["backlog"]
+    qtbot.mouseDClick(col.title.label, Qt.LeftButton)
+    col.title.field.setText("Nope")
+    qtbot.keyClick(col.title.field, Qt.Key_Escape)                  # Esc drops the change
+    assert not col.title.editing() and col.title.text() == "Ideas"
+    col.subtitleEdited.emit("backlog", "")                          # "Use the Default Subtitle"
+    qtbot.waitUntil(lambda: b.columns["backlog"].purpose.text() == "Downloaded, not started")

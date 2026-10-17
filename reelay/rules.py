@@ -548,7 +548,7 @@ RECIPES = {
                  "When a caption mentions fitness, tech or a recipe, add that topic's hashtag bundle. Change the "
                  "words and hashtags to fit your niche."),
     "ready_queue": ("Ready queue: Tuesday mornings",
-                    "When a ticket is moved to Staging, schedule it for the next Tuesday at 9:00 (only if it's "
+                    "When a ticket is moved to In Prep, schedule it for the next Tuesday at 9:00 (only if it's "
                     "ready)."),
 }
 

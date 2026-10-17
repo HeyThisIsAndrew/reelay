@@ -384,43 +384,66 @@ class ArchivedDialog(QDialog):
 
 # ====================================================================== columns
 class ColumnsDialog(QDialog):
-    """Rename, add, remove and reorder the Board's columns."""
+    """Rename, add, remove and reorder the Board's columns, and give each one a subtitle."""
 
     def __init__(self, columns, counts: dict[str, int], parent=None):
         super().__init__(parent)
         from dataclasses import replace
 
-        from PySide6.QtWidgets import QListWidget
+        from PySide6.QtWidgets import QFormLayout, QLineEdit, QListWidget
+
+        from ..columns import MAX_COLUMNS, MIN_COLUMNS, NAME_MAX, SUBTITLE_MAX
         self.setWindowTitle("Edit Columns")
-        self.resize(520, 460)
+        self.resize(560, 560)
         self.columns = [replace(c, stages=list(c.stages)) for c in columns]
         self.counts = counts
         self.moves: list[tuple[str, str]] = []
         lay = QVBoxLayout(self)
         lay.setContentsMargins(20, 16, 20, 14)
         lay.setSpacing(10)
-        lay.addWidget(_label("Name your columns however you like, drag to reorder, add your own or remove ones you "
-                             "don't need. Reelay's own steps (Backlog, Staging, Scheduled, Published) always live in "
-                             "some column: removing a column hands them to its neighbour, and cards keep moving "
-                             "automatically when they're scheduled or posted.", "muted"))
+        lay.addWidget(_label(f"Give each column a title and a short subtitle, put them in your order, and add or "
+                             f"remove columns ({MIN_COLUMNS} to {MAX_COLUMNS}). Reelay's own steps (Inbox, In Prep, "
+                             "Scheduled, Posted) always live in some column: removing a column hands them to its "
+                             "neighbour, and cards keep moving automatically when they're scheduled or posted.",
+                             "muted"))
         self.list = QListWidget()
         self.list.setDragDropMode(QAbstractItemView.InternalMove)
         self.list.setEditTriggers(QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed |
                                   QAbstractItemView.SelectedClicked)
         tip(self.list, "Double-click a name to rename it. Drag to change the order.")
         self.list.itemChanged.connect(self._renamed)
+        self.list.currentItemChanged.connect(lambda *_a: self._show_current())
+        self.list.model().rowsMoved.connect(lambda *_a: self._after_drag())
         lay.addWidget(self.list, 1)
+
+        form = QFormLayout()
+        form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.name_edit = tip(QLineEdit(), "The highlighted column's title on the Board")
+        self.name_edit.setMaxLength(NAME_MAX)
+        self.name_edit.textEdited.connect(self._name_typed)
+        self.subtitle_edit = tip(QLineEdit(), "One line under the title saying what the column holds. Leave it "
+                                              "empty to use the default.")
+        self.subtitle_edit.setMaxLength(SUBTITLE_MAX)
+        self.subtitle_edit.textEdited.connect(self._subtitle_typed)
+        form.addRow(tip(_label("Title"), "The highlighted column's title"), self.name_edit)
+        form.addRow(tip(_label("Subtitle"), "What the highlighted column holds"), self.subtitle_edit)
+        lay.addLayout(form)
+
         row = QHBoxLayout()
         add = tip(QPushButton("Add Column"), "Add your own column after the highlighted one")
         add.clicked.connect(self._add)
         remove = tip(QPushButton("Remove Column"), "Remove the highlighted column (its cards move to the neighbour)")
         remove.clicked.connect(self._remove)
-        rename = tip(QPushButton("Rename"), "Rename the highlighted column")
-        rename.clicked.connect(lambda: self.list.currentItem() and self.list.editItem(self.list.currentItem()))
-        reset = tip(QPushButton("Reset to Default"), "Back to Backlog, Staging, Scheduled, Published")
+        self.up_btn = tip(QPushButton("Move Up"), "Move the highlighted column one place to the left on the Board")
+        self.up_btn.clicked.connect(lambda: self._move(-1))
+        self.down_btn = tip(QPushButton("Move Down"), "Move the highlighted column one place to the right on the "
+                                                       "Board")
+        self.down_btn.clicked.connect(lambda: self._move(1))
+        reset = tip(QPushButton("Reset to Default"), "Back to Inbox, In Prep, Scheduled, Posted with their default "
+                                                     "subtitles")
         set_prop(reset, "flat")
         reset.clicked.connect(self._reset)
-        for b in (add, remove, rename):
+        for b in (add, remove, self.up_btn, self.down_btn):
             row.addWidget(b)
         row.addStretch()
         row.addWidget(reset)
@@ -431,7 +454,7 @@ class ColumnsDialog(QDialog):
         buttons.accepted.connect(self._save)
         buttons.rejected.connect(self.reject)
         lay.addWidget(buttons)
-        self._fill()
+        self._fill(select=self.columns[0].id if self.columns else None)
 
     def _holds(self, col) -> str:
         from ..models import Stage
@@ -440,6 +463,9 @@ class ColumnsDialog(QDialog):
         cards = f" · {n} card{'s' if n != 1 else ''}" if n else ""
         return (f"Holds Reelay's {', '.join(steps)} step{'s' if len(steps) != 1 else ''}" if steps
                 else "Your own column") + cards
+
+    def _hint(self, col) -> str:
+        return f"      {col.purpose}  —  {self._holds(col)}"
 
     def _fill(self, select: str | None = None) -> None:
         self.list.blockSignals(True)
@@ -450,7 +476,7 @@ class ColumnsDialog(QDialog):
             item.setToolTip(self._holds(col))
             item.setFlags(item.flags() | Qt.ItemIsEditable | Qt.ItemIsDragEnabled)
             self.list.addItem(item)
-            hint = QListWidgetItem("      " + self._holds(col))
+            hint = QListWidgetItem(self._hint(col))
             hint.setFlags(Qt.NoItemFlags)
             hint.setData(Qt.UserRole, None)
             hint.setForeground(QColor(theme.P.text_muted))
@@ -458,6 +484,53 @@ class ColumnsDialog(QDialog):
             if col.id == select:
                 self.list.setCurrentItem(item)
         self.list.blockSignals(False)
+        self._show_current()
+
+    def _row_of(self, cid: str) -> int:
+        return next(i for i in range(self.list.count()) if self.list.item(i).data(Qt.UserRole) == cid)
+
+    def _show_current(self) -> None:
+        col = self._current()
+        for w in (self.name_edit, self.subtitle_edit, self.up_btn, self.down_btn):
+            w.setEnabled(col is not None)
+        self.name_edit.setText(col.name if col else "")
+        self.subtitle_edit.setText(col.subtitle if col else "")
+        if col is not None:
+            from dataclasses import replace
+            self.subtitle_edit.setPlaceholderText(replace(col, subtitle="").purpose)
+            index = self.columns.index(col)
+            self.up_btn.setEnabled(index > 0)
+            self.down_btn.setEnabled(index < len(self.columns) - 1)
+
+    def _name_typed(self, text: str) -> None:
+        col = self._current()
+        if col is not None and text.strip():
+            col.name = text.strip()
+            self.list.blockSignals(True)
+            self.list.currentItem().setText(col.name)
+            self.list.blockSignals(False)
+
+    def _subtitle_typed(self, text: str) -> None:
+        col = self._current()
+        if col is not None:
+            col.subtitle = text.strip()
+            self.list.item(self._row_of(col.id) + 1).setText(self._hint(col))
+
+    def _move(self, step: int) -> None:
+        self._sync_order()
+        col = self._current()
+        if col is None:
+            return
+        i = self.columns.index(col)
+        j = max(0, min(len(self.columns) - 1, i + step))
+        self.columns.insert(j, self.columns.pop(i))
+        self._fill(select=col.id)
+
+    def _after_drag(self) -> None:
+        from PySide6.QtCore import QTimer
+        col = self._current()
+        self._sync_order()
+        QTimer.singleShot(0, lambda: self._fill(select=col.id if col else None))   # hints back under their names
 
     def _sync_order(self) -> None:
         order = [self.list.item(i).data(Qt.UserRole) for i in range(self.list.count())]
@@ -474,6 +547,8 @@ class ColumnsDialog(QDialog):
         col = next((c for c in self.columns if c.id == cid), None)
         if col is not None:
             col.name = item.text().strip() or col.name
+            if col is self._current():
+                self.name_edit.setText(col.name)
 
     def _add(self) -> None:
         from ..columns import ColumnError, add

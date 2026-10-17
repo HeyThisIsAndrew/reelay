@@ -806,7 +806,7 @@ class PostPanel(QFrame):
             self.status_text.setText(f"Goes live {local_text(post.publish_at) or 'as soon as possible'}.\n"
                                      + self._platform_lines(card))
         elif post and post.status == PostStatus.PUBLISHED:
-            self.status_text.setText("Published.\n" + self._platform_lines(card))
+            self.status_text.setText("Posted.\n" + self._platform_lines(card))
         elif card.row.stage == Stage.PUBLISHED:
             self.status_text.setText("Marked as published (posted outside Reelay).")
 
