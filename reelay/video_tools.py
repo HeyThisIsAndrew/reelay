@@ -316,6 +316,67 @@ def edited_path(store, row_id: int) -> Path | None:
     return path if path.is_file() else None
 
 
+# ---------------------------------------------------------------- disk space: edited copies
+@dataclass(frozen=True)
+class EditedCopy:
+    path: Path
+    size: int
+    row_id: int | None
+    reason: str              # "in use" (a ticket will post it), "posted" (its ticket is done), "unused"
+
+    @property
+    def removable(self) -> bool:
+        return self.reason != "in use"
+
+
+def edited_copies(store) -> list[EditedCopy]:
+    """Every edited copy in the profiles' folders, and whether anything still needs it. A copy a ticket will
+    still post is "in use"; one whose ticket is published with nothing left to send is "posted"; one no
+    ticket points at any more is "unused"."""
+    from .models import DispatchStatus, Stage
+    refs: dict[str, int] = {}
+    for key, raw in store.settings_with_prefix(EDIT_KEY.split("{")[0]).items():
+        try:
+            data = json.loads(raw) if raw else None
+            refs[str(Path(data["file"]))] = int(key.rsplit(".", 1)[1])
+        except (ValueError, TypeError, KeyError):
+            continue
+    folders = {Path(p.output_folder) for p in store.list_profiles()} | {Path(f).parent for f in refs}
+    copies: list[EditedCopy] = []
+    for folder in sorted(folders):
+        for path in sorted(folder.glob("*.edited*.mp4")):
+            try:
+                size = path.stat().st_size
+            except OSError:
+                continue
+            row_id = refs.get(str(path))
+            if row_id is None:
+                reason = "unused"
+            else:
+                row = store.get_video(row_id)
+                busy = any(d.status in DispatchStatus.ACTIVE for d in store.dispatches_for(row_id))
+                reason = "posted" if row is not None and row.stage == Stage.PUBLISHED and not busy else "in use"
+            copies.append(EditedCopy(path, size, row_id, reason))
+    return copies
+
+
+def clean_up_edited(store) -> tuple[int, int]:
+    """Delete the edited copies nothing needs (see edited_copies). Originals are never touched, and a posted
+    ticket's edit is forgotten along with its copy. Returns (files removed, bytes freed)."""
+    removed = freed = 0
+    for copy in edited_copies(store):
+        if not copy.removable:
+            continue
+        try:
+            copy.path.unlink()
+        except OSError:
+            continue
+        removed, freed = removed + 1, freed + copy.size
+        if copy.row_id is not None:
+            clear_edit(store, copy.row_id)
+    return removed, freed
+
+
 STEP_LABELS = {"strip": "sound removed", "replace": "new sound", "captions": "captions"}
 
 

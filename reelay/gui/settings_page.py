@@ -22,6 +22,10 @@ from .tips import tip
 from .widgets import scroll_page
 
 
+def _size(n: int) -> str:
+    return f"{n / 1e9:.1f} GB" if n >= 1e9 else f"{n / 1e6:.0f} MB" if n >= 1e6 else f"{n / 1e3:.0f} KB"
+
+
 def _card(title: str) -> tuple[QFrame, QVBoxLayout]:
     frame = QFrame(objectName="Card")
     lay = QVBoxLayout(frame)
@@ -195,6 +199,18 @@ class SettingsPage(QWidget):
             drow.addWidget(b)
         drow.addStretch()
         cl.addLayout(drow)
+        # Disk space: edited copies (Remove Sound, Replace Sound, captions) pile up next to the originals
+        srow = QHBoxLayout()
+        self.storage_label = _muted("")
+        tip(self.storage_label, "Edited copies are new files Reelay made from your videos (sound removed or "
+                                "replaced, captions added). The originals are never changed.")
+        srow.addWidget(self.storage_label, 1)
+        self.clean_btn = tip(QPushButton("Clean Up Edited Copies…"),
+                             "Delete the edited copies nothing needs any more: ones no ticket uses, and ones whose "
+                             "ticket is already posted. Copies a ticket will still post are kept.")
+        self.clean_btn.clicked.connect(self._clean_up_edited)
+        srow.addWidget(self.clean_btn)
+        cl.addLayout(srow)
         cl.addWidget(_muted(f"Caches: {data_dir()}\nLogs: {log_dir()}\n"
                             "Sign-in tokens are stored in your system keychain, never in the database, so sharing "
                             "the database doesn't share anyone's passwords or sign-ins."))
@@ -215,6 +231,39 @@ class SettingsPage(QWidget):
         lay.addWidget(card)
         lay.addStretch()
         self.refresh()
+
+    # ---------------------------------------------------------------- disk space
+    def _refresh_storage(self) -> None:
+        from ..video_tools import edited_copies
+        copies = edited_copies(self.store)
+        total = sum(c.size for c in copies)
+        spare = sum(c.size for c in copies if c.removable)
+        if not copies:
+            self.storage_label.setText("Edited copies: none.")
+        else:
+            self.storage_label.setText(f"Edited copies: {_size(total)} in {len(copies)} file"
+                                       f"{'s' if len(copies) != 1 else ''}"
+                                       + (f"; {_size(spare)} can be cleaned up." if spare else
+                                          "; every one is still needed by a ticket."))
+        self.clean_btn.setEnabled(spare > 0)
+
+    def _clean_up_edited(self) -> None:
+        from ..video_tools import clean_up_edited, edited_copies
+        spare = [c for c in edited_copies(self.store) if c.removable]
+        if not spare:
+            return
+        size = _size(sum(c.size for c in spare))
+        answer = QMessageBox.question(
+            self, "Clean Up Edited Copies",
+            f"Delete {len(spare)} edited cop{'ies' if len(spare) != 1 else 'y'} ({size})? They're ones no ticket "
+            "uses any more, or whose ticket is already posted. Originals and copies a ticket will still post are "
+            "kept.")
+        if answer != QMessageBox.Yes:
+            return
+        removed, freed = clean_up_edited(self.store)
+        self._refresh_storage()
+        self.storage_label.setText(f"Removed {removed} edited cop{'ies' if removed != 1 else 'y'}, "
+                                   f"{_size(freed)} freed. " + self.storage_label.text())
 
     # ---------------------------------------------------------------- local AI helper
     def _build_assist_card(self, lay) -> None:
@@ -427,6 +476,7 @@ class SettingsPage(QWidget):
 
     def refresh(self) -> None:
         self._refresh_db()
+        self._refresh_storage()
         current = self.store.get_setting("theme", "dark")
         for name, b in self.theme_buttons.items():
             b.setChecked(name == current)

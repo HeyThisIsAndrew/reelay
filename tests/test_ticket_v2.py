@@ -406,6 +406,8 @@ def test_ticket_header_shows_ready_state_live(board, qtbot):
     assert header.badge.text() == "NOT READY" and "YouTube" in header.summary.text()
     b.panel.blocks["description"].set_text("A note on growth.")       # typing previews, saves nothing
     qtbot.waitUntil(lambda: header.badge.text() == "READY", timeout=2000)
+    # every platform ready: the ring and the rows say it, so no sentence repeats "Ready for…"
+    assert not header.summary.isVisibleTo(header) and "Ready" not in header.summary.text()
 
 
 def test_readiness_is_one_compact_row_per_platform(board, qtbot):

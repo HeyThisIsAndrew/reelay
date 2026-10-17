@@ -738,6 +738,12 @@ class Store:
         row = self.conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
         return row["value"] if row else default
 
+    def settings_with_prefix(self, prefix: str) -> dict[str, str]:
+        """Every setting whose key starts with `prefix` (e.g. "video_edit."), key → value."""
+        rows = self.conn.execute("SELECT key, value FROM settings WHERE substr(key, 1, ?) = ?",
+                                 (len(prefix), prefix)).fetchall()
+        return {r["key"]: r["value"] for r in rows}
+
     def set_setting(self, key: str, value: str) -> None:
         if self.read_only:      # view only: preferences (theme, column widths…) just aren't saved
             return

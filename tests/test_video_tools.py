@@ -162,3 +162,63 @@ def test_video_section_makes_and_forgets_an_edit(ticket, qtbot, monkeypatch):
     tools._use_original()
     assert vt.edited_path(store, row) is None and tools.summary() == "Original"
     assert tools.original.read_bytes() == FAKE_MP4                 # the original is never changed
+
+
+def test_clean_up_removes_only_copies_nothing_still_needs(tmp_path):
+    """Edited copies a ticket will still post are kept; unused ones and those of posted tickets go."""
+    from pathlib import Path
+
+    from reelay.models import Stage, VideoItem
+    from reelay.store import Store
+    from reelay.video_tools import clean_up_edited, edited_copies, edited_path, set_edit
+    store = Store(tmp_path / "r.db")
+    profile = store.create_profile("Be Unconventional", tmp_path / "lib")
+    folder = Path(profile.output_folder)
+    folder.mkdir(parents=True)
+    items = [VideoItem(platform="TikTok", video_id=str(n), url=f"https://t/{n}", upload_date="20261001",
+                       filename=f"{n}.mp4", folder=str(folder)) for n in range(2)]
+    ids = store.save_videos(profile.id, items)
+    waiting, posted = ids[items[0].key], ids[items[1].key]
+    for name, size in (("0.edited.mp4", 3000), ("1.edited.mp4", 2000), ("old.edited.mp4", 1000)):
+        (folder / name).write_bytes(b"\0" * size)
+    set_edit(store, waiting, folder / "0.edited.mp4", ["strip"])
+    set_edit(store, posted, folder / "1.edited.mp4", ["replace"])
+    store.set_stage([posted], Stage.PUBLISHED)
+    copies = {c.path.name: c for c in edited_copies(store)}
+    assert copies["0.edited.mp4"].reason == "in use" and not copies["0.edited.mp4"].removable
+    assert copies["1.edited.mp4"].reason == "posted" and copies["old.edited.mp4"].reason == "unused"
+    assert sum(c.size for c in copies.values() if c.removable) == 3000
+    removed, freed = clean_up_edited(store)
+    assert (removed, freed) == (2, 3000)
+    assert (folder / "0.edited.mp4").exists() and not (folder / "1.edited.mp4").exists()
+    assert edited_path(store, waiting) is not None and edited_path(store, posted) is None
+    store.close()
+
+
+def test_settings_shows_edited_copies_and_cleans_up(qtbot, tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from PySide6.QtWidgets import QApplication, QMessageBox
+
+    from reelay.gui.app import create_window
+    from reelay.paths import db_path
+    from reelay.store import Store
+    from reelay.tokens import MemoryTokenStore
+    store = Store(db_path())
+    profile = store.create_profile("Be Unconventional", tmp_path / "lib")
+    store.set_active_profile(profile.id)
+    folder = Path(profile.output_folder)
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "gone.edited.mp4").write_bytes(b"\0" * 5_000_000)
+    window = create_window(QApplication.instance(), store, MemoryTokenStore())
+    qtbot.addWidget(window)
+    window.go("settings")
+    page = window.settings_page
+    page.refresh()
+    assert "5 MB can be cleaned up" in page.storage_label.text() and page.clean_btn.isEnabled()
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.Yes)
+    page.clean_btn.click()
+    assert not (folder / "gone.edited.mp4").exists() and not page.clean_btn.isEnabled()
+    assert "Removed 1 edited copy" in page.storage_label.text()
+    window.close()
+    store.close()

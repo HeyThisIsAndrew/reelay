@@ -143,16 +143,15 @@ class ReadinessHeader(QFrame):
         self.badge.setText("READY" if ready else "NOT READY")
         set_prop(self.badge, "badge", "ready" if ready else "not_ready")
         blocking = [readiness.platforms[n].label for n in readiness.blocking]
-        ok = [p.label + (" (by hand)" if p.state == NOT_CHECKED else "")
-              for p in readiness.platforms.values() if p.ready]
+        # The ring counts what's ready and each row says where its platform stands, so the line beside the
+        # ring only says what they don't: that nothing is chosen, or which platforms still need work.
         if not readiness.platforms:
             self.summary.setText("No platforms chosen.")
-        elif not blocking:
-            self.summary.setText("Ready for " + ", ".join(ok) + ".")
-        elif ready:
-            self.summary.setText(f"Ready for {', '.join(ok)}. Not ready for {', '.join(blocking)}.")
-        else:
+        elif blocking:
             self.summary.setText(f"Not ready for {', '.join(blocking)}.")
+        else:
+            self.summary.setText("")
+        self.summary.setVisible(bool(self.summary.text()))
         for name, pr in readiness.platforms.items():
             self.rows.addWidget(_readiness_row(pr))
 
