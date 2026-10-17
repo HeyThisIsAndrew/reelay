@@ -211,13 +211,17 @@ LIBRARY = Category("library", "Library & downloads", "Bring videos in, choose wh
           Visual("library", "The Library's search field, Filter button, tile-size slider, grid/list toggle and "
                             "per-page menu."),
           (Step("Type in search to match captions, hashtags, product names, your names and file names.", "search"),
-           Step("**Filter** shows all, not downloaded or downloaded videos, one hashtag, a brand or product, and "
-                "the sort order.", "filter"),
+           Step("**Filter** shows all, not downloaded or downloaded videos, Short-form or Long-form, one hashtag, "
+                "a brand or product, and the sort order.", "filter"),
            Step("Drag the slider (or press ⌘+ and ⌘−) for smaller or bigger tiles.", "tiles"),
            Step("Switch between the picture grid and a dense list.", "view")),
           "A new search, filter or sort starts at page 1. Choose 24, 48, 96 or All per page at the bottom left.",
           (Detail("Reading a tile", (
-               "Badges say what kind of video it is (**Short · 1080p**, **Long-form · 4K**) and its length.",
+               "The logo at the top left says where the video came from: the YouTube Shorts mark for a Short, the "
+               "YouTube mark for a long-form video. Hover it for the format and resolution (\"From YouTube · Short · "
+               "1080p\"). The length is at the bottom right.",
+               "**Short-form** means square or vertical and 3 minutes or less, the same rule YouTube uses for "
+               "Shorts.",
                "Move the mouse across a downloaded video's thumbnail to flip through it.")),
            Detail("Tagged products (TikTok Shop)", (
                "Reelay looks up which products are tagged on each TikTok video, in the background. Filter "
@@ -226,7 +230,8 @@ LIBRARY = Category("library", "Library & downloads", "Bring videos in, choose wh
            Detail("Pages and selecting", (
                "**Select All** still selects every matching video, on every page.",))),
           ("library-select", "library-files"),
-          "search filter sort hashtag brand product grid list tiles size zoom page pages per page",
+          "search filter sort hashtag brand product grid list tiles size zoom page pages per page format short "
+          "long shorts badge logo source",
           "download", "Open the Library"),
     Guide("library-files", "Files and names", "Choose where videos go and how files are named.",
           Visual("library", "The Library's settings gear and Open Video List button."),
@@ -324,7 +329,8 @@ BOARD = Category("board", "Board & preparing posts", "Turn videos into ready-to-
                "Threads (5 minutes) say so when a video is too long for them.")),
            Detail("Finding what's blocked", (
                "**Filter → Show** narrows the Board to tickets that are ready, not ready, or blocked on one "
-               "platform.",))),
+               "platform.",
+               "**Filter → Format** shows only Short-form or only Long-form videos."))),
           ("board-captions", "publish-schedule"),
           "ready readiness check checklist ring blocked blocking needs work badge coverage",
           "board", "Open the Board"),
