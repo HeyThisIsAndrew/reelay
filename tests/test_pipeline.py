@@ -21,9 +21,10 @@ class FakeUploads:
         self.jobs = []
         self.cancelled = []
 
-    def enqueue(self, row_id, client, path, resource):
+    def enqueue(self, row_id, client, path, resource, thumbnail=None):
         if any(j[0] == row_id for j in self.jobs):
             raise ValueError("This video is already uploading.")
+        self.thumbnails = {**getattr(self, "thumbnails", {}), row_id: thumbnail}
         self.jobs.append((row_id, client, path, resource))
 
     def cancel(self, row_id):
@@ -184,6 +185,22 @@ def test_start_upload_queues_and_marks_scheduled(env):
     assert resource["status"]["publishAt"] == FUTURE and resource["snippet"]["description"].endswith("#Shorts")
     with pytest.raises(PipelineError):  # can't upload twice
         pipeline.start_upload(_ready_post(env, rows[0]))
+
+
+def test_the_tickets_cover_goes_up_as_the_youtube_thumbnail(env):
+    pipeline, store, uploads, rows = env[0], env[1], env[2], env[6]
+    cover = Path(store.get_video(rows[0]).item.folder) / "cover.jpg"
+    cover.write_bytes(b"\xff\xd8\xff" + b"\0" * 100)
+    pipeline.update_ticket(rows[0], {"thumbnail_path": str(cover)})
+    pipeline.start_upload(_ready_post(env, rows[0]))
+    assert uploads.thumbnails[rows[0]] == cover
+    assert "Its cover is the thumbnail" in uploads.finish(rows[0], True, {"id": "YT1", "cover_note": ""})
+    pipeline.start_upload(_ready_post(env, rows[1]))                       # no cover: nothing extra
+    assert uploads.thumbnails[rows[1]] is None
+    note = "YouTube didn't accept a custom thumbnail: this channel can't use them until it's verified."
+    pipeline.start_upload(_ready_post(env, rows[2]))
+    message = uploads.finish(rows[2], True, {"id": "YT3", "cover_note": note})
+    assert note in message and store.get_post(rows[2]).remote_url.endswith("YT3")    # still uploaded
 
 
 def test_start_upload_lists_every_problem_and_keeps_typed_text(env):

@@ -255,7 +255,8 @@ class TicketDetails(QWidget):
         self.transcript.committed.connect(lambda: self._commit("transcript", self.transcript.toPlainText() or None))
         bl.addWidget(self.transcript)
 
-        bl.addWidget(_section("COVER IMAGE", "The image to use as the video's cover"))
+        bl.addWidget(_section("COVER IMAGE", "The video's cover. When Reelay uploads to YouTube, it becomes the thumbnail "
+                                     "(a JPEG or PNG; anything else is converted)"))
         crow = QHBoxLayout()
         self.thumbnail = line("thumbnail_path", "No cover chosen", "Path of the cover image file")
         crow.addWidget(self.thumbnail, 1)

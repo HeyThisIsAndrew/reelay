@@ -53,6 +53,7 @@ class UploadWorker(QThread):
         self._last = 0.0
         self.sent, self.total = 0, 0
         self.result: dict | None = None     # set before `done` is emitted, so a shutdown can still record it
+        self.thumbnail: Path | None = None  # the ticket's cover: set as the video's thumbnail once it's up
 
     def cancel(self) -> None:
         self._cancel.set()
@@ -93,7 +94,24 @@ class UploadWorker(QThread):
             self.failed.emit(self.row_id, f"Unexpected error: {exc}")
         else:
             self.result = result or {}
+            if self.thumbnail is not None and self.result.get("id"):
+                self.result["cover_note"] = self._set_cover(self.result["id"])
             self.done.emit(self.row_id, self.result)
+
+    def _set_cover(self, video_id: str) -> str:
+        """Set the cover as the thumbnail. "" when it worked, otherwise why not: the video is up either way, so
+        a refused cover is a note for the person, never a failed post."""
+        from .covers import CoverError, prepare_cover
+        from .youtube import YouTubeError
+        try:
+            data, mime = prepare_cover(self.thumbnail)
+            self.client.set_thumbnail(video_id, data, mime)
+        except (CoverError, YouTubeError) as exc:
+            return str(exc)
+        except Exception as exc:  # noqa: BLE001 (a network hiccup here mustn't undo the upload)
+            log.warning("Couldn't set the thumbnail for %s: %s", video_id, exc)
+            return f"The cover couldn't be set ({exc}). Set it in YouTube Studio."
+        return ""
 
 
 @dataclass
@@ -102,6 +120,7 @@ class UploadJob:
     client: object
     path: Path
     resource: dict
+    thumbnail: Path | None = None
 
 
 class UploadManager(QObject):
@@ -154,11 +173,12 @@ class UploadManager(QObject):
             return None
 
     # ---------------------------------------------------------------- control
-    def enqueue(self, row_id: int, client, path: Path, resource: dict) -> None:
+    def enqueue(self, row_id: int, client, path: Path, resource: dict, thumbnail: Path | None = None) -> None:
         with self._lock:
             if self.is_active(row_id) or self.is_queued(row_id):
                 raise ValueError("This video is already uploading.")
-            self._queue.append(UploadJob(row_id, client, Path(path), resource))
+            self._queue.append(UploadJob(row_id, client, Path(path), resource,
+                                         Path(thumbnail) if thumbnail else None))
             self._progress[row_id] = 0.0
         self.changed.emit()
         self._kick.emit()  # queued onto our thread when called from another one
@@ -224,6 +244,8 @@ class UploadManager(QObject):
                 return
             job = self._queue.popleft()
             worker = self._worker_factory(job.row_id, job.client, job.path, job.resource, self)
+            if job.thumbnail is not None:
+                worker.thumbnail = job.thumbnail
             self._worker = worker
         worker.progress.connect(self._on_progress)
         worker.done.connect(lambda row_id, resource: self._finish(row_id, True, resource))

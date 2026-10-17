@@ -34,6 +34,7 @@ TOKEN_URL = "https://oauth2.googleapis.com/token"
 REVOKE_URL = "https://oauth2.googleapis.com/revoke"
 API = "https://www.googleapis.com/youtube/v3"
 UPLOAD_URL = "https://www.googleapis.com/upload/youtube/v3/videos"
+THUMBNAIL_URL = "https://www.googleapis.com/upload/youtube/v3/thumbnails/set"   # works with youtube.upload
 SCOPES = [
     "https://www.googleapis.com/auth/youtube.upload",
     "https://www.googleapis.com/auth/youtube.readonly",
@@ -372,6 +373,21 @@ class YouTubeClient:
                 if cancel.wait(min(2 ** retries, 32)):
                     raise UploadCancelled()
                 offset = self._query_offset(session_url, total)
+
+    def set_thumbnail(self, video_id: str, data: bytes, mime: str) -> dict:
+        """Make `data` (a JPEG or PNG of at most 2 MB, see covers.prepare_cover) the video's thumbnail."""
+        resp = self.request("POST", THUMBNAIL_URL, params={"videoId": video_id, "uploadType": "media"},
+                            data=data, headers={"Content-Type": mime})
+        if resp.status_code == 403:
+            raise YouTubeError("YouTube didn't accept a custom thumbnail: this channel can't use them until it's "
+                               "verified (YouTube Studio → Settings → Channel → Feature eligibility).", 403,
+                               "forbidden")
+        if resp.status_code == 429:
+            raise YouTubeError("YouTube says this channel has set too many thumbnails recently. Set this one in "
+                               "YouTube Studio later.", 429, "tooManyRequests")
+        if resp.status_code != 200:
+            raise _api_error(resp)
+        return _json(resp)
 
     def _query_offset(self, session_url: str, total: int) -> int:
         """Ask the server how much it has after an interrupted chunk."""

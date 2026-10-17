@@ -35,9 +35,10 @@ class FakeUploads:
         self.jobs: list[tuple] = []
         self.cancelled: list[int] = []
 
-    def enqueue(self, row_id, client, path, resource):
+    def enqueue(self, row_id, client, path, resource, thumbnail=None):
         if any(j[0] == row_id for j in self.jobs):
             raise ValueError("This video is already uploading.")
+        self.thumbnails = {**getattr(self, "thumbnails", {}), row_id: thumbnail}
         self.jobs.append((row_id, client, Path(path), resource))
 
     def cancel(self, row_id):

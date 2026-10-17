@@ -1053,8 +1053,12 @@ class Pipeline:
             raise PermanentError(str(exc)) from None
         resource = build_resource(replace(post, publish_at=dispatch.publish_at),
                                   dispatch.options.get("add_shorts", self.add_shorts_default_for(row)))
+        cover = row.ticket.thumbnail_path if row.ticket else None      # the ticket's cover → YouTube thumbnail
         try:
-            self.uploads.enqueue(row.id, client, path, resource)
+            if cover:
+                self.uploads.enqueue(row.id, client, path, resource, thumbnail=Path(cover))
+            else:
+                self.uploads.enqueue(row.id, client, path, resource)
         except ValueError:
             pass  # already in the queue (e.g. resumed after a restart)
 
@@ -1087,7 +1091,9 @@ class Pipeline:
             if post is None:
                 return "Upload finished."
             when = f" It goes live {local_text(post.publish_at)}." if post.publish_at else ""
-            return f"Uploaded “{post.title}” to YouTube.{when}"
+            note = payload.get("cover_note") if isinstance(payload, dict) else None
+            cover = "" if note is None else (" Its cover is the thumbnail." if not note else f" {note}")
+            return f"Uploaded “{post.title}” to YouTube.{when}{cover}"
         dispatch = self._youtube_dispatch(row_id)
         if dispatch is not None and getattr(payload, "uncertain", False):
             self.store.interrupt_dispatch(dispatch.id, UNSURE_MESSAGE)    # never re-upload blindly
