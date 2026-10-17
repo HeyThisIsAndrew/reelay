@@ -215,7 +215,10 @@ def platform_checks(post: Post, platform: str, video_path: Path | None, duration
 
 
 def evaluate(post: Post, enabled: frozenset[str] | set[str], video_path: Path | None,
-             duration: float | None = None, targets: list[str] | None = None, media=None) -> Readiness:
+             duration: float | None = None, targets: list[str] | None = None, media=None,
+             per_platform: dict | None = None) -> Readiness:
+    """`per_platform`: platform → (file, media, extra checks) for platforms that post their own copy (a
+    different sound): their checks read that copy, and the extra checks say how the copy stands."""
     """Readiness for the post's target platforms (or `targets`)."""
     targets = list(dict.fromkeys(targets or post.target_platforms or [Platform.YOUTUBE]))
     platforms = {}
@@ -223,7 +226,8 @@ def evaluate(post: Post, enabled: frozenset[str] | set[str], video_path: Path | 
         if platform not in Platform.LABELS:
             continue
         auto = platform in enabled
+        path, info, extra = (per_platform or {}).get(platform, (video_path, media, []))
         platforms[platform] = PlatformReadiness(platform, auto,
-                                                platform_checks(post, platform, video_path, duration, media)
+                                                list(extra) + platform_checks(post, platform, path, duration, info)
                                                 if auto else [])
     return Readiness(platforms)

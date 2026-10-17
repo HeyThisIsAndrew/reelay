@@ -164,6 +164,8 @@ class PostPanel(QFrame):
     targetsChanged = Signal(int, list)                # video row id, target platforms
     platformMarkRequested = Signal(int, str, str, object, str, str)   # row id, platform, state, when, url, note
     handoffRequested = Signal(int, str)                     # row id, platform: Prepare to Publish
+    soundRequested = Signal(int, str)                       # row id, platform: choose its own sound
+    soundRemoved = Signal(int, str)                         # row id, platform: back to the ticket's sound
     recoverRequested = Signal(int)                          # row id: decide about interrupted sends
 
     def __init__(self, thumbs: ThumbnailCache, parent=None):
@@ -308,6 +310,8 @@ class PostPanel(QFrame):
                 lambda p, state, when, url, note: self.card and self.platformMarkRequested.emit(
                     self.card.id, p, state, when, url, note))
             section.handoffRequested.connect(lambda p: self.card and self.handoffRequested.emit(self.card.id, p))
+            section.soundRequested.connect(lambda p: self.card and self.soundRequested.emit(self.card.id, p))
+            section.soundRemoved.connect(lambda p: self.card and self.soundRemoved.emit(self.card.id, p))
             for key in spec.copy_fields:
                 section.add(block(key, compact=len(spec.copy_fields) == 1))
             if spec.key == Platform.YOUTUBE:
@@ -501,6 +505,9 @@ class PostPanel(QFrame):
         self.stack.setCurrentIndex(1)
         item = card.row.item
         self.cover.set_cover(self.thumbs.cover(item))
+        for platform, section in self.sections.items():       # a quiet ♪ where a platform has its own sound
+            sound = card.sounds.get(platform)
+            section.set_sound(sound.name if sound else None)
         self.hook.setText(short_title(item.hook, 90))
         bits = [fmt_date(item.upload_date) if item.upload_date else "", fmt_duration(item.duration),
                 f"{fmt_count(item.view_count)} views on {item.platform}" if item.view_count is not None else item.platform]

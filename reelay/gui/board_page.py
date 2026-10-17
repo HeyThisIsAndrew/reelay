@@ -8,6 +8,7 @@ import logging
 import time
 from dataclasses import replace
 from datetime import datetime, timezone
+from pathlib import Path
 
 from PySide6.QtCore import (QAbstractListModel, QItemSelectionModel, QMimeData, QModelIndex, QPointF, QRect, QRectF,
                             QEvent, QSettings, QSize, Qt, QTimer, Signal)
@@ -729,6 +730,8 @@ class BoardPage(QWidget):
         self.panel.targetsChanged.connect(self._set_targets)
         self.panel.platformMarkRequested.connect(self._mark_platform)
         self.panel.handoffRequested.connect(self.prepare_to_publish)
+        self.panel.soundRequested.connect(self.choose_sound)
+        self.panel.soundRemoved.connect(self.remove_sound)
         self.panel.recoverRequested.connect(self.open_recovery)
         self.panel.transcriptRequested.connect(lambda row_id: self._get_transcripts([row_id], ask_replace=True))
         self.bulk = BulkPanel()
@@ -1424,6 +1427,49 @@ class BoardPage(QWidget):
                                                 "cancel": "cancelled"}[a] for _i, a in dialog.resolved) + ".")
         self.reload()
 
+    # ---------------------------------------------------------------- a different sound for one platform
+    def choose_sound(self, row_id: int, platform: str) -> None:
+        """Pick a sound for one platform; its copy is made in the background (the ticket updates when ready)."""
+        from ..models import Platform as P
+        from ..platform_media import MIX, REPLACE, PlatformSound, build_soon
+        from .ticket_widgets import PlatformSection
+        from .video_widgets import SoundDialog
+        row = self.store.get_video(row_id)
+        master = self.pipeline.video_path(row) if row else None
+        if master is None or not master.is_file():
+            QMessageBox.information(self, "Different Sound", "Download the video first.")
+            return
+        label = P.LABELS.get(platform, platform)
+        app = PlatformSection.IN_APP_SOUNDS.get(platform)
+        note = (f"{label} posts with this sound; every other platform keeps its own. The original file isn't "
+                "changed: Reelay makes a copy for " + label + " only.")
+        if app:
+            note += (f" Trending sounds from {app}'s library can't be added by any app: add those in {app} when you "
+                     "post it (⋯ → Publish…).")
+        dialog = SoundDialog(self, str(master.parent), title=f"Different Sound for {label}", note=note,
+                             ok_text="Use This Sound")
+        current = self.store.get_platform_sound(row_id, platform)
+        if current is not None:
+            dialog.preset(Path(current.audio_path) if Path(current.audio_path).is_file() else None,
+                          current.volume_master if current.mode == MIX else 0.0, current.volume_audio)
+        from PySide6.QtWidgets import QDialog
+        if dialog.exec() != QDialog.Accepted or dialog.track is None:
+            return
+        opts = dialog.options()
+        sound = PlatformSound(row_id, platform, str(dialog.track), MIX if opts["original_volume"] > 0 else REPLACE,
+                              opts["original_volume"] or 0.25, opts["track_volume"],
+                              current.output_path if current else None, None)
+        self.store.save_platform_sound(sound)
+        build_soon(self.store, sound, master)
+        self._status(f"Making the {label} copy with {dialog.track.name}…")
+
+    def remove_sound(self, row_id: int, platform: str) -> None:
+        from ..models import Platform as P
+        copy = self.store.clear_platform_sound(row_id, platform)
+        if copy:
+            Path(copy).unlink(missing_ok=True)              # only the platform's copy; never the original
+        self._status(f"{P.LABELS.get(platform, platform)} posts with the ticket's own sound again.")
+
     def prepare_to_publish(self, row_id: int, platform: str) -> None:
         """The guided hand-off for a platform Reelay doesn't post to itself."""
         from .. import handoff
@@ -1442,7 +1488,18 @@ class BoardPage(QWidget):
         else:
             post, _saved = self.pipeline.post_or_default(row)
         media = self.pipeline.media_info(row)              # the file's own length, when it's been inspected
-        plan = handoff.prepare(post, platform, self.pipeline.video_path(row),
+        from PySide6.QtGui import QGuiApplication
+
+        from ..video_tools import VideoToolError
+        QGuiApplication.setOverrideCursor(Qt.WaitCursor)   # its own sound: the copy may need making first
+        try:
+            video = self.pipeline.video_path_for(row, platform)
+        except VideoToolError as exc:
+            QMessageBox.warning(self, "Prepare to Publish", str(exc))
+            return
+        finally:
+            QGuiApplication.restoreOverrideCursor()
+        plan = handoff.prepare(post, platform, video,
                                (media.duration if media and media.duration else None) or row.item.duration)
         dialog = HandoffDialog(plan, self)
         if dialog.exec() != HandoffDialog.Accepted:

@@ -323,6 +323,7 @@ class EditedCopy:
     size: int
     row_id: int | None
     reason: str              # "in use" (a ticket will post it), "posted" (its ticket is done), "unused"
+    shared: bool = False     # the ticket-wide edit (rather than one platform's own sound)
 
     @property
     def removable(self) -> bool:
@@ -341,6 +342,8 @@ def edited_copies(store) -> list[EditedCopy]:
             refs[str(Path(data["file"]))] = int(key.rsplit(".", 1)[1])
         except (ValueError, TypeError, KeyError):
             continue
+    shared = set(refs)                                     # the ticket-wide edits (Remove / Replace Sound…)
+    refs.update({str(Path(f)): row for f, row in store.platform_sound_copies().items()})   # per-platform sound
     folders = {Path(p.output_folder) for p in store.list_profiles()} | {Path(f).parent for f in refs}
     copies: list[EditedCopy] = []
     for folder in sorted(folders):
@@ -356,7 +359,7 @@ def edited_copies(store) -> list[EditedCopy]:
                 row = store.get_video(row_id)
                 busy = any(d.status in DispatchStatus.ACTIVE for d in store.dispatches_for(row_id))
                 reason = "posted" if row is not None and row.stage == Stage.PUBLISHED and not busy else "in use"
-            copies.append(EditedCopy(path, size, row_id, reason))
+            copies.append(EditedCopy(path, size, row_id, reason, str(path) in shared))
     return copies
 
 
@@ -372,8 +375,8 @@ def clean_up_edited(store) -> tuple[int, int]:
         except OSError:
             continue
         removed, freed = removed + 1, freed + copy.size
-        if copy.row_id is not None:
-            clear_edit(store, copy.row_id)
+        if copy.row_id is not None and copy.shared:
+            clear_edit(store, copy.row_id)       # a platform's own sound stays chosen: its copy is remade if needed
     return removed, freed
 
 

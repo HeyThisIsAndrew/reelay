@@ -44,6 +44,7 @@ from .publishing import (DESCRIPTION_MAX_BYTES, MIN_SCHEDULE_LEAD, TAGS_MAX_CHAR
                          default_post, humanize_name, parse_utc, reconcile, validate_post)
 from .store import Store
 from .text import local_text, short_title
+from .video_tools import VideoToolError
 from .youtube import YouTubeError, watch_url
 
 log = logging.getLogger("reelay")
@@ -105,6 +106,7 @@ class Card:
     readiness: Readiness | None = None
     platform_states: dict = field(default_factory=dict)   # platform → PlatformState
     search_hit: object | None = None   # store.SearchHit when the board is searching
+    sounds: dict = field(default_factory=dict)            # platform → PlatformSound (its own sound)
 
     @property
     def id(self) -> int:
@@ -316,13 +318,47 @@ class Pipeline:
         return Card(row=row, post=post, account=accounts.get(post.account_id) if post else None,
                     progress=self.uploads.progress_of(row.id), queued=self.uploads.is_queued(row.id),
                     dispatches=self.store.dispatches_for(row.id), readiness=self._readiness(row, post),
-                    platform_states=self.platform_states(row.id))
+                    platform_states=self.platform_states(row.id), sounds=self.store.platform_sounds(row.id))
 
     # ================================================================ readiness
     def _readiness(self, row: VideoRow, post: Post | None = None, targets: list[str] | None = None) -> Readiness:
         post = post or self.post_or_default(row)[0]
         return evaluate(post, self.enabled_platforms(), self.video_path(row), row.item.duration, targets,
-                        self.media_info(row))
+                        self.media_info(row), self._own_sound_checks(row))
+
+    def _own_sound_checks(self, row: VideoRow) -> dict:
+        """For each platform with its own sound: the copy it would post, what that copy is, and how it stands.
+        A missing or out-of-date copy is made in the background (the ticket updates when it's ready)."""
+        from .platform_media import build_soon, fresh_copy
+        from .probe import cached_probe, probe_soon
+        from .readiness import PASS, WARN, Check
+        master = self.video_path(row)
+        media = self.media_info(row)
+        found = {}
+        for platform, sound in self.store.platform_sounds(row.id).items():
+            if master is None:
+                continue
+            copy = fresh_copy(sound, master)
+            if copy is not None:
+                info = cached_probe(self.store, copy, probe=None)
+                if info is None:
+                    probe_soon(self.store, copy, row.id, row.profile_id)
+                found[platform] = (copy, info or media,
+                                   [Check("sound", "Sound", PASS, f"Posts with its own sound ({sound.name}).")])
+            elif not Path(sound.audio_path).is_file():
+                found[platform] = (master, media, [Check("sound", "Sound", WARN, f"Its own sound ({sound.name}) "
+                                                         "isn't there any more. Choose it again, or remove it.")])
+            else:
+                build_soon(self.store, sound, master)
+                found[platform] = (master, media, [Check("sound", "Sound", WARN, f"Making the copy with its own "
+                                                         f"sound ({sound.name})…")])
+        return found
+
+    def video_path_for(self, row: VideoRow, platform: str, build_now: bool = True) -> Path | None:
+        """The file to post on `platform`: its copy with its own sound if it has one (made now if needed),
+        otherwise the ticket's video (video_path)."""
+        from .platform_media import path_for
+        return path_for(self.store, row.id, platform, self.video_path(row), build_now)
 
     def media_info(self, row: VideoRow):
         """What the file this ticket would post really is (probe.MediaInfo), from the database. Never waits: if
@@ -1060,7 +1096,10 @@ class Pipeline:
             self.accounts.account_for(row.profile_id, Platform.YOUTUBE, post.account_id)
         if account is None:
             raise PermanentError("No YouTube channel is connected for this post.")
-        path = self.video_path(row)
+        try:
+            path = self.video_path_for(row, Platform.YOUTUBE)        # its own sound, if it has one
+        except VideoToolError as exc:
+            raise PermanentError(f"YouTube: {exc}") from None
         if path is None or not path.is_file():
             raise PermanentError(self.file_problem(row))
         try:
@@ -1241,7 +1280,10 @@ class Pipeline:
         credentials = self.accounts.credentials(account)
         if credentials is None:
             raise PermanentError(f"{label}: the sign-in is missing from the keychain. Reconnect it in Accounts.")
-        path = self.video_path(row)
+        try:
+            path = self.video_path_for(row, dispatch.platform)      # its own sound, if it has one
+        except VideoToolError as exc:
+            raise PermanentError(f"{label}: {exc}") from None
         if path is None or not path.is_file():
             raise PermanentError(self.file_problem(row))
         text = ""

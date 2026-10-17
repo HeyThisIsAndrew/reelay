@@ -18,16 +18,20 @@ from .workers import CallWorker
 class SoundDialog(QDialog):
     """Pick a track and how loud the original stays underneath."""
 
-    def __init__(self, parent=None, start_folder: str = ""):
+    RIGHTS = ("Use music you have the rights to: royalty-free tracks or your own. Trending sounds from TikTok or "
+              "Instagram can't be reused on other platforms. The track loops if it's shorter than the video and is "
+              "cut at the video's end.")
+
+    def __init__(self, parent=None, start_folder: str = "", title: str = "Replace Sound", note: str = "",
+                 ok_text: str = "Make Edited Copy"):
         super().__init__(parent)
-        self.setWindowTitle("Replace Sound")
+        self.setWindowTitle(title)
         self.track: Path | None = None
         self.start_folder = start_folder
+        self._ok_text = ok_text
         lay = QVBoxLayout(self)
         lay.setContentsMargins(20, 16, 20, 14)
-        note = QLabel("Use music you have the rights to: royalty-free tracks or your own. Trending sounds from "
-                      "TikTok or Instagram can't be reused on other platforms. The track loops if it's shorter "
-                      "than the video and is cut at the video's end.")
+        note = QLabel(f"{note}\n\n{self.RIGHTS}" if note else self.RIGHTS)
         note.setWordWrap(True)
         note.setProperty("muted", True)
         lay.addWidget(note)
@@ -64,7 +68,7 @@ class SoundDialog(QDialog):
         lay.addLayout(form)
         buttons = QDialogButtonBox(QDialogButtonBox.Cancel | QDialogButtonBox.Ok)
         self.ok = buttons.button(QDialogButtonBox.Ok)
-        self.ok.setText("Make Edited Copy")
+        self.ok.setText(self._ok_text)
         self.ok.setEnabled(False)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
@@ -83,6 +87,13 @@ class SoundDialog(QDialog):
 
     def options(self) -> dict:
         return {"original_volume": self.original.value() / 100, "track_volume": self.volume.value() / 100}
+
+    def preset(self, track: Path | None, original_volume: float, track_volume: float) -> None:
+        """Start from a sound already chosen (to change it)."""
+        if track is not None:
+            self.set_track(Path(track))
+        self.original.setValue(round(original_volume * 100))
+        self.volume.setValue(round(track_volume * 100))
 
 
 class VideoTools(QWidget):

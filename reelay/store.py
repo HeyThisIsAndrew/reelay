@@ -781,6 +781,49 @@ class Store:
                       (path, size, mtime, info.duration, info.width, info.height, info.video_codec,
                        info.audio_codec, info.fps, info.bitrate, utcnow()))
 
+    # ================================================================ a different sound per platform
+    def get_platform_sound(self, row_id: int, platform: str):
+        from .platform_media import PlatformSound
+        r = self.conn.execute("SELECT * FROM platform_media WHERE video_row = ? AND platform = ?",
+                              (row_id, platform)).fetchone()
+        if r is None:
+            return None
+        return PlatformSound(r["video_row"], r["platform"], r["audio_path"], r["mode"], r["volume_master"],
+                             r["volume_audio"], r["output_path"], r["source_fingerprint"])
+
+    def platform_sounds(self, row_id: int) -> dict:
+        """platform → PlatformSound for every platform of this ticket that has its own sound."""
+        rows = self.conn.execute("SELECT platform FROM platform_media WHERE video_row = ?", (row_id,)).fetchall()
+        return {r["platform"]: self.get_platform_sound(row_id, r["platform"]) for r in rows}
+
+    def save_platform_sound(self, sound) -> None:
+        with self.tx() as c:
+            c.execute("INSERT INTO platform_media (video_row, platform, audio_path, mode, volume_master, "
+                      "volume_audio, output_path, source_fingerprint, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                      "ON CONFLICT(video_row, platform) DO UPDATE SET audio_path = excluded.audio_path, "
+                      "mode = excluded.mode, volume_master = excluded.volume_master, "
+                      "volume_audio = excluded.volume_audio, output_path = excluded.output_path, "
+                      "source_fingerprint = excluded.source_fingerprint, updated_at = excluded.updated_at",
+                      (sound.video_row, sound.platform, sound.audio_path, sound.mode, sound.volume_master,
+                       sound.volume_audio, sound.output_path, sound.source_fingerprint, utcnow()))
+        self._emit("video", (sound.video_row,))
+
+    def platform_sound_copies(self) -> dict[str, int]:
+        """Every per-platform copy that was made: path → its ticket's row id."""
+        rows = self.conn.execute("SELECT video_row, output_path FROM platform_media "
+                                 "WHERE output_path IS NOT NULL").fetchall()
+        return {r["output_path"]: r["video_row"] for r in rows}
+
+    def clear_platform_sound(self, row_id: int, platform: str) -> str | None:
+        """Forget the platform's own sound; returns the copy that was made for it (the caller may delete it)."""
+        sound = self.get_platform_sound(row_id, platform)
+        if sound is None:
+            return None
+        with self.tx() as c:
+            c.execute("DELETE FROM platform_media WHERE video_row = ? AND platform = ?", (row_id, platform))
+        self._emit("video", (row_id,))
+        return sound.output_path
+
     # ================================================================ profiles
     def list_profiles(self) -> list[Profile]:
         rows = self.conn.execute("SELECT * FROM profiles ORDER BY name COLLATE NOCASE").fetchall()

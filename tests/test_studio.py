@@ -50,7 +50,7 @@ def test_readiness_knows_platform_length_limits(tmp_path):
     assert long.platforms["youtube"].ready
     assert any(c.id == "format" and "regular YouTube video" in c.message for c in long.platforms["youtube"].checks)
     assert not long.platforms["bluesky"].ready
-    assert "at most 3 minutes" in long.platforms["bluesky"].problems[0]
+    assert "at most 10 minutes" in long.platforms["bluesky"].problems[0]       # raised from 3 in Aug 2026
     short = evaluate(post, {"youtube", "bluesky"}, video, duration=40)
     assert short.platforms["bluesky"].ready and not any(c.id == "format" for c in short.platforms["youtube"].checks)
 

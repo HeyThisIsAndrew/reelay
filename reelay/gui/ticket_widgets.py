@@ -722,6 +722,11 @@ class PlatformSection(QFrame):
     of these per platform; nothing here is specific to any one platform."""
     markRequested = Signal(str, str, object, str, str)   # platform, "scheduled"|"posted"|"none", when, url, note
     handoffRequested = Signal(str)                        # platform: open Prepare to Publish
+    soundRequested = Signal(str)                          # platform: choose (or change) its own sound
+    soundRemoved = Signal(str)                            # platform: back to the ticket's sound
+
+    # Where a sound from the platform's own library is best added: in its app, when it's posted by hand
+    IN_APP_SOUNDS = {"tiktok": "TikTok", "instagram": "Instagram"}
 
     def __init__(self, platform: str, parent=None):
         super().__init__(parent)
@@ -783,6 +788,15 @@ class PlatformSection(QFrame):
         self.act_publish.setToolTip(f"Prepare to Publish on {self.label}: Reelay checks the video and caption, "
                                     f"copies the caption, opens {self.label}'s uploader and shows the video file. "
                                     "You post it there, then paste the link back.")
+        menu.addSeparator()
+        self.act_sound = menu.addAction("Use Different Sound…", lambda: self.soundRequested.emit(self.platform))
+        self.act_sound.setToolTip(f"Post {self.label} with its own sound (a track you have the rights to, or a "
+                                  "voice-over), replacing or mixed with the original. Other platforms keep theirs; "
+                                  "the original file is never changed.")
+        self.act_no_sound = menu.addAction("Remove Different Sound", lambda: self.soundRemoved.emit(self.platform))
+        self.act_no_sound.setToolTip(f"Post {self.label} with the ticket's own sound again")
+        self.act_no_sound.setVisible(False)
+        self.sound: str | None = None
         self.menu_btn.setMenu(menu)
         head.addWidget(self.menu_btn)
         outer.addWidget(self.header)
@@ -790,6 +804,16 @@ class PlatformSection(QFrame):
         self.body_layout = QVBoxLayout(self.body)
         self.body_layout.setContentsMargins(0, 0, 4, 0)
         self.body_layout.setSpacing(6)
+        app = self.IN_APP_SOUNDS.get(platform)
+        if app:          # trending sounds can't be added by any app: they're added in theirs, when posting
+            note = QLabel(f"Trending sounds from {app}'s library are best added in the {app} app when you post "
+                          "it (⋯ → Publish…).", objectName="PlatformNote")
+            note.setWordWrap(True)
+            note.setProperty("faint", True)
+            tip(note, f"{app} doesn't let apps choose sounds from its library. A different sound chosen here is "
+                      f"baked into the file you upload; one from {app}'s library you add in the app.")
+            self.body_layout.addWidget(note)
+            self.note = note
         outer.addWidget(self.body)
         self.toggle.setChecked(True)
         self._fold(True)
@@ -808,7 +832,17 @@ class PlatformSection(QFrame):
 
     def _fold(self, on: bool) -> None:
         self.body.setVisible(on)
-        self.toggle.setText(f"{self.label} {'▾' if on else '▸'}")
+        mark = "  ♪" if self.sound else ""
+        self.toggle.setText(f"{self.label}{mark} {'▾' if on else '▸'}")
+
+    def set_sound(self, name: str | None) -> None:
+        """Show that this platform posts with its own sound (a quiet ♪ by its name), or not."""
+        self.sound = name
+        self.act_sound.setText("Change Different Sound…" if name else "Use Different Sound…")
+        self.act_no_sound.setVisible(bool(name))
+        self.toggle.setToolTip(f"Show or hide the {self.label} caption"
+                               + (f". Posts with its own sound: {name}" if name else ""))
+        self._fold(self.toggle.isChecked())
 
     def eventFilter(self, obj, event) -> bool:  # noqa: N802
         if obj is self.header and event.type() == QEvent.MouseButtonRelease and event.button() == Qt.LeftButton:

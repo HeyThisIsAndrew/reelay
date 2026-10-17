@@ -353,9 +353,18 @@ BOARD = Category("board", "Board & preparing posts", "Turn videos into ready-to-
                "**Replace Sound…** adds music you have the rights to, looped to the video's length.",
                "**Add Captions…** draws captions from a .srt, .vtt or .ass file, or makes them automatically "
                "if the free faster-whisper add-on is installed.",
-               "**Use Original** goes back to the downloaded file."))),
+               "**Use Original** goes back to the downloaded file.")),
+           Detail("A different sound for one platform", (
+               "In a platform's caption box, **⋯ → Use Different Sound…** posts that platform with its own sound "
+               "(replacing the original, or mixed under it); every other platform keeps its own. A ♪ by the "
+               "platform's name shows it's set.",
+               "Reelay makes a copy for that platform only (the picture isn't re-encoded) and remakes it if "
+               "anything changes. The original file is never touched.",
+               "Trending sounds from TikTok's or Instagram's library can't be added by any app: add those in "
+               "their app when you post it (⋯ → Publish…)."))),
           ("board-captions", "board-find"),
-          "details transcript cover topic keywords provenance video sound music captions subtitles srt edit"),
+          "details transcript cover topic keywords provenance video sound music captions subtitles srt edit "
+          "different sound per platform audio voice-over thumbnail"),
     Guide("board-find", "Find, filter and archive", "Find any video and keep the Board tidy.",
           Visual("board-more", "The Board's search, Published column, and the ⋯ menu with Archived Videos…"),
           (Step("Search by title, any caption, topic, notes or what's said in the video.", "search"),
