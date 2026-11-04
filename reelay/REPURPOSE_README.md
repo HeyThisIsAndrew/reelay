@@ -75,6 +75,8 @@ proposal = generate_repurpose_proposal(
     title="Building an Agent-First Desktop Video Pipeline",
     description="Walking through local-first media management and agent APIs.",
     notes="Focus on indie hackers, developers, and desktop software.",
+    transcript="Hey everyone, in this video we are looking at local-first media tools on macOS.",
+    brand_voice="Direct, technical builder voice; zero fluff.",
 )
 
 # Output dictionary with all 9 string fields:
@@ -84,10 +86,20 @@ print("Threads Post:", proposal["threads_text"])
 print("Shared Hashtags:", proposal["hashtags"])
 ```
 
-### Dry-Run Test (No API Key Required)
-Run the automated test suite verifying schema, limit validation, and error handling:
+### Live CLI Proposal & Review Runner
+Run a live proposal pass from the terminal (displays the privacy disclosure, calls `muse-spark-1.3`, validates all 9 fields against `FIELD_LIMITS`, and outputs the formatted review proposal without auto-saving):
 ```bash
-pytest tests/test_repurpose_engine.py -v
+python -m reelay.repurpose_engine \
+  --title "Building Local AI Desktop Tools on macOS" \
+  --description "Walking through local-first media management and agent APIs." \
+  --transcript "Hey everyone, today we are looking at how Reelay runs locally on Mac." \
+  --brand-voice "Direct, technical builder tone."
+```
+
+### Dry-Run Test (No API Key Required)
+Run the automated test suite verifying schema, limit validation, privacy opt-in gate, and error handling:
+```bash
+pytest tests/test_repurpose_engine.py tests/test_privacy.py -v
 ```
 
 ---
