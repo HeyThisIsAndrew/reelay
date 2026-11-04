@@ -73,7 +73,7 @@ Everything up to and including the `pre-hackathon` tag (`f93d360`): feature work
 * Local loopback Agent API at `127.0.0.1:8471` (`reelay/api.py`, `reelay/scoped_pipeline.py`).
 
 ### Built on November 4, 2026 (`pre-hackathon...hackathon-all-nov4`)
-The diff touches **10 files** (+2,472 lines): **9 net-new files** plus **1 minimally modified pre-existing file**.
+The diff touches **14 files**: **11 net-new files** plus **3 modified pre-existing files**. The feature and review integration are accompanied by maintenance fixes for source-listing metadata handover and date ordering; those fixes are distinguished below.
 
 Net-new:
 * `reelay/repurpose_engine.py`: Meta Model API client for `muse-spark-1.3`, prompt construction and transcript isolation, Threads hashtag migration, `FIELD_LIMITS` validation with targeted rewrites (no truncation), keychain key lookup/setup CLI, and a review runner.
@@ -85,11 +85,17 @@ Net-new:
 * `tests/test_privacy.py`: 6 tests (off by default, blocked when disabled, blocked with no store/opt-in/env var, allowed after opt-in, environment override, disclosure completeness).
 * `tests/test_repurpose_gui.py`: 12 tests (button present, `python -m reelay` entry point, disclosure and unchecked-consent blocking, Source Snapshot fidelity, non-blocking cancel, Apply disabled during regeneration, stale-ticket protection, SQLite check that nothing is saved before Save Changes, and edit/apply/regenerate after a background run completes).
 * `SUBMISSION.md`: This write-up.
+* `tests/test_listing_refresh.py`: 5 regression cases for asynchronous date ordering, repeated source listings, interrupted product lookups, and stale profile metadata.
+* `CLAUDE_HANDOFF.md`: Cloud-review handoff, runtime workaround, verification history, and remaining local walkthrough/video tasks.
 
 Modified:
 * `reelay/gui/post_panel.py` (+58 lines): only adds the **"Repurpose with Muse Spark"** button and its `_repurpose()` handler, which applies an accepted proposal to the in-memory editor with stale-ticket protection and never auto-saves.
+* `reelay/gui/download_page.py`: maintenance fixes for interrupted metadata/product lookups, stale metadata results, and reordering after dates arrive.
+* `reelay/gui/table_model.py`: maintenance fix keeping unknown dates last in both date-sort directions.
 
-**Total: 36 unit tests**, no API key or network required.
+**Repurpose Engine, privacy, and GUI suites: 36 tests**, no API key or network required. The listing maintenance suite adds **5 regression cases**. See `CLAUDE_HANDOFF.md` for exact verification history and remaining real-data checks.
+
+**Local runtime note:** repeated listings produced a native crash on Python 3.14.0. Python 3.13.7 with PySide6 6.11.2 passed local checks as a workaround; a real-data macOS walkthrough remains necessary. See `CLAUDE_HANDOFF.md` for environment setup and limitations.
 
 ---
 
@@ -121,6 +127,6 @@ The engine uses `requests` for HTTP. `requests` is **not listed directly** in `p
 # 5. Run the hackathon tests (36 tests, no API key or network required)
 ./.venv/bin/pytest tests/test_repurpose_engine.py tests/test_privacy.py tests/test_repurpose_gui.py -v
 
-# 6. Inspect the hackathon build diff (10 files)
+# 6. Inspect the hackathon build diff (14 files, including maintenance fixes and handoff)
 git diff --stat pre-hackathon...hackathon-all-nov4
 ```

@@ -173,9 +173,16 @@ class DownloadPage(QWidget):
         self.details_worker: DetailsWorker | None = None
         self.products_worker: ProductsWorker | None = None
         self.download_worker: DownloadWorker | None = None
+        self._metadata_generation = 0
+        self._details_restart_pending = False
+        self._products_restart_pending = False
+        self._listing = False
+        self._shutting_down = False
         self._dl_total = self._dl_index = 0
         self._loading_profile = False
         self._save_timer = QTimer(self, singleShot=True, interval=700, timeout=self._persist_names)
+        self._metadata_sort_timer = QTimer(self, singleShot=True, interval=100,
+                                          timeout=self._refresh_metadata_order)
         self._file_cache: dict[str, tuple[float | None, bool]] = {}
         self._library_cache: tuple | None = None
         self._dir_mtimes: dict[Path, float | None] = {}
@@ -675,6 +682,13 @@ class DownloadPage(QWidget):
                                                                     (Col.DATE, Qt.DescendingOrder))
         self.table.sortByColumn(column, order)
 
+    def _refresh_metadata_order(self) -> None:
+        # Dynamic sorting stays off during downloads. Explicitly update after dates/other
+        # metadata arrive, keeping the current header order and the grid/list's shared paging.
+        if not self.busy and not self._shutting_down:
+            self.proxy.invalidate()
+            self._update_counts()
+
     def _on_page_size(self) -> None:
         size = self.page_size.currentData()
         self.pager.set_size(size)
@@ -1102,6 +1116,7 @@ class DownloadPage(QWidget):
         self.fetch_worker.start()
 
     def _begin_fetch(self, message: str) -> None:
+        self._listing = True
         self._stop_details()
         self.fetch_btn.setEnabled(False)
         self.fetch_btn.setText("Listing…")
@@ -1168,6 +1183,7 @@ class DownloadPage(QWidget):
 
     def _on_fetched(self, urls: list[str], items: list[VideoItem], errors: list[tuple[str, str]],
                     source_id: int | None = None, authorization: str | None = None) -> None:
+        self._listing = False
         self.fetch_btn.setEnabled(True)
         self.fetch_btn.setText("List Videos")
         self.sources_dialog.panel.set_busy(False)
@@ -1181,6 +1197,7 @@ class DownloadPage(QWidget):
                                 "\n\n".join(f"{u}\n{reason}" for u, reason in errors))
         if not items:
             self._set_status("No videos found." if not errors else "Couldn't list the videos.")
+            self._start_details()
             return
         self.fetched = items
         self.sources = urls
@@ -1201,31 +1218,68 @@ class DownloadPage(QWidget):
         self._start_details()
 
     def _start_details(self) -> None:
+        if self._shutting_down or self._listing or self.busy or not self.profile:
+            return
         self._start_products()
         needing = [i for i in self.model.items() if not i.has_details and not i.is_downloaded]
-        if not needing or (self.details_worker and self.details_worker.isRunning()):
+        if not needing:
             return
+        if self.details_worker and self.details_worker.isRunning():
+            self._details_restart_pending = True
+            return
+        self._details_restart_pending = False
         self.details_worker = DetailsWorker(needing, self._opts(), self)
+        self.details_worker._listing_context = (self._metadata_generation, self.profile.id)
         self.details_worker.loaded.connect(self._on_details)
+        self.details_worker.finished.connect(self._metadata_finished)
         self.details_worker.start()
 
     def _stop_details(self) -> None:
+        self._metadata_generation += 1
+        self._details_restart_pending = self._products_restart_pending = False
         if self.details_worker and self.details_worker.isRunning():
             self.details_worker.stop()
         if self.products_worker and self.products_worker.isRunning():
             self.products_worker.stop()
 
+    def _metadata_finished(self) -> None:
+        worker = self.sender()
+        if worker is self.details_worker:
+            restart = self._details_restart_pending
+            self._details_restart_pending = False
+        elif worker is self.products_worker:
+            restart = self._products_restart_pending
+            self._products_restart_pending = False
+        else:
+            return
+        if restart:
+            self._start_details()
+
+    def _metadata_is_current(self) -> bool:
+        worker = self.sender()
+        return bool(not self._shutting_down and self.profile and (
+            worker is None or getattr(worker, "_listing_context", None)
+            == (self._metadata_generation, self.profile.id)))
+
     # ================================================================ tagged products (TikTok Shop)
     def _start_products(self) -> None:
         needing = [i for i in self.model.items() if i.platform == "TikTok" and i.products is None and i.url]
-        if not needing or (self.products_worker and self.products_worker.isRunning()):
+        if not needing:
             return
+        if self.products_worker and self.products_worker.isRunning():
+            self._products_restart_pending = True
+            return
+        self._products_restart_pending = False
         self.products_worker = ProductsWorker(needing, self._opts(), parent=self)
+        self.products_worker._listing_context = (self._metadata_generation, self.profile.id)
         self.products_worker.loaded.connect(self._on_products)
         self.products_worker.finishedAll.connect(self._products_done)
+        self.products_worker.finished.connect(self._metadata_finished)
         self.products_worker.start()
 
     def _on_products(self, key: str, records: list) -> None:
+        if not self._metadata_is_current():
+            return
         item = self.model.find(key)
         if item is None or not self.profile:
             return
@@ -1236,6 +1290,8 @@ class DownloadPage(QWidget):
             self._refresh_detail()
 
     def _products_done(self, tagged: int) -> None:
+        if not self._metadata_is_current():
+            return
         self._refresh_products()
         if tagged:
             self._set_status(f"Found tagged products on {tagged} video{'s' if tagged != 1 else ''}. Use "
@@ -1259,12 +1315,15 @@ class DownloadPage(QWidget):
         self.products_filter.select_product(product_id)
 
     def _on_details(self, key: str, fresh: VideoItem) -> None:
+        if not self._metadata_is_current():
+            return
         item = self.model.find(key)
         if item is None or not self.profile:
             return
         item.merge_metadata(fresh)
         self.store.save_video(self.profile.id, item)
         self.model.refresh_all()
+        self._metadata_sort_timer.start()
         if self.detail.item is not None and self.detail.item.key == key:
             self._refresh_detail()
 
@@ -1577,6 +1636,8 @@ class DownloadPage(QWidget):
 
     # ================================================================ shutdown
     def shutdown(self, timeout_ms: int = 8000) -> None:
+        self._shutting_down = True
+        self._metadata_sort_timer.stop()
         for timer in (self._tags_timer, self._products_timer):
             timer.stop()
         self.player.shutdown()

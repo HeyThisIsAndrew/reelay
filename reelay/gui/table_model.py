@@ -400,6 +400,16 @@ class VideoFilterProxy(QSortFilterProxyModel):
         self.setSortRole(SORT_ROLE)
         self.setDynamicSortFilter(False)  # don't reshuffle rows while downloading
 
+    def lessThan(self, left, right) -> bool:  # noqa: N802
+        if left.column() == Col.DATE:
+            left_missing = not left.data(SORT_ROLE)
+            right_missing = not right.data(SORT_ROLE)
+            if left_missing != right_missing:
+                # Qt reverses comparisons for descending order: missing dates stay last
+                # for both Newest first and Oldest first while details are being loaded.
+                return left_missing if self.sortOrder() == Qt.DescendingOrder else right_missing
+        return super().lessThan(left, right)
+
     def set_query(self, text: str) -> None:
         _refilter(self, lambda: setattr(self, "_query", text.strip().lower()))
 
