@@ -293,6 +293,14 @@ class PostPanel(QFrame):
         set_prop(self.fill_btn, "flat")
         self.fill_btn.clicked.connect(lambda: self.card and self.fillRequested.emit(self.card.id))
         fill_row.addWidget(self.fill_btn)
+        self.repurpose_btn = tip(
+            QPushButton("Repurpose with Muse Spark"),
+            "Generate platform-ready copy across YouTube, TikTok, Instagram, Bluesky, Threads, "
+            "and Facebook using Meta Muse Spark. Shows a proposal for your review before applying.",
+        )
+        set_prop(self.repurpose_btn, "primary")
+        self.repurpose_btn.clicked.connect(self._repurpose)
+        fill_row.addWidget(self.repurpose_btn)
         lay.addLayout(fill_row)
         self.blocks: dict[str, CopyBlock] = {}
         self.sections: dict[str, PlatformSection] = {}
@@ -714,6 +722,29 @@ class PostPanel(QFrame):
             merged = tags + [t for t in dialog.chosen() if t.lower() not in {x.lower() for x in tags}]
             b["tags"].set_text(", ".join(merged))
 
+    def _repurpose(self) -> None:
+        if self.card is None or self._locked():
+            return
+        from .repurpose_dialog import RepurposeDialog
+        b = self.blocks
+        title = b["title"].text().strip() if "title" in b else ""
+        description = b["description"].text().strip() if "description" in b else ""
+        dialog = RepurposeDialog(
+            self.card,
+            self.store,
+            parent=self,
+            title=title,
+            description=description,
+        )
+        if dialog.exec() == RepurposeDialog.Accepted and dialog.proposal:
+            p = dialog.proposal
+            for key, val in p.items():
+                if key in self.blocks and val is not None:
+                    self.blocks[key].set_text(val)
+            self._update_counts()
+            self.copied.setText("Applied Muse Spark proposal! Click Save Changes to commit.")
+            self._copied_timer.start()
+
     def _copy(self, block: CopyBlock) -> None:
         """Copy a block; empty platform blocks copy what Reelay would use instead."""
         text = block.text().strip()
@@ -776,6 +807,7 @@ class PostPanel(QFrame):
         for block in self.blocks.values():   # copy stays copyable; edits wait until it's unscheduled
             block.set_read_only(locked)
         self.fill_btn.setVisible(not locked)
+        self.repurpose_btn.setVisible(not locked)
         self.form.setVisible(not locked)
         self.save_btn.setVisible(not locked)
         self.upload_btn.setVisible(not locked)

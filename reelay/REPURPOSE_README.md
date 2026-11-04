@@ -98,9 +98,9 @@ python -m reelay.repurpose_engine \
 ```
 
 ### Dry-Run Test (No API Key Required)
-Run the automated test suite verifying schema, limit validation, privacy opt-in gate, and error handling:
+Run the automated test suite verifying schema, limit validation, privacy opt-in gate, GUI dialog, and error handling:
 ```bash
-pytest tests/test_repurpose_engine.py tests/test_privacy.py -v
+pytest tests/test_repurpose_engine.py tests/test_privacy.py tests/test_repurpose_gui.py -v
 ```
 
 ---
@@ -110,41 +110,21 @@ pytest tests/test_repurpose_engine.py tests/test_privacy.py -v
 Reelay adheres strictly to creator agency: **AI proposes, human decides**.
 
 ```
-[ Reelay Video Ticket ]
+[ Reelay Video Ticket (PostPanel) ]
           │
-          ▼ (Input: title, description, notes)
-[ Repurpose Engine (muse-spark-1.3) ]
+          ▼ (Click "Repurpose with Muse Spark")
+[ RepurposeDialog + CallWorker (muse-spark-1.3) ]
           │
-          ▼ (Proposal Dict: 9 fields in memory)
-[ Creator Review & Approval Gate ] ◄── (Human approves, edits, or rejects)
+          ▼ (Proposal Dict: 9 fields in memory with PASS badges)
+[ Creator Review & Approval Gate ] ◄── (Human edits, approves, or cancels)
           │
-          ▼ (Explicit Human Approval)
-[ Apply to Ticket via Scoped Pipeline ]
+          ▼ (Click "Apply to Ticket" -> fills PostPanel blocks in memory)
+[ Creator Clicks "Save Changes" to Commit to SQLite ]
 ```
 
-### Approval Staging Mechanics:
-1. The user initiates a repurpose action from the Reelay ticket panel or agent API.
-2. The engine returns an in-memory dictionary proposal with character/byte count validation indicators.
-3. The UI / CLI presents the proposal to Andrew.
-4. Andrew inspects each field.
-5. Upon clicking **"Approve & Apply"**, the fields are committed into `reelay.scoped_pipeline` as a batch update.
-
----
-
-## 5. Wiring Instructions for Claude (1:00 PM PT) or Andrew
-
-To preserve stability and avoid breaking Reelay's existing 324-test suite before the deadline, core files remain unmodified. Below are the precise, minimal integration steps for wiring the engine into the GUI and API:
-
-### Files to Touch (Minimal Wiring):
-1. **`reelay/gui/ticket_widgets.py`**:
-   * Add a **"Repurpose with Muse Spark"** button to `DetailPanel` or `TicketEditWidget`.
-   * On click: Read current `ticket.title`, `ticket.description`, and `ticket.notes`.
-   * Launch `generate_repurpose_proposal` on a background thread (`QRunnable` or `threading.Thread`) to keep UI fluid.
-   * Open a review preview modal displaying before/after diffs with character count badges.
-   * On "Accept Proposal", call `self._commit(...)` for each approved field.
-
-2. **`reelay/api.py`**:
-   * Add route: `POST /v1/videos/{id}/repurpose`
-   * Request body: `{"notes": "...", "dry_run": true}`
-   * Returns: The proposal dict with platform count validations.
-   * When `dry_run=false`, requires an approval ticket or creator session token before committing to `scoped_pipeline`.
+### Desktop GUI Integration (`reelay/gui/post_panel.py` & `reelay/gui/repurpose_dialog.py`):
+1. The creator selects a video card on the Board and clicks **"Repurpose with Muse Spark"** in `PostPanel`.
+2. `RepurposeDialog` opens, displays the Cloud AI transparency disclosure (`DISCLOSURE_TEXT`) and opt-in checkbox, and runs `generate_repurpose_proposal` on a background `CallWorker` thread.
+3. All 9 platform fields are displayed in editable boxes with live `FIELD_LIMITS` counters and `PASS` badges.
+4. Clicking **"Apply to Ticket"** populates the in-memory `CopyBlock` widgets on `PostPanel` without writing to SQLite.
+5. The creator reviews the ticket and clicks **"Save Changes"** to persist the changes.
