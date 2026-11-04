@@ -38,10 +38,33 @@ The Repurpose Engine transforms an original video from a Reelay ticket into plat
 
 ## 3. How to Run It
 
-### Environment Setup
-Export your Meta Model API key:
+### Key Management & Configuration
+
+Reelay reuses its existing `tokens.py` architecture (`KeyringTokenStore`, service `Reelay`).
+The Repurpose Engine resolves the Meta Model API key in this strict order:
+1. `META_API_KEY` environment variable.
+2. OS Keychain via `KeyringTokenStore` (service: `Reelay`, key: `META_API_KEY`).
+3. If neither exists, raises `RepurposeConfigError`.
+
+#### Saving the Key to OS Keychain (One-Time Setup)
+Run the explicit setup command, which uses a secure, no-echo terminal prompt (the key is never recorded in shell history, logs, or chat):
 ```bash
-export META_API_KEY="your-meta-model-api-key"
+python -m reelay.repurpose_engine --setup
+```
+
+You can verify that the key is configured without ever displaying it:
+```bash
+python -m reelay.repurpose_engine --check
+```
+
+To clear the key from the keychain:
+```bash
+python -m reelay.repurpose_engine --clear
+```
+
+Alternatively, you can provide the key via environment variable:
+```bash
+export META_API_KEY="your-key-here"
 ```
 
 ### Python API Usage

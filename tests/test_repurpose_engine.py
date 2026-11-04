@@ -13,8 +13,10 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from reelay.platform_specs import FIELD_LIMITS, count
+from reelay.tokens import MemoryTokenStore
 from reelay.repurpose_engine import (
     DEFAULT_MODEL,
+    META_KEY_NAME,
     SCHEMA_FIELDS,
     RepurposeAPIError,
     RepurposeConfigError,
@@ -22,7 +24,10 @@ from reelay.repurpose_engine import (
     _clean_threads_hashtags,
     _parse_and_normalize_json,
     _validate_fields,
+    clear_meta_api_key,
     generate_repurpose_proposal,
+    resolve_meta_api_key,
+    setup_meta_api_key,
 )
 
 
@@ -41,14 +46,16 @@ SAMPLE_VALID_PAYLOAD = {
 
 
 def test_missing_api_key_raises_config_error(monkeypatch):
-    """When META_API_KEY is unset, generation fails gracefully with RepurposeConfigError."""
+    """When META_API_KEY is unset and keychain store is empty, fails with RepurposeConfigError."""
     monkeypatch.delenv("META_API_KEY", raising=False)
+    store = MemoryTokenStore()
 
     with pytest.raises(RepurposeConfigError) as exc_info:
         generate_repurpose_proposal(
             title="Test Title",
             description="Test Description",
             api_key=None,
+            token_store=store,
         )
 
     assert "META_API_KEY is not set" in str(exc_info.value)
@@ -151,3 +158,106 @@ def test_over_limit_triggers_refinement_or_error(mock_call):
 
     assert "exceeds platform limits and cannot be truncated" in str(exc_info.value)
     assert "title" in exc_info.value.field_errors
+
+
+# ---------------------------------------------------------------------- Key Management Tests
+def test_env_var_wins_over_keychain(monkeypatch):
+    """When both env var and keychain store a key, env var wins."""
+    env_mock = "mock-env-key-9988"
+    keychain_mock = "mock-keychain-key-1122"
+    monkeypatch.setenv(META_KEY_NAME, env_mock)
+
+    store = MemoryTokenStore()
+    store.set(META_KEY_NAME, keychain_mock)
+
+    resolved = resolve_meta_api_key(token_store=store)
+    assert resolved == env_mock
+
+
+def test_keychain_fallback_when_env_unset(monkeypatch):
+    """When env var is unset, fallback resolves key from keychain store."""
+    monkeypatch.delenv(META_KEY_NAME, raising=False)
+    keychain_mock = "mock-keychain-fallback-3344"
+
+    store = MemoryTokenStore()
+    store.set(META_KEY_NAME, keychain_mock)
+
+    resolved = resolve_meta_api_key(token_store=store)
+    assert resolved == keychain_mock
+
+
+def test_missing_key_in_both_raises_config_error(monkeypatch):
+    """When both env var and keychain are empty, raises RepurposeConfigError."""
+    monkeypatch.delenv(META_KEY_NAME, raising=False)
+    store = MemoryTokenStore()
+
+    with pytest.raises(RepurposeConfigError) as exc_info:
+        resolve_meta_api_key(token_store=store)
+    assert "META_API_KEY is not set" in str(exc_info.value)
+
+    # Calling generate_repurpose_proposal with empty store also raises RepurposeConfigError
+    with pytest.raises(RepurposeConfigError):
+        generate_repurpose_proposal(
+            title="Title",
+            description="Description",
+            token_store=store,
+        )
+
+
+def test_setup_saves_key_to_store_without_echo(monkeypatch):
+    """setup_meta_api_key reads key via prompt_func and saves to token store."""
+    monkeypatch.delenv(META_KEY_NAME, raising=False)
+    store = MemoryTokenStore()
+    secret_input = "mock-user-prompt-secret-5566"
+
+    # Setup saves the key
+    saved = setup_meta_api_key(token_store=store, prompt_func=lambda _: secret_input)
+    assert saved is True
+    assert store.get(META_KEY_NAME) == secret_input
+
+    # Clear deletes the key
+    clear_meta_api_key(token_store=store)
+    assert store.get(META_KEY_NAME) is None
+
+
+@patch("reelay.repurpose_engine._call_meta_model")
+def test_normal_repurpose_run_never_auto_saves(mock_call, monkeypatch):
+    """Normal repurpose call uses key but NEVER calls store.set (no auto-save)."""
+    monkeypatch.delenv(META_KEY_NAME, raising=False)
+    mock_call.return_value = json.dumps(SAMPLE_VALID_PAYLOAD)
+
+    store = MemoryTokenStore()
+    store.set(META_KEY_NAME, "mock-read-only-key")
+    initial_data = dict(store.data)
+
+    generate_repurpose_proposal(
+        title="Title",
+        description="Description",
+        token_store=store,
+    )
+
+    # Store content must remain identical (never mutated or auto-saved)
+    assert store.data == initial_data
+
+
+def test_no_test_output_contains_key(capsys, monkeypatch):
+    """Verify that error messages and setup messages never print or log the key."""
+    secret = "super-secret-synthetic-token-7788"
+    monkeypatch.delenv(META_KEY_NAME, raising=False)
+    store = MemoryTokenStore()
+
+    # Run setup
+    setup_meta_api_key(token_store=store, prompt_func=lambda _: secret)
+    captured = capsys.readouterr()
+    assert secret not in captured.out
+    assert secret not in captured.err
+
+    # Test error output
+    store.delete(META_KEY_NAME)
+    with pytest.raises(RepurposeConfigError) as exc_info:
+        resolve_meta_api_key(token_store=store)
+
+    assert secret not in str(exc_info.value)
+    captured = capsys.readouterr()
+    assert secret not in captured.out
+    assert secret not in captured.err

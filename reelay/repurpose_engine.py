@@ -25,21 +25,27 @@ Guarantees:
 
 from __future__ import annotations
 
+import argparse
+import getpass
 import json
 import logging
 import os
 import re
+import sys
+from collections.abc import Callable
 from typing import Any
 
 import requests
 
 from .platform_specs import FIELD_LIMITS, count
+from .tokens import KeyringTokenStore, TokenStore
 
 log = logging.getLogger("reelay.repurpose")
 
-# Meta Model API Endpoints and Models
+# Meta Model API Endpoints, Models, and Keychain Settings
 DEFAULT_BASE_URL = "https://api.meta.ai/v1"
 DEFAULT_MODEL = "muse-spark-1.3"  # Standard tier, not contributor
+META_KEY_NAME = "META_API_KEY"
 
 # Exactly these 9 fields, all strings
 SCHEMA_FIELDS = (
@@ -341,6 +347,85 @@ def _refine_over_limit_fields(
     return refined
 
 
+# ---------------------------------------------------------------------- Key Management
+def resolve_meta_api_key(
+    api_key: str | None = None,
+    token_store: TokenStore | None = None,
+) -> str:
+    """Resolve Meta Model API key according to strict lookup order:
+    1. Explicit api_key parameter (if passed and non-empty)
+    2. META_API_KEY environment variable
+    3. OS keychain via KeyringTokenStore (service Reelay, key META_API_KEY)
+
+    Never logs, prints, or returns keys in error messages.
+
+    Raises:
+        RepurposeConfigError: If key is not found in env or keychain.
+    """
+    if api_key and api_key.strip():
+        return api_key.strip()
+
+    env_key = os.environ.get(META_KEY_NAME, "").strip()
+    if env_key:
+        return env_key
+
+    store = token_store or KeyringTokenStore()
+    try:
+        stored_key = store.get(META_KEY_NAME)
+        if stored_key and stored_key.strip():
+            return stored_key.strip()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Could not read %s from keychain: %s", META_KEY_NAME, exc)
+
+    raise RepurposeConfigError(
+        "META_API_KEY is not set. Set the META_API_KEY environment variable "
+        "or save it to your OS keychain by running: python -m reelay.repurpose_engine --setup"
+    )
+
+
+def setup_meta_api_key(
+    token_store: TokenStore | None = None,
+    *,
+    prompt_func: Callable[[str], str] | None = None,
+) -> bool:
+    """Explicit setup step that securely saves the Meta Model API key to the OS keychain.
+
+    Prompts the user with a secure, no-echo prompt (getpass) so the key is never
+    echoed to the terminal, logged, or recorded in shell history.
+    Never called automatically during normal repurpose runs.
+
+    Args:
+        token_store: TokenStore to use (defaults to KeyringTokenStore()).
+        prompt_func: Optional callable taking a prompt string and returning entered text
+                     (defaults to getpass.getpass). Useful for tests.
+
+    Returns:
+        True if the key was saved, False if cancelled or blank.
+    """
+    prompt = prompt_func or getpass.getpass
+    try:
+        entered = prompt("Enter Meta Model API key (input hidden): ").strip()
+    except (KeyboardInterrupt, EOFError):
+        print("\nSetup cancelled.")
+        return False
+
+    if not entered:
+        print("No key entered. Keychain was not modified.")
+        return False
+
+    store = token_store or KeyringTokenStore()
+    store.set(META_KEY_NAME, entered)
+    print("Meta Model API key successfully saved to Reelay keychain.")
+    return True
+
+
+def clear_meta_api_key(token_store: TokenStore | None = None) -> None:
+    """Removes the Meta Model API key from the OS keychain."""
+    store = token_store or KeyringTokenStore()
+    store.delete(META_KEY_NAME)
+    print("Meta Model API key removed from Reelay keychain.")
+
+
 # ---------------------------------------------------------------------- Public API
 def generate_repurpose_proposal(
     title: str,
@@ -350,6 +435,7 @@ def generate_repurpose_proposal(
     model: str = DEFAULT_MODEL,
     base_url: str = DEFAULT_BASE_URL,
     api_key: str | None = None,
+    token_store: TokenStore | None = None,
     timeout: float = 30.0,
     allow_refinement: bool = True,
 ) -> dict[str, str]:
@@ -365,7 +451,8 @@ def generate_repurpose_proposal(
         notes: Creator notes, directives, or target audience details.
         model: Model identifier in Meta Model API (default: 'muse-spark-1.3').
         base_url: Base URL for Meta Model API (default: 'https://api.meta.ai/v1').
-        api_key: Meta API key. If omitted, reads META_API_KEY from environment.
+        api_key: Meta API key. If omitted, checks META_API_KEY env, then OS keychain.
+        token_store: TokenStore for keychain lookup (defaults to KeyringTokenStore()).
         timeout: HTTP request timeout in seconds (default: 30.0).
         allow_refinement: If True, attempts a targeted rewrite if a field is over limit.
 
@@ -390,12 +477,7 @@ def generate_repurpose_proposal(
     if not (title.strip() or description.strip()):
         raise RepurposeValidationError("At least title or description must be provided.")
 
-    resolved_key = (api_key or os.environ.get("META_API_KEY", "")).strip()
-    if not resolved_key:
-        raise RepurposeConfigError(
-            "META_API_KEY is not set. Please set the META_API_KEY environment variable "
-            "with a valid Meta Model API key before generating copy proposals."
-        )
+    resolved_key = resolve_meta_api_key(api_key=api_key, token_store=token_store)
 
     messages = [
         {"role": "system", "content": _build_system_prompt()},
@@ -438,3 +520,48 @@ def generate_repurpose_proposal(
         )
 
     return proposal
+
+
+# ---------------------------------------------------------------------- CLI Key Management
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="python -m reelay.repurpose_engine",
+        description="Reelay Repurpose Engine: Meta Model API key management and setup",
+    )
+    parser.add_argument(
+        "--setup",
+        action="store_true",
+        help="Securely save your Meta Model API key to the OS keychain via a hidden prompt.",
+    )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="Check whether a Meta Model API key is available (env var or keychain), without displaying it.",
+    )
+    parser.add_argument(
+        "--clear",
+        action="store_true",
+        help="Remove the Meta Model API key from the OS keychain.",
+    )
+    args = parser.parse_args(argv)
+
+    if args.setup:
+        return 0 if setup_meta_api_key() else 1
+    if args.clear:
+        clear_meta_api_key()
+        return 0
+    if args.check:
+        try:
+            resolve_meta_api_key()
+            print("Meta Model API key is configured and ready.")
+            return 0
+        except RepurposeConfigError as exc:
+            print(f"Not configured: {exc}")
+            return 1
+
+    parser.print_help()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
