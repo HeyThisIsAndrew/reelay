@@ -56,15 +56,16 @@ Built on November 4, 2026 for the Meta Global AI Developer Hackathon, the **Repu
 * Platform limit registry (`reelay/platform_specs.py`, `reelay/platform_text.py`) and OS keychain wrapper (`reelay/tokens.py`).
 * Local loopback Agent API at `127.0.0.1:8471` (`reelay/api.py`, `reelay/scoped_pipeline.py`).
 
-### Built Exclusively During the Hackathon (November 4, 2026 — 9 Files in `pre-hackathon...hackathon-all-nov4`)
+### Built Exclusively During the Hackathon (November 4, 2026 — 10 Files in `pre-hackathon...hackathon-all-nov4`)
 * `reelay/repurpose_engine.py`: Core Meta Model API (`muse-spark-1.3`) client, prompt isolation, transcript & brand voice injection, Threads hashtag sanitizer, zero-truncation `FIELD_LIMITS` validator/refiner, OS keychain lookup/setup CLI, and formatted human-review runner.
 * `reelay/privacy.py`: Cloud AI opt-in gate (`is_cloud_ai_enabled`, `set_cloud_ai_enabled`, `require_cloud_ai_opt_in`) and transparent privacy disclosure (`DISCLOSURE_TEXT`).
 * `reelay/gui/repurpose_dialog.py`: Native PySide6 modal review dialog displaying the privacy disclosure, explicit opt-in checkbox, read-only source snapshot preview, non-blocking `CallWorker` lifecycle management, and 9 editable platform fields with live `FIELD_LIMITS` counters and `PASS` badges.
 * `reelay/gui/post_panel.py`: Minimal wiring adding the **"Repurpose with Muse Spark"** button to the ticket editor and applying accepted proposals into in-memory blocks (with stale-ticket protection) without auto-saving ticket copy.
+* `reelay/__main__.py`: Package entry point enabling direct `python -m reelay` desktop launch.
 * `reelay/REPURPOSE_README.md`: Module documentation, CLI reference, and desktop GUI approval workflow guide.
 * `tests/test_repurpose_engine.py`: 17 unit tests covering schema normalization, `FIELD_LIMITS` validation, zero-truncation refinement, Threads hashtag migration, `MemoryTokenStore` keychain fallback, hidden-prompt setup, and transcript delimiter escaping.
 * `tests/test_privacy.py`: 6 unit tests covering default-off privacy state, blocked calls when disabled, blocked direct calls with no store/opt_in/env var, allowed calls after explicit opt-in, environment overrides, and disclosure completeness.
-* `tests/test_repurpose_gui.py`: 10 GUI unit tests verifying the button in `PostPanel`, privacy disclosure & unchecked consent blocking (even when `REELAY_CLOUD_AI_OPT_IN=1`), read-only source snapshot fidelity, non-blocking cancel during active generation, disabled Apply during regeneration, stale-ticket protection, and persisted SQLite store verification confirming ticket copy is not saved until **Save Changes**.
+* `tests/test_repurpose_gui.py`: 11 GUI unit tests verifying the button in `PostPanel`, `python -m reelay` package entry point, privacy disclosure & unchecked consent blocking (even when `REELAY_CLOUD_AI_OPT_IN=1`), read-only source snapshot fidelity, non-blocking cancel during active generation, disabled Apply during regeneration, stale-ticket protection, and persisted SQLite store verification confirming ticket copy is not saved until **Save Changes**.
 * `SUBMISSION.md`: Hackathon submission write-up and build diff reference.
 
 ---
@@ -78,8 +79,8 @@ Built on November 4, 2026 for the Meta Global AI Developer Hackathon, the **Repu
 # 2. Verify key availability without displaying the key
 ./.venv/bin/python -m reelay.repurpose_engine --check
 
-# 3. Launch Reelay Desktop GUI from source
-./.venv/bin/python -c 'from reelay.gui.app import main; raise SystemExit(main())'
+# 3. Launch Reelay Desktop GUI
+./.venv/bin/python -m reelay
 
 # 4. Run live Muse Spark CLI proposal & review output on one of Andrew's own videos
 ./.venv/bin/python -m reelay.repurpose_engine \
@@ -88,9 +89,9 @@ Built on November 4, 2026 for the Meta Global AI Developer Hackathon, the **Repu
   --transcript "Hey everyone, today we are looking at how Reelay runs locally on Mac while using Meta Muse Spark for six-platform copy generation." \
   --brand-voice "Direct, technical builder tone; clear and grounded."
 
-# 5. Run unit test suites (33 tests — no API key or network required)
+# 5. Run unit test suites (34 tests — no API key or network required)
 ./.venv/bin/pytest tests/test_repurpose_engine.py tests/test_privacy.py tests/test_repurpose_gui.py -v
 
-# 6. Inspect exact hackathon build diff (9 files)
+# 6. Inspect exact hackathon build diff (10 files)
 git diff pre-hackathon...hackathon-all-nov4
 ```

@@ -122,10 +122,10 @@ Reelay adheres strictly to creator agency: **AI proposes, human decides**.
 [ Creator Clicks "Save Changes" to Commit to SQLite ]
 ```
 
-### Desktop GUI Integration (`reelay/gui/post_panel.py` & `reelay/gui/repurpose_dialog.py`):
-Launch the desktop app from the source checkout:
+### Desktop GUI Integration (`reelay/gui/post_panel.py`, `reelay/gui/repurpose_dialog.py`, & `reelay/__main__.py`):
+Launch the desktop app directly:
 ```bash
-./.venv/bin/python -c 'from reelay.gui.app import main; raise SystemExit(main())'
+./.venv/bin/python -m reelay
 ```
 1. The creator selects a video card on the Board and clicks **"Repurpose with Muse Spark"** in `PostPanel`.
 2. `RepurposeDialog` opens, displays the Cloud AI transparency disclosure (`DISCLOSURE_TEXT`), an explicit opt-in checkbox, and a read-only **Source Snapshot** showing the exact title, description, notes, transcript, and brand voice guidance being sent.

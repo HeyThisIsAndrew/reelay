@@ -362,3 +362,18 @@ def test_post_panel_repurpose_cancel_leaves_blocks_unchanged(qtbot, tmp_path, mo
         assert not panel.has_unsaved_changes()
     finally:
         store.close()
+
+
+def test_python_m_reelay_entrypoint_delegates_to_gui_main(monkeypatch):
+    import runpy
+    import sys
+    import pytest
+    from reelay.gui import app as gui_app
+
+    called: list[bool] = []
+    monkeypatch.setattr(gui_app, "main", lambda: called.append(True) or 0)
+    sys.modules.pop("reelay.__main__", None)
+    with pytest.raises(SystemExit) as exc_info:
+        runpy.run_module("reelay", run_name="__main__")
+    assert exc_info.value.code == 0
+    assert called == [True]
