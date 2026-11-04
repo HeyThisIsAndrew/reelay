@@ -194,7 +194,7 @@ def _call_meta_model(
     api_key: str,
     base_url: str = DEFAULT_BASE_URL,
     model: str = DEFAULT_MODEL,
-    timeout: float = 30.0,
+    timeout: float = 60.0,
 ) -> str:
     """Executes a chat completion call against the Meta Model API."""
     url = f"{base_url.rstrip('/')}/chat/completions"
@@ -467,7 +467,7 @@ def generate_repurpose_proposal(
     token_store: TokenStore | None = None,
     store: Any | None = None,
     opt_in: bool | None = None,
-    timeout: float = 30.0,
+    timeout: float = 60.0,
     allow_refinement: bool = True,
 ) -> dict[str, str]:
     """Generates platform-ready copy proposals from Andrew's source video details using Muse Spark.
@@ -488,7 +488,7 @@ def generate_repurpose_proposal(
         token_store: TokenStore for keychain lookup (defaults to KeyringTokenStore()).
         store: Optional Reelay Store (or settings mapping) checked for cloud AI opt-in.
         opt_in: Explicit cloud AI opt-in override (True allows, False blocks).
-        timeout: HTTP request timeout in seconds (default: 30.0).
+        timeout: HTTP request timeout in seconds (default: 60.0).
         allow_refinement: If True, attempts a targeted rewrite if a field is over limit.
 
     Returns:
