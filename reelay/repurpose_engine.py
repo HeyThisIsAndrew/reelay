@@ -38,6 +38,7 @@ from typing import Any
 import requests
 
 from .platform_specs import FIELD_LIMITS, count
+from .privacy import CLOUD_AI_ENV_VAR, PrivacyOptInRequiredError, require_cloud_ai_opt_in
 from .tokens import KeyringTokenStore, TokenStore
 
 log = logging.getLogger("reelay.repurpose")
@@ -436,6 +437,8 @@ def generate_repurpose_proposal(
     base_url: str = DEFAULT_BASE_URL,
     api_key: str | None = None,
     token_store: TokenStore | None = None,
+    store: Any | None = None,
+    opt_in: bool | None = None,
     timeout: float = 30.0,
     allow_refinement: bool = True,
 ) -> dict[str, str]:
@@ -453,6 +456,8 @@ def generate_repurpose_proposal(
         base_url: Base URL for Meta Model API (default: 'https://api.meta.ai/v1').
         api_key: Meta API key. If omitted, checks META_API_KEY env, then OS keychain.
         token_store: TokenStore for keychain lookup (defaults to KeyringTokenStore()).
+        store: Optional Reelay Store (or settings mapping) checked for cloud AI opt-in.
+        opt_in: Explicit cloud AI opt-in override (True allows, False blocks).
         timeout: HTTP request timeout in seconds (default: 30.0).
         allow_refinement: If True, attempts a targeted rewrite if a field is over limit.
 
@@ -469,11 +474,15 @@ def generate_repurpose_proposal(
         - hashtags
 
     Raises:
+        PrivacyOptInRequiredError: If cloud AI opt-in is disabled.
         RepurposeConfigError: If META_API_KEY is not set.
         RepurposeNetworkError: On connection failure or timeout.
         RepurposeAPIError: On Meta Model API HTTP error (auth, billing, 429).
         RepurposeValidationError: If the proposal violates schema or exceeds limits.
     """
+    if store is not None or opt_in is not None or os.environ.get(CLOUD_AI_ENV_VAR) is not None:
+        require_cloud_ai_opt_in(store, opt_in=opt_in)
+
     if not (title.strip() or description.strip()):
         raise RepurposeValidationError("At least title or description must be provided.")
 
