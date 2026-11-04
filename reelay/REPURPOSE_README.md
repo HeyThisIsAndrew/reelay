@@ -3,7 +3,7 @@
 **Hackathon Feature:** Meta Global AI Developer Hackathon — Startup Track (Build for Your World)  
 **Date Built:** November 4, 2026  
 **Author:** Andrew Baxter  
-**Model:** Meta `muse-spark-1.3` (Meta Model API `https://api.meta.ai/v1`)
+**Model:** Meta `muse-spark-1.3` (Meta Model API `https://api.meta.ai/v1`, Standard non-contributor tier)
 
 ---
 
@@ -14,15 +14,21 @@ The Repurpose Engine transforms an original video from a Reelay ticket into plat
 * **TikTok:** Generates short-form caption with a first-second hook.
 * **Instagram Reels:** Generates conversational caption.
 * **Bluesky:** Generates concise microblog copy strictly under 300 graphemes.
-* **Threads:** Generates engaging copy adhering to Threads culture with **zero hashtags** in the text.
+* **Threads:** Generates conversational copy with no hashtags in the body (Reelay's Threads editorial policy: any `#tags` are moved automatically to the shared `hashtags` field, both after the first draft and after any shorter rewrite).
 * **Facebook:** Generates contextual community post.
 * **Shared Hashtags:** Concentrates platform hashtags in the shared `hashtags` field.
 
 ### Key Safeguards
 * **Creator Voice:** Maintains Andrew's authentic, direct, technical voice using the active brand voice profile.
-* **Factuality & Prompt Isolation Safeguards:** System prompt rules instruct the model to rely strictly on the provided source input rather than inventing claims, quotes, partners, or facts, and untrusted spoken transcripts are wrapped in `<input_transcript>` tags with closing-tag escaping (`</input_` &rarr; `< /input_`) so transcript text is framed as data rather than instructions—paired with mandatory human review before saving.
-* **Zero-Truncation Policy:** Strictly validated against `reelay.platform_specs.FIELD_LIMITS`. Copy is **never chopped off or mechanically truncated**. Over-limit fields trigger targeted refinement or raise a clear validation error.
+* **Source Grounding:** System prompt rules instruct the model to rely only on the provided source input and not to invent claims, quotes, partners, or facts.
+* **Prompt-Isolation Safeguard:** Transcripts are wrapped in `<input_transcript>` tags with closing-tag escaping (`</input_` &rarr; `< /input_`) so spoken text is framed as data rather than instructions. This reduces risk but does not make hallucination or prompt injection impossible, so every proposal goes through human review before it is saved.
+* **No-Truncation Policy:** Every field is validated against Reelay's configured platform-limit registry, `reelay.platform_specs.FIELD_LIMITS`. Copy is **never mechanically truncated**: an over-limit field gets one targeted shorter rewrite from Muse Spark, and if it is still over the limit the engine raises `RepurposeValidationError` instead of returning it.
 * **Safe Error Handling:** Fails gracefully with `RepurposeConfigError("META_API_KEY is not set...")` if credentials are unset, never crashing Reelay.
+
+### Privacy, Network Use & Dependencies
+* Reelay is a local desktop workflow with **optional, explicit cloud generation**. Ticket text is sent to Meta only after the creator opts in to Cloud AI (off by default) and clicks Generate Proposal. Reelay's pre-existing optional YouTube SEO keyword ideas (`reelay/seo.py`) also use the network, only when "Get SEO Suggestions" is clicked.
+* Requests go to `muse-spark-1.3` on `https://api.meta.ai/v1`, the Standard non-contributor tier. Per Meta's documentation for this tier, Standard-mode requests are not used to train Meta's models.
+* HTTP uses `requests`, which is not listed directly in `pyproject.toml` or `requirements.txt`; it is installed indirectly through `yt-dlp[default]`.
 
 ---
 
@@ -98,7 +104,7 @@ python -m reelay.repurpose_engine \
 ```
 
 ### Dry-Run Test (No API Key Required)
-Run the automated test suite verifying schema, limit validation, privacy opt-in gate, GUI dialog, and error handling:
+Run the automated test suite (36 tests) verifying schema, limit validation, privacy opt-in gate, GUI dialog, and error handling:
 ```bash
 pytest tests/test_repurpose_engine.py tests/test_privacy.py tests/test_repurpose_gui.py -v
 ```
