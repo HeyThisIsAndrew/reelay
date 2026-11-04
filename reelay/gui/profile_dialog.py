@@ -131,6 +131,7 @@ class ProfileDialog(QDialog):
         self.store, self.profile = store, profile
         self.setWindowTitle("Edit Profile & Branding" if profile else "New Profile")
         self.setMinimumWidth(520)
+        self.resize(600, 640)
         self.brand = branding.load(store, profile.id) if profile else Brand()
         self._theme_touched = False
         self._colors_chosen = self.brand.has_colors     # saved colours are never replaced by a new logo's

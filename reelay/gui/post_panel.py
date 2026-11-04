@@ -125,7 +125,7 @@ class CopyBlock(QWidget):
             tip(self.assist_btn, "Free writing help on this computer: check spelling and grammar, or rewrite with "
                                  "a local AI model. Nothing is sent to a paid service.")
             menu = QMenu(self.assist_btn)
-            menu.addAction("Check Spelling & Grammar…", lambda: on_assist(self, "check"))
+            menu.addAction("Check Spelling && Grammar…", lambda: on_assist(self, "check"))
             menu.addAction("Rewrite with Local AI…", lambda: on_assist(self, "rewrite"))
             self.assist_btn.setMenu(menu)
             actions.addWidget(self.assist_btn)

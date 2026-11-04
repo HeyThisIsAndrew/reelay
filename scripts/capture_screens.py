@@ -63,6 +63,9 @@ def parse_args():
     ap.add_argument("--themes", default="light,dark")
     ap.add_argument("--only", default=",".join(SLOTS))
     ap.add_argument("--help-shots", action="store_true", help="make the in-app Help Center's pictures")
+    ap.add_argument("--routes-only", action="store_true", help="only capture docs/screenshots/app_routes/ (36 route PNGs)")
+    ap.add_argument("--all", action="store_true",
+                    help="run the full screenshot capture & website sync workflow (help_shots + website slots + app_routes + site sync)")
     args = ap.parse_args()
     if args.help_shots and args.out == DEFAULT_OUT:
         args.out = HELP_OUT
@@ -82,24 +85,36 @@ def make_clips(folder: Path, ffmpeg: str) -> list[Path]:
 
 
 def main() -> int:
+    import shutil
+
     args = parse_args()
+    if args.all:
+        res = subprocess.run([sys.executable, str(REPO / "scripts" / "capture_all_routes.py")])
+        return res.returncode
+    if args.routes_only:
+        res = subprocess.run([sys.executable, str(REPO / "scripts" / "capture_all_routes.py"), "--routes-only"])
+        return res.returncode
+
     themes = [t for t in args.themes.split(",") if t]
     only = [s for s in args.only.split(",") if s]
     args.out.mkdir(parents=True, exist_ok=True)
     home = Path(tempfile.mkdtemp(prefix="reelay-screens-"))
-    os.environ.update(REELAY_HOME=str(home), REELAY_REDUCE_MOTION="1", QT_QPA_PLATFORM="offscreen",
-                      QT_SCALE_FACTOR=str(SCALE))
-    sys.path.insert(0, str(REPO))
-    from reelay.ytdl import find_ffmpeg
-    ffmpeg = find_ffmpeg()
-    if not ffmpeg:
-        print("ffmpeg is needed to make the demo clips", file=sys.stderr)
-        return 1
-    clips = make_clips(home / "clips", ffmpeg)
-    for theme in themes:
-        run_theme(theme, home / theme, clips, args.out, only, "help" if args.help_shots else "site")
-    print(f"Saved to {args.out}")
-    return 0
+    try:
+        os.environ.update(REELAY_HOME=str(home), REELAY_REDUCE_MOTION="1", QT_QPA_PLATFORM="offscreen",
+                          QT_SCALE_FACTOR=str(SCALE))
+        sys.path.insert(0, str(REPO))
+        from reelay.ytdl import find_ffmpeg
+        ffmpeg = find_ffmpeg()
+        if not ffmpeg:
+            print("ffmpeg is needed to make the demo clips", file=sys.stderr)
+            return 1
+        clips = make_clips(home / "clips", ffmpeg)
+        for theme in themes:
+            run_theme(theme, home / theme, clips, args.out, only, "help" if args.help_shots else "site")
+        print(f"Saved to {args.out}")
+        return 0
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
 
 
 def run_theme(theme: str, home: Path, clips: list[Path], out: Path, only: list[str], mode: str = "site") -> None:
@@ -147,6 +162,19 @@ def capture(theme: str, home: str, clips: list[str], out: str, only: list[str], 
     store.set_setting("theme", theme)
     store.set_setting("ui.library.page_size", "24")
 
+    # ---- accounts (an in-memory keychain; nothing real)
+    accounts = [("youtube", "UCjuniperlane0000000000", "Juniper Lane", "@juniperlane"),
+                ("tiktok", "jl-open-id", "Juniper Lane", "@juniperlane"),
+                ("threads", "1784140000000", "juniperlane", "@juniperlane"),
+                ("bluesky", "did:plc:juniperlane", "juniperlane.bsky.social", "@juniperlane.bsky.social")]
+    saved = {}
+    for platform, ext, name, handle in accounts:
+        acc = saved[platform] = store.save_account(Account(profile_id=prof.id, platform=platform, external_id=ext,
+                                                           display_name=name, handle=handle))
+        secret = (Tokens("demo", "demo", 9e12).to_json() if platform == "youtube" else
+                  json.dumps({"access_token": "demo", "user_id": ext, "handle": handle, "app_password": "demo"}))
+        tokens.set(acc.token_key, secret)
+
     # ---- demo videos, tickets in every column
     items = []
     for n, (title, caption, seconds, _colours, _stage) in enumerate(VIDEOS):
@@ -174,22 +202,14 @@ def capture(theme: str, home: str, clips: list[str], out: str, only: list[str], 
     copy = {"title": VIDEOS[0][0], "description": "The last ten minutes of light on the Big Sur coast. Shot handheld "
             "from the turnout at mile 45.", "tiktok_text": VIDEOS[0][1], "instagram_text": VIDEOS[0][1],
             "threads_text": "Golden hour at Big Sur."}
-    store.save_post(Post(video_row=rows[0], target_platforms=["youtube", "tiktok", "instagram", "threads"], **copy))
-    store.save_post(Post(video_row=rows[2], title=VIDEOS[2][0], description=VIDEOS[2][1],
+    store.save_post(Post(video_row=rows[0], account_id=saved["youtube"].id,
+                         target_platforms=["youtube", "tiktok", "instagram", "threads"], **copy))
+    store.save_post(Post(video_row=rows[1], account_id=saved["youtube"].id,
+                         title=VIDEOS[1][0], description=VIDEOS[1][1],
+                         target_platforms=["youtube", "tiktok"], tiktok_text=VIDEOS[1][1]))
+    store.save_post(Post(video_row=rows[2], account_id=saved["youtube"].id,
+                         title=VIDEOS[2][0], description=VIDEOS[2][1],
                          target_platforms=["youtube", "tiktok"], tiktok_text=VIDEOS[2][1]))
-
-    # ---- accounts (an in-memory keychain; nothing real)
-    accounts = [("youtube", "UCjuniperlane0000000000", "Juniper Lane", "@juniperlane"),
-                ("tiktok", "jl-open-id", "Juniper Lane", "@juniperlane"),
-                ("threads", "1784140000000", "juniperlane", "@juniperlane"),
-                ("bluesky", "did:plc:juniperlane", "juniperlane.bsky.social", "@juniperlane.bsky.social")]
-    saved = {}
-    for platform, ext, name, handle in accounts:
-        acc = saved[platform] = store.save_account(Account(profile_id=prof.id, platform=platform, external_id=ext,
-                                                           display_name=name, handle=handle))
-        secret = (Tokens("demo", "demo", 9e12).to_json() if platform == "youtube" else
-                  json.dumps({"access_token": "demo", "user_id": ext, "handle": handle, "app_password": "demo"}))
-        tokens.set(acc.token_key, secret)
     # ---- the Scheduled column holds what is really scheduled. Each card there used to be only *placed* in
     # Scheduled, so it read "✓ Ready · not started", and the website showed that. Now: YouTube scheduled by
     # Reelay (uploaded, private until its time) and, for the first, TikTok scheduled by hand in TikTok's app.
@@ -268,8 +288,10 @@ def capture(theme: str, home: str, clips: list[str], out: str, only: list[str], 
         image.save(str(path))
         print(f"  {path.name}  {image.width()}×{image.height()}")
 
-    def with_dialog(dialog) -> QPixmap:
+    def with_dialog(dialog, width: int | None = None, height: int | None = None) -> QPixmap:
         """The window dimmed, with `dialog` drawn centred on it (as macOS shows a sheet)."""
+        if width or height:
+            dialog.resize(width or dialog.width(), height or dialog.height())
         dialog.show()
         settle(1.2)
         base = window.grab()
@@ -340,7 +362,7 @@ def capture(theme: str, home: str, clips: list[str], out: str, only: list[str], 
     window.go("board")
     settle(0.5)
     dlg = ProfileDialog(store, window.profile, theme == "custom", window)
-    save("branding", with_dialog(dlg))
+    save("branding", with_dialog(dlg, 600, 640))
     window.close()
     store.close()
 
@@ -518,7 +540,7 @@ def capture_help(app, theme: str, store, window, rows: list[int], out: Path) -> 
     post, _saved = board.pipeline.post_or_default(vrow)
     dialog = HandoffDialog(handoff.prepare(post, "tiktok", board.pipeline.video_path(vrow), vrow.item.duration),
                            window)
-    pix, offset = sheet(dialog)
+    pix, offset = sheet(dialog, 580, 670)
     save("handoff", pix, {"dialog": frac(QRect(offset, dialog.size()))})
     board.close_inspector()
     settle(0.5)
@@ -531,6 +553,9 @@ def capture_help(app, theme: str, store, window, rows: list[int], out: Path) -> 
     pix, offset = sheet(dialog)
     save("archived", pix, {"dialog": frac(QRect(offset, dialog.size())),
                            "restore": at(dialog.restore_btn, offset, dialog)})
+    board.pipeline.archive([rows[9]], archived=False)
+    board.reload()
+    settle(0.5)
     # ---- Accounts
     window.go("accounts")
     window.accounts_page.refresh()

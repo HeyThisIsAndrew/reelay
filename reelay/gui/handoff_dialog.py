@@ -36,7 +36,7 @@ class HandoffDialog(QDialog):
         self._clipboard = clipboard or QGuiApplication.clipboard()
         self.started = False
         self.setWindowTitle(f"Prepare to Publish on {self.label}")
-        self.resize(560, 640)
+        self.resize(560, 670)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(20, 16, 20, 14)
         lay.setSpacing(10)
@@ -60,6 +60,7 @@ class HandoffDialog(QDialog):
         lay.addWidget(self.checks)
         caption = QPlainTextEdit(plan.caption)
         caption.setReadOnly(True)
+        caption.setStyleSheet("min-height: 76px;")
         caption.setFixedHeight(110)
         tip(caption, "The caption Reelay copies (edit it in the ticket)")
         lay.addWidget(caption)

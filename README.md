@@ -388,6 +388,16 @@ Tests never post to real platforms:
 - **The agent API** runs on a real local server.
 - **The GUI** is driven headlessly with fake downloads and uploads.
 
+## Updating screenshots
+
+To regenerate all application, Help Center, and marketing website screenshots after UI changes (using an isolated temporary `REELAY_HOME` and in-memory token store, never touching real data or credentials):
+
+```bash
+.venv/bin/python scripts/capture_screens.py --all        # full workflow: Help Center + website slots + 36 app route PNGs + website sync
+.venv/bin/python scripts/capture_screens.py --routes-only # only docs/screenshots/app_routes/ (36 route PNGs)
+.venv/bin/python scripts/capture_screens.py --help-shots  # only reelay/gui/help_shots/ (34 WebPs + marks.json)
+```
+
 ## Building the apps
 
 ```bash

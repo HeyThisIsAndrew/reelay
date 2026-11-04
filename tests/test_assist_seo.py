@@ -126,7 +126,7 @@ def test_assist_menu_fixes_text_in_the_ticket(ticket, monkeypatch):
     from reelay.gui import assist_dialogs
     _window, store, panel = ticket
     block = panel.blocks["tiktok_text"]
-    assert block.assist_btn.menu().actions()[0].text() == "Check Spelling & Grammar…"
+    assert block.assist_btn.menu().actions()[0].text() == "Check Spelling && Grammar…"
 
     def auto_fix(self):
         for issue in list(self.issues):
