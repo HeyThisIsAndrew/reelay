@@ -377,3 +377,52 @@ def test_python_m_reelay_entrypoint_delegates_to_gui_main(monkeypatch):
         runpy.run_module("reelay", run_name="__main__")
     assert exc_info.value.code == 0
     assert called == [True]
+
+
+def test_async_generation_completion_allows_edit_apply_and_regeneration(qtbot, monkeypatch):
+    """After a real background run finishes and Qt deletes the CallWorker, the dialog stays usable.
+
+    Regression: self.worker used to keep pointing at the deleted C++ CallWorker, so the next
+    isRunning() check raised "Internal C++ object (CallWorker) already deleted".
+    """
+    from PySide6.QtCore import QCoreApplication, QEvent
+
+    monkeypatch.delenv("REELAY_CLOUD_AI_OPT_IN", raising=False)
+    calls: list[int] = []
+
+    def fake_generate(**_kw):
+        calls.append(1)
+        return dict(SYNTHETIC_PROPOSAL)
+
+    dialog = RepurposeDialog(store={}, title="Example", generate_fn=fake_generate)
+    qtbot.addWidget(dialog)
+    dialog.opt_in_box.setChecked(True)
+
+    def flush_deferred_deletes():
+        qtbot.wait(50)
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+        qtbot.wait(50)
+
+    dialog._run()
+    qtbot.waitUntil(lambda: not dialog._busy, timeout=3000)
+    qtbot.waitUntil(lambda: not RepurposeDialog._in_flight_workers, timeout=3000)
+    flush_deferred_deletes()
+
+    assert dialog.worker is None
+    assert dialog._get_field_text("title") == SYNTHETIC_PROPOSAL["title"]
+
+    # Edit a field, then Apply: must not raise on the deleted worker.
+    dialog._set_field_text("title", "Edited by Andrew")
+    assert dialog._can_apply()
+    assert dialog.apply_btn.isEnabled()
+    dialog._accept_proposal()
+    assert dialog.proposal is not None
+    assert dialog.proposal["title"] == "Edited by Andrew"
+
+    # A second generation must also start and finish cleanly.
+    dialog._run()
+    qtbot.waitUntil(lambda: len(calls) == 2 and not dialog._busy, timeout=3000)
+    qtbot.waitUntil(lambda: not RepurposeDialog._in_flight_workers, timeout=3000)
+    flush_deferred_deletes()
+    assert dialog.worker is None
+    assert dialog._can_apply()

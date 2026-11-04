@@ -166,6 +166,33 @@ def test_over_limit_triggers_refinement_or_error(mock_call):
     assert "title" in exc_info.value.field_errors
 
 
+@patch("reelay.repurpose_engine._call_meta_model")
+def test_threads_refinement_cannot_reintroduce_body_hashtags(mock_call):
+    """A shorter Threads rewrite that adds #tags still ends with zero # in the body."""
+    over_limit_payload = dict(SAMPLE_VALID_PAYLOAD)
+    over_limit_payload["threads_text"] = "Local-first tools. " * 40  # well over 500 chars
+    over_limit_payload["hashtags"] = "#LocalAI"
+
+    mock_call.side_effect = [
+        json.dumps(over_limit_payload),
+        json.dumps({"threads_text": "Local-first tools where the human decides. #MuseSpark #LocalAI"}),
+    ]
+
+    proposal = generate_repurpose_proposal(
+        title="Sample Title",
+        description="Sample Description",
+        api_key="test-key-mock",
+        opt_in=True,
+        allow_refinement=True,
+    )
+
+    assert "#" not in proposal["threads_text"]
+    assert proposal["threads_text"] == "Local-first tools where the human decides."
+    assert proposal["hashtags"].split() == ["#LocalAI", "#MuseSpark"]
+    assert _validate_fields(proposal) == {}
+    assert mock_call.call_count == 2
+
+
 # ---------------------------------------------------------------------- Key Management Tests
 def test_env_var_wins_over_keychain(monkeypatch):
     """When both env var and keychain store a key, env var wins."""

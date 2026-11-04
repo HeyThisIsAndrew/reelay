@@ -557,6 +557,12 @@ def generate_repurpose_proposal(
             model=model,
             timeout=timeout,
         )
+        # A shorter rewrite can reintroduce #tags into Threads copy; migrate them again,
+        # then re-check every field so the result reflects the final text.
+        proposal["threads_text"], proposal["hashtags"] = _clean_threads_hashtags(
+            proposal["threads_text"], proposal["hashtags"]
+        )
+        errors = _validate_fields(proposal)
 
     if errors:
         error_details = ", ".join(f"{k}: {v}" for k, v in errors.items())

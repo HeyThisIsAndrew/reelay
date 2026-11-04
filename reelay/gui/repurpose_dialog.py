@@ -289,7 +289,7 @@ class RepurposeDialog(QDialog):
         self._sync_apply_enabled()
 
     def _can_apply(self) -> bool:
-        if self._busy or (self.worker is not None and self.worker.isRunning()):
+        if self._busy or self._worker_running():
             return False
         has_any = any(bool(self._get_field_text(k)) for k in SCHEMA_FIELDS)
         if not has_any:
@@ -307,8 +307,19 @@ class RepurposeDialog(QDialog):
         if hasattr(self, "apply_btn"):
             self.apply_btn.setEnabled(self._can_apply())
 
+    def _worker_running(self) -> bool:
+        """True while self.worker is alive and running; drops a worker Qt has already deleted."""
+        worker = self.worker
+        if worker is None:
+            return False
+        try:
+            return worker.isRunning()
+        except RuntimeError:  # the C++ CallWorker was destroyed by deleteLater()
+            self.worker = None
+            return False
+
     def _run(self) -> None:
-        if self._busy or (self.worker and self.worker.isRunning()):
+        if self._busy or self._worker_running():
             return
         if not self.opt_in_box.isChecked():
             self._on_opt_in_toggled(False)
@@ -348,22 +359,29 @@ class RepurposeDialog(QDialog):
 
         worker = CallWorker(work, parent=None)
         RepurposeDialog._in_flight_workers.add(worker)
-        worker.finished.connect(lambda w=worker: RepurposeDialog._in_flight_workers.discard(w))
-        worker.finished.connect(worker.deleteLater)
+        worker.finished.connect(lambda w=worker: self._on_worker_finished(w))
         worker.succeeded.connect(lambda res, r=req_id: self._on_worker_succeeded(r, res))
         worker.failed.connect(lambda msg, r=req_id: self._on_worker_failed(r, msg))
         self.worker = worker
         self._sync_apply_enabled()
         worker.start()
 
+    def _on_worker_finished(self, worker: CallWorker) -> None:
+        RepurposeDialog._in_flight_workers.discard(worker)
+        if self.worker is worker:
+            self.worker = None
+        worker.deleteLater()
+
     def _on_worker_succeeded(self, req_id: int, result: dict[str, str]) -> None:
         if self._closed or req_id != self._active_request_id:
             return
+        self.worker = None
         self.populate_proposal(result)
 
     def _on_worker_failed(self, req_id: int, message: str) -> None:
         if self._closed or req_id != self._active_request_id:
             return
+        self.worker = None
         self._on_failed(message)
 
     def populate_proposal(self, result: dict[str, str]) -> None:
@@ -389,7 +407,7 @@ class RepurposeDialog(QDialog):
         self._sync_apply_enabled()
 
     def _accept_proposal(self) -> None:
-        if self._busy or (self.worker is not None and self.worker.isRunning()) or not self._can_apply():
+        if self._busy or self._worker_running() or not self._can_apply():
             return
         self.proposal = {key: self._get_field_text(key) for key in SCHEMA_FIELDS}
         self.accept()
