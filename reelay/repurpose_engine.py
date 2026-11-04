@@ -39,9 +39,7 @@ import requests
 
 from .platform_specs import FIELD_LIMITS, count
 from .privacy import (
-    CLOUD_AI_ENV_VAR,
     DISCLOSURE_TEXT,
-    PrivacyOptInRequiredError,
     require_cloud_ai_opt_in,
 )
 from .tokens import KeyringTokenStore, TokenStore
@@ -68,6 +66,7 @@ SCHEMA_FIELDS = (
 
 # Regex to detect hashtags in Threads text
 _HASHTAG_RE = re.compile(r"#\w+")
+_CLOSING_INPUT_TAG_RE = re.compile(r"</\s*(input_)", re.IGNORECASE)
 
 
 # ---------------------------------------------------------------------- Exceptions
@@ -103,7 +102,7 @@ class RepurposeValidationError(RepurposeError):
 # ---------------------------------------------------------------------- Prompt Construction
 def _sanitize_data_tag(text: str) -> str:
     """Prevent untrusted text (such as a transcript) from closing an <input_*> data block early."""
-    return text.strip().replace("</input_", "< /input_")
+    return _CLOSING_INPUT_TAG_RE.sub(r"< /\1", text.strip())
 
 
 def _build_system_prompt(brand_voice: str = "") -> str:
@@ -132,7 +131,7 @@ def _build_system_prompt(brand_voice: str = "") -> str:
         "  * 'description': Comprehensive summary, key points, and context (under 5,000 UTF-8 bytes).\n"
         "  * 'tags': Comma-separated keyword tags without '#' symbol (under 500 characters total).\n"
         "- Short-Form Video:\n"
-        "  * 'tiktok_text': Short-form caption with strong first-second hook (under 2,200 characters).\n"
+        "  * 'tiktok_text': Short-form caption with strong first-second hook (under 4,000 characters).\n"
         "  * 'instagram_text': Engaging caption with storytelling angle (under 2,200 characters).\n"
         "- Microblogging & Social:\n"
         "  * 'bluesky_text': Ultra-concise post strictly under 300 graphemes.\n"
@@ -256,17 +255,22 @@ def _call_meta_model(
 
 
 # ---------------------------------------------------------------------- Validation & Refinement
-def _parse_and_normalize_json(raw_content: str) -> dict[str, str]:
-    """Parses JSON content and ensures all 9 schema fields exist as strings."""
-    cleaned = raw_content.strip()
+def _strip_markdown_fences(raw_text: str) -> str:
+    """Removes a surrounding ```json ... ``` (or bare ```) fence, if the model added one."""
+    cleaned = raw_text.strip()
     if cleaned.startswith("```"):
-        # Strip potential markdown fences if present
         lines = cleaned.splitlines()
         if lines and lines[0].startswith("```"):
             lines = lines[1:]
-        if lines and lines[-1].startswith("```"):
+        if lines and lines[-1].strip().startswith("```"):
             lines = lines[:-1]
         cleaned = "\n".join(lines).strip()
+    return cleaned
+
+
+def _parse_and_normalize_json(raw_content: str) -> dict[str, str]:
+    """Parses JSON content and ensures all 9 schema fields exist as strings."""
+    cleaned = _strip_markdown_fences(raw_content)
 
     try:
         data = json.loads(cleaned)
@@ -298,12 +302,17 @@ def _clean_threads_hashtags(threads_text: str, hashtags: str) -> tuple[str, str]
 
     # Remove hashtags from threads text
     cleaned_threads = _HASHTAG_RE.sub("", threads_text)
-    # Clean up excess spaces or dangling commas
-    cleaned_threads = re.sub(r" +", " ", cleaned_threads).strip()
+    # Clean up excess spaces, including a space left before punctuation ("post #tag." -> "post.")
+    cleaned_threads = re.sub(r" +", " ", cleaned_threads)
+    cleaned_threads = re.sub(r" +([.,!?;:])", r"\1", cleaned_threads).strip()
 
-    # Merge into shared hashtags if not already present
+    # Merge into shared hashtags if not already present (each tag added once)
     existing_tags = set(hashtags.split())
-    new_tags = [tag for tag in found if tag not in existing_tags]
+    new_tags: list[str] = []
+    for tag in found:
+        if tag not in existing_tags:
+            existing_tags.add(tag)
+            new_tags.append(tag)
     merged_hashtags = (hashtags + " " + " ".join(new_tags)).strip()
 
     return cleaned_threads, merged_hashtags
@@ -358,7 +367,7 @@ def _refine_over_limit_fields(
                     model=model,
                     timeout=timeout,
                 )
-                data = json.loads(raw_response.strip().strip("`"))
+                data = json.loads(_strip_markdown_fences(raw_response))
                 if isinstance(data, dict) and field_name in data:
                     candidate = str(data[field_name]).strip()
                     new_display, still_over = count(field_name, candidate)

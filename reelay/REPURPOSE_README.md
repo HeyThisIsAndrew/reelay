@@ -21,7 +21,7 @@ The Repurpose Engine transforms an original video from a Reelay ticket into plat
 ### Key Safeguards
 * **Creator Voice:** Maintains Andrew's authentic, direct, technical voice using the active brand voice profile.
 * **Source Grounding:** System prompt rules instruct the model to rely only on the provided source input and not to invent claims, quotes, partners, or facts.
-* **Prompt-Isolation Safeguard:** Transcripts are wrapped in `<input_transcript>` tags with closing-tag escaping (`</input_` &rarr; `< /input_`) so spoken text is framed as data rather than instructions. This reduces risk but does not make hallucination or prompt injection impossible, so every proposal goes through human review before it is saved.
+* **Prompt-Isolation Safeguard:** Transcripts are wrapped in `<input_transcript>` tags with case-insensitive closing-tag escaping (`</input_` &rarr; `< /input_`) so spoken text is framed as data rather than instructions. This reduces risk but does not make hallucination or prompt injection impossible, so every proposal goes through human review before it is saved.
 * **No-Truncation Policy:** Every field is validated against Reelay's configured platform-limit registry, `reelay.platform_specs.FIELD_LIMITS`. Copy is **never mechanically truncated**: an over-limit field gets one targeted shorter rewrite from Muse Spark, and if it is still over the limit the engine raises `RepurposeValidationError` instead of returning it.
 * **Safe Error Handling:** Fails gracefully with `RepurposeConfigError("META_API_KEY is not set...")` if credentials are unset, never crashing Reelay.
 
@@ -104,7 +104,7 @@ python -m reelay.repurpose_engine \
 ```
 
 ### Dry-Run Test (No API Key Required)
-Run the automated test suite (36 tests) verifying schema, limit validation, privacy opt-in gate, GUI dialog, and error handling:
+Run the automated test suite (39 tests) verifying schema, limit validation, privacy opt-in gate, GUI dialog, and error handling:
 ```bash
 pytest tests/test_repurpose_engine.py tests/test_privacy.py tests/test_repurpose_gui.py -v
 ```

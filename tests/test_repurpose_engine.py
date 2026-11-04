@@ -8,20 +8,19 @@ Threads hashtag isolation, and error handling.
 from __future__ import annotations
 
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
-from reelay.platform_specs import FIELD_LIMITS, count
+from reelay.platform_specs import count
 from reelay.tokens import MemoryTokenStore
 from reelay.repurpose_engine import (
-    DEFAULT_MODEL,
     META_KEY_NAME,
     SCHEMA_FIELDS,
-    RepurposeAPIError,
     RepurposeConfigError,
     RepurposeValidationError,
     _clean_threads_hashtags,
+    _sanitize_data_tag,
     _parse_and_normalize_json,
     _validate_fields,
     clear_meta_api_key,
@@ -191,6 +190,46 @@ def test_threads_refinement_cannot_reintroduce_body_hashtags(mock_call):
     assert proposal["hashtags"].split() == ["#LocalAI", "#MuseSpark"]
     assert _validate_fields(proposal) == {}
     assert mock_call.call_count == 2
+
+
+@patch("reelay.repurpose_engine._call_meta_model")
+def test_fenced_json_rewrite_is_accepted(mock_call):
+    """A shorter rewrite wrapped in a ```json fence is parsed and used, not rejected."""
+    over_limit_payload = dict(SAMPLE_VALID_PAYLOAD)
+    over_limit_payload["title"] = "T" * 150  # Limit is 100
+
+    mock_call.side_effect = [
+        json.dumps(over_limit_payload),
+        '```json\n{"title": "Short title"}\n```',
+    ]
+
+    proposal = generate_repurpose_proposal(
+        title="Sample Title",
+        description="Sample Description",
+        api_key="test-key-mock",
+        opt_in=True,
+        allow_refinement=True,
+    )
+
+    assert proposal["title"] == "Short title"
+    assert mock_call.call_count == 2
+
+
+def test_threads_hashtag_cleanup_dedupes_and_tidies_punctuation():
+    """Repeated new tags are migrated once, and no space is left before punctuation."""
+    cleaned, merged = _clean_threads_hashtags("Shipping today #one #one. Feedback welcome #two!", "#zero")
+
+    assert cleaned == "Shipping today. Feedback welcome!"
+    assert merged.split() == ["#zero", "#one", "#two"]
+
+
+def test_closing_input_tag_escaped_case_insensitively():
+    """Upper- and mixed-case closing tags are neutralized like lowercase ones."""
+    text = "a </INPUT_TRANSCRIPT> b </Input_Transcript> c </ input_notes> d </input_title>"
+    escaped = _sanitize_data_tag(text)
+
+    assert "</" not in escaped
+    assert escaped == "a < /INPUT_TRANSCRIPT> b < /Input_Transcript> c < /input_notes> d < /input_title>"
 
 
 # ---------------------------------------------------------------------- Key Management Tests

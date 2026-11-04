@@ -48,7 +48,7 @@ The **Repurpose Engine** (`reelay/repurpose_engine.py`) sends a ticket's title, 
 4. **Voice and source safeguards:**
    * The creator's brand voice guidance is sent with every request.
    * The system prompt instructs `muse-spark-1.3` to rely only on the provided source fields and not to invent facts, quotes, products, people, or claims.
-   * As a **prompt-isolation safeguard**, the transcript is wrapped in `<input_transcript>` tags, and any closing tag inside it is escaped (`</input_` → `< /input_`) so spoken text is framed as source data, not instructions. This reduces risk; it does not make hallucination or prompt injection impossible, which is why every proposal goes through human review before it is saved.
+   * As a **prompt-isolation safeguard**, the transcript is wrapped in `<input_transcript>` tags, and any closing tag inside it is escaped, in any letter case (`</input_` → `< /input_`) so spoken text is framed as source data, not instructions. This reduces risk; it does not make hallucination or prompt injection impossible, which is why every proposal goes through human review before it is saved.
    * Copy only: no AI-generated images.
 5. **Privacy and key storage (`reelay/privacy.py`, `reelay/tokens.py`):**
    * **Off by default:** the Cloud AI setting (`privacy.cloud_ai_opt_in`) starts off for every user, and generation is blocked until the creator opts in. In the dialog, an unchecked consent box always blocks generation, even if `REELAY_CLOUD_AI_OPT_IN=1` is set.
@@ -73,7 +73,7 @@ Everything up to and including the `pre-hackathon` tag (`f93d360`): feature work
 * Local loopback Agent API at `127.0.0.1:8471` (`reelay/api.py`, `reelay/scoped_pipeline.py`).
 
 ### Built on November 4, 2026 (`pre-hackathon...hackathon-all-nov4`)
-The diff touches **14 files**: **11 net-new files** plus **3 modified pre-existing files**. The feature and review integration are accompanied by maintenance fixes for source-listing metadata handover and date ordering; those fixes are distinguished below.
+The diff touches **14 files** (+2,787 / −2 lines): **11 net-new files** plus **3 modified pre-existing files**. The feature and review integration are accompanied by maintenance fixes for source-listing metadata handover and date ordering; those fixes are distinguished below.
 
 Net-new:
 * `reelay/repurpose_engine.py`: Meta Model API client for `muse-spark-1.3`, prompt construction and transcript isolation, Threads hashtag migration, `FIELD_LIMITS` validation with targeted rewrites (no truncation), keychain key lookup/setup CLI, and a review runner.
@@ -81,7 +81,7 @@ Net-new:
 * `reelay/gui/repurpose_dialog.py`: The review dialog (disclosure, consent checkbox, Source Snapshot, background `CallWorker` lifecycle, 9 editable fields with live counters).
 * `reelay/__main__.py`: Lets `python -m reelay` launch the desktop app.
 * `reelay/REPURPOSE_README.md`: Module documentation, CLI reference, and approval workflow.
-* `tests/test_repurpose_engine.py`: 18 tests (schema normalization, `FIELD_LIMITS` validation, rewrite-instead-of-truncate, Threads hashtag migration including after a rewrite, keychain fallback, hidden-prompt setup, transcript tag escaping).
+* `tests/test_repurpose_engine.py`: 21 tests (schema normalization, `FIELD_LIMITS` validation, rewrite-instead-of-truncate including fenced-JSON rewrites, Threads hashtag migration including after a rewrite and without duplicates, keychain fallback, hidden-prompt setup, case-insensitive transcript tag escaping).
 * `tests/test_privacy.py`: 6 tests (off by default, blocked when disabled, blocked with no store/opt-in/env var, allowed after opt-in, environment override, disclosure completeness).
 * `tests/test_repurpose_gui.py`: 12 tests (button present, `python -m reelay` entry point, disclosure and unchecked-consent blocking, Source Snapshot fidelity, non-blocking cancel, Apply disabled during regeneration, stale-ticket protection, SQLite check that nothing is saved before Save Changes, and edit/apply/regenerate after a background run completes).
 * `SUBMISSION.md`: This write-up.
@@ -90,10 +90,10 @@ Net-new:
 
 Modified:
 * `reelay/gui/post_panel.py` (+58 lines): only adds the **"Repurpose with Muse Spark"** button and its `_repurpose()` handler, which applies an accepted proposal to the in-memory editor with stale-ticket protection and never auto-saves.
-* `reelay/gui/download_page.py`: maintenance fixes for interrupted metadata/product lookups, stale metadata results, and reordering after dates arrive.
-* `reelay/gui/table_model.py`: maintenance fix keeping unknown dates last in both date-sort directions.
+* `reelay/gui/download_page.py` (+63 / −2): maintenance fixes for interrupted metadata/product lookups, stale metadata results, and reordering after dates arrive.
+* `reelay/gui/table_model.py` (+10): maintenance fix keeping unknown dates last in both date-sort directions.
 
-**Repurpose Engine, privacy, and GUI suites: 36 tests**, no API key or network required. The listing maintenance suite adds **5 regression cases**. See `CLAUDE_HANDOFF.md` for exact verification history and remaining real-data checks.
+**Repurpose Engine, privacy, and GUI suites: 39 tests** (21 engine, 6 privacy, 12 GUI), no API key or network required. The listing maintenance suite adds **5 regression cases**. See `CLAUDE_HANDOFF.md` for exact verification history and remaining real-data checks.
 
 **Local runtime note:** repeated listings produced a native crash on Python 3.14.0. Python 3.13.7 with PySide6 6.11.2 passed local checks as a workaround; a real-data macOS walkthrough remains necessary. See `CLAUDE_HANDOFF.md` for environment setup and limitations.
 
@@ -124,8 +124,10 @@ The engine uses `requests` for HTTP. `requests` is **not listed directly** in `p
   --transcript "Hey everyone, today we are looking at how Reelay runs locally on Mac while using Meta Muse Spark for six-platform copy generation." \
   --brand-voice "Direct, technical builder tone; clear and grounded."
 
-# 5. Run the hackathon tests (36 tests, no API key or network required)
+# 5. Run the hackathon tests (39 tests, no API key or network required)
 ./.venv/bin/pytest tests/test_repurpose_engine.py tests/test_privacy.py tests/test_repurpose_gui.py -v
+#    Listing maintenance regression cases (5 tests)
+./.venv/bin/pytest tests/test_listing_refresh.py -v
 
 # 6. Inspect the hackathon build diff (14 files, including maintenance fixes and handoff)
 git diff --stat pre-hackathon...hackathon-all-nov4
