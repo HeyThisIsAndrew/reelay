@@ -77,6 +77,7 @@ proposal = generate_repurpose_proposal(
     notes="Focus on indie hackers, developers, and desktop software.",
     transcript="Hey everyone, in this video we are looking at local-first media tools on macOS.",
     brand_voice="Direct, technical builder voice; zero fluff.",
+    opt_in=True,
 )
 
 # Output dictionary with all 9 string fields:

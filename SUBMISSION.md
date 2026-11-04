@@ -60,7 +60,7 @@ Built on November 4, 2026 for the Meta Global AI Developer Hackathon, the **Repu
 * `reelay/privacy.py`: Cloud AI opt-in gate (`is_cloud_ai_enabled`, `set_cloud_ai_enabled`, `require_cloud_ai_opt_in`) and transparent privacy disclosure (`DISCLOSURE_TEXT`).
 * `reelay/REPURPOSE_README.md`: Module documentation, CLI reference, and ticket approval wiring guide.
 * `tests/test_repurpose_engine.py`: 17 unit tests covering schema normalization, `FIELD_LIMITS` validation, zero-truncation refinement, Threads hashtag migration, `MemoryTokenStore` keychain fallback, hidden-prompt setup, and transcript prompt-injection escaping.
-* `tests/test_privacy.py`: 5 unit tests covering default-off privacy state, blocked calls when disabled, allowed calls after explicit opt-in, environment overrides, and disclosure completeness.
+* `tests/test_privacy.py`: 6 unit tests covering default-off privacy state, blocked calls when disabled, blocked direct calls with no store/opt_in/env var, allowed calls after explicit opt-in, environment overrides, and disclosure completeness.
 * `SUBMISSION.md`: Hackathon submission write-up and build diff reference.
 
 ---

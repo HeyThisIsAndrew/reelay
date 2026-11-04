@@ -57,6 +57,7 @@ def test_missing_api_key_raises_config_error(monkeypatch):
             description="Test Description",
             api_key=None,
             token_store=store,
+            opt_in=True,
         )
 
     assert "META_API_KEY is not set" in str(exc_info.value)
@@ -70,6 +71,7 @@ def test_empty_input_raises_validation_error():
             description="",
             transcript="   ",
             api_key="mock-key",
+            opt_in=True,
         )
     assert "At least title, description, or transcript must be provided" in str(exc_info.value)
 
@@ -130,6 +132,7 @@ def test_successful_mocked_generation(mock_call):
         description="Sample Description",
         notes="Dev audience",
         api_key="test-key-mock",
+        opt_in=True,
     )
 
     assert proposal["title"] == SAMPLE_VALID_PAYLOAD["title"]
@@ -155,6 +158,7 @@ def test_over_limit_triggers_refinement_or_error(mock_call):
             title="Sample Title",
             description="Sample Description",
             api_key="test-key-mock",
+            opt_in=True,
             allow_refinement=True,
         )
 
@@ -203,6 +207,7 @@ def test_missing_key_in_both_raises_config_error(monkeypatch):
             title="Title",
             description="Description",
             token_store=store,
+            opt_in=True,
         )
 
 
@@ -236,6 +241,7 @@ def test_normal_repurpose_run_never_auto_saves(mock_call, monkeypatch):
         title="Title",
         description="Description",
         token_store=store,
+        opt_in=True,
     )
 
     # Store content must remain identical (never mutated or auto-saved)
@@ -278,6 +284,7 @@ def test_transcript_and_brand_voice_included_in_messages(mock_call):
         transcript="Hey everyone, today we are walking through how Reelay runs locally on macOS.",
         brand_voice="Direct, technical builder tone; never use hype words or emojis.",
         api_key="test-key-mock",
+        opt_in=True,
     )
 
     assert proposal["title"] == SAMPLE_VALID_PAYLOAD["title"]
@@ -301,6 +308,7 @@ def test_transcript_prompt_injection_escaped_as_data(mock_call):
         description="",
         transcript=malicious_transcript,
         api_key="test-key-mock",
+        opt_in=True,
     )
 
     messages = mock_call.call_args[0][0]

@@ -510,8 +510,7 @@ def generate_repurpose_proposal(
         RepurposeAPIError: On Meta Model API HTTP error (auth, billing, 429).
         RepurposeValidationError: If the proposal violates schema or exceeds limits.
     """
-    if store is not None or opt_in is not None or os.environ.get(CLOUD_AI_ENV_VAR) is not None:
-        require_cloud_ai_opt_in(store, opt_in=opt_in)
+    require_cloud_ai_opt_in(store, opt_in=opt_in)
 
     if not (title.strip() or description.strip() or transcript.strip()):
         raise RepurposeValidationError("At least title, description, or transcript must be provided.")

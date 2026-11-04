@@ -78,6 +78,22 @@ def test_disabled_call_raises_privacy_opt_in_required_error(mock_call, monkeypat
 
 
 @patch("reelay.repurpose_engine._call_meta_model")
+def test_call_without_store_opt_in_or_env_raises_privacy_error(mock_call, monkeypatch):
+    """A direct call with no store, no opt_in, and no env var must raise PrivacyOptInRequiredError."""
+    monkeypatch.delenv(CLOUD_AI_ENV_VAR, raising=False)
+
+    with pytest.raises(PrivacyOptInRequiredError) as exc_info:
+        generate_repurpose_proposal(
+            title="Test Video",
+            description="Test Description",
+            api_key="mock-test-key",
+        )
+
+    assert "Cloud AI features are disabled" in str(exc_info.value)
+    assert mock_call.call_count == 0
+
+
+@patch("reelay.repurpose_engine._call_meta_model")
 def test_explicit_opt_in_allows_call_to_proceed(mock_call, monkeypatch, tmp_path):
     """Once the creator explicitly opts in, the cloud call is allowed to proceed."""
     monkeypatch.delenv(CLOUD_AI_ENV_VAR, raising=False)
