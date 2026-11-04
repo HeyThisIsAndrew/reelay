@@ -18,9 +18,9 @@ The Repurpose Engine transforms an original video from a Reelay ticket into plat
 * **Facebook:** Generates contextual community post.
 * **Shared Hashtags:** Concentrates platform hashtags in the shared `hashtags` field.
 
-### Key Guarantees
-* **Creator Voice:** Maintains Andrew's authentic, direct, technical voice.
-* **Factuality First:** Never hallucinates claims, quotes, partners, or facts not present in the source input.
+### Key Safeguards
+* **Creator Voice:** Maintains Andrew's authentic, direct, technical voice using the active brand voice profile.
+* **Factuality & Prompt Isolation Safeguards:** System prompt rules instruct the model to rely strictly on the provided source input rather than inventing claims, quotes, partners, or facts, and untrusted spoken transcripts are wrapped in `<input_transcript>` tags with closing-tag escaping (`</input_` &rarr; `< /input_`) so transcript text is framed as data rather than instructions—paired with mandatory human review before saving.
 * **Zero-Truncation Policy:** Strictly validated against `reelay.platform_specs.FIELD_LIMITS`. Copy is **never chopped off or mechanically truncated**. Over-limit fields trigger targeted refinement or raise a clear validation error.
 * **Safe Error Handling:** Fails gracefully with `RepurposeConfigError("META_API_KEY is not set...")` if credentials are unset, never crashing Reelay.
 
@@ -28,7 +28,7 @@ The Repurpose Engine transforms an original video from a Reelay ticket into plat
 
 ## 2. What It Does NOT Do
 
-* **No Auto-Save:** Does NOT write to the SQLite database or modify tickets autonomously.
+* **No Auto-Save of Ticket Copy:** Does NOT write generated copy to the SQLite `posts` or `videos` tables autonomously (only the user's explicit `privacy.cloud_ai_opt_in` checkbox preference is saved when toggled in the dialog; ticket copy is only saved when the creator clicks **Save Changes** on the ticket).
 * **No Auto-Publishing:** Does NOT schedule, upload, or post to any platform.
 * **No Third-Party Scraping:** Does NOT use downloaded third-party TikTok or Instagram videos.
 * **No AI Imagery:** Does NOT generate images, thumbnails, or synthetic photos. Copy only.
@@ -123,8 +123,13 @@ Reelay adheres strictly to creator agency: **AI proposes, human decides**.
 ```
 
 ### Desktop GUI Integration (`reelay/gui/post_panel.py` & `reelay/gui/repurpose_dialog.py`):
+Launch the desktop app from the source checkout:
+```bash
+./.venv/bin/python -c 'from reelay.gui.app import main; raise SystemExit(main())'
+```
 1. The creator selects a video card on the Board and clicks **"Repurpose with Muse Spark"** in `PostPanel`.
-2. `RepurposeDialog` opens, displays the Cloud AI transparency disclosure (`DISCLOSURE_TEXT`) and opt-in checkbox, and runs `generate_repurpose_proposal` on a background `CallWorker` thread.
-3. All 9 platform fields are displayed in editable boxes with live `FIELD_LIMITS` counters and `PASS` badges.
-4. Clicking **"Apply to Ticket"** populates the in-memory `CopyBlock` widgets on `PostPanel` without writing to SQLite.
-5. The creator reviews the ticket and clicks **"Save Changes"** to persist the changes.
+2. `RepurposeDialog` opens, displays the Cloud AI transparency disclosure (`DISCLOSURE_TEXT`), an explicit opt-in checkbox, and a read-only **Source Snapshot** showing the exact title, description, notes, transcript, and brand voice guidance being sent.
+3. Clicking **"Generate Proposal"** requires the consent checkbox to be checked (an unchecked box blocks generation even if `REELAY_CLOUD_AI_OPT_IN=1` is set in the environment) and runs `generate_repurpose_proposal` on a background `CallWorker` thread without blocking cancel/close.
+4. All 9 platform fields are displayed in editable boxes with live `FIELD_LIMITS` counters and `PASS` badges.
+5. Clicking **"Apply to Ticket"** verifies the target ticket is unchanged and unlocked, then populates the in-memory `CopyBlock` widgets on `PostPanel` without writing ticket copy to SQLite.
+6. The creator reviews the ticket and clicks **"Save Changes"** to persist the ticket copy.

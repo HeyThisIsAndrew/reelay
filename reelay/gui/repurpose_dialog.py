@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
@@ -38,13 +39,13 @@ from .workers import CallWorker
 
 FIELD_SPECS: tuple[tuple[str, str, bool, int], ...] = (
     ("title", "YouTube Title (≤ 100 chars)", False, 0),
-    ("description", "YouTube Description (≤ 5,000 UTF-8 bytes)", True, 76),
+    ("description", "YouTube Description (≤ 5,000 UTF-8 bytes)", True, 72),
     ("tags", "YouTube Tags (comma-separated, no #, ≤ 500 chars)", False, 0),
-    ("tiktok_text", "TikTok Caption (≤ 4,000 chars)", True, 68),
-    ("instagram_text", "Instagram Reels Caption (≤ 2,200 chars)", True, 68),
-    ("bluesky_text", "Bluesky Post (≤ 300 graphemes)", True, 58),
-    ("threads_text", "Threads Post (≤ 500 chars, zero # in body)", True, 58),
-    ("facebook_text", "Facebook Post (≤ 63,206 chars)", True, 68),
+    ("tiktok_text", "TikTok Caption (≤ 4,000 chars)", True, 64),
+    ("instagram_text", "Instagram Reels Caption (≤ 2,200 chars)", True, 64),
+    ("bluesky_text", "Bluesky Post (≤ 300 graphemes)", True, 56),
+    ("threads_text", "Threads Post (≤ 500 chars, zero # in body)", True, 56),
+    ("facebook_text", "Facebook Post (≤ 63,206 chars)", True, 64),
     ("hashtags", "Shared Hashtags (space-separated #tags)", False, 0),
 )
 
@@ -52,10 +53,13 @@ FIELD_SPECS: tuple[tuple[str, str, bool, int], ...] = (
 class RepurposeDialog(QDialog):
     """Modal proposal review dialog for Meta Muse Spark (muse-spark-1.3).
 
-    Generates 9 platform copy fields in a background thread, validates every field
-    against FIELD_LIMITS without mechanical truncation, and lets the creator review
-    and edit the proposal before applying it to the in-memory ticket fields.
+    Displays the exact source snapshot and privacy disclosure before transmission,
+    generates 9 platform copy fields in a background thread without blocking close/cancel,
+    validates every field against FIELD_LIMITS without mechanical truncation, and lets
+    the creator review and edit the proposal before applying it to in-memory ticket fields.
     """
+
+    _in_flight_workers: set[CallWorker] = set()
 
     def __init__(
         self,
@@ -72,11 +76,14 @@ class RepurposeDialog(QDialog):
     ):
         super().__init__(parent)
         self.setWindowTitle("Repurpose with Meta Muse Spark")
-        self.resize(680, 700)
+        self.resize(700, 760)
         self.card = card
         self.store = store
         self.proposal: dict[str, str] | None = None
         self.worker: CallWorker | None = None
+        self._busy: bool = False
+        self._closed: bool = False
+        self._active_request_id: int = 0
         self._generate_fn = generate_fn or generate_repurpose_proposal
 
         row = getattr(card, "row", None) if card is not None else None
@@ -119,15 +126,23 @@ class RepurposeDialog(QDialog):
         else:
             self.brand_voice = ""
 
+        self._source_snapshot: dict[str, str] = {
+            "title": self.source_title,
+            "description": self.source_description,
+            "notes": self.source_notes,
+            "transcript": self.source_transcript,
+            "brand_voice": self.brand_voice,
+        }
+
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(20, 16, 20, 14)
-        lay.setSpacing(10)
+        lay.setContentsMargins(20, 14, 20, 14)
+        lay.setSpacing(8)
 
         # ---- Privacy disclosure & explicit opt-in gate
         disclosure_card = QFrame(objectName="Card")
         dl = QVBoxLayout(disclosure_card)
-        dl.setContentsMargins(12, 10, 12, 10)
-        dl.setSpacing(6)
+        dl.setContentsMargins(12, 8, 12, 8)
+        dl.setSpacing(5)
         self.disclosure_label = label(DISCLOSURE_TEXT, prop="faint")
         dl.addWidget(self.disclosure_label)
         self.opt_in_box = tip(
@@ -140,10 +155,27 @@ class RepurposeDialog(QDialog):
         dl.addWidget(self.opt_in_box)
         lay.addWidget(disclosure_card)
 
+        # ---- Compact read-only source preview
+        source_card = QFrame(objectName="Card")
+        sl = QVBoxLayout(source_card)
+        sl.setContentsMargins(12, 8, 12, 8)
+        sl.setSpacing(4)
+        sl.addWidget(label("<b>Source Snapshot Sent to Meta Muse Spark (Read-Only)</b>", rich=True))
+        self.source_preview = QPlainTextEdit()
+        self.source_preview.setReadOnly(True)
+        self.source_preview.setFixedHeight(84)
+        self.source_preview.setPlainText(self._format_source_snapshot(self._source_snapshot))
+        tip(
+            self.source_preview,
+            "Exact title, description, notes, transcript, and brand voice guidance sent when you click Generate Proposal",
+        )
+        sl.addWidget(self.source_preview)
+        lay.addWidget(source_card)
+
         # ---- Action bar
         action_row = QHBoxLayout()
         self.status = label(
-            "Review source details and click Generate Proposal. Nothing is saved to SQLite automatically.",
+            "Review source details above and click Generate Proposal. Ticket copy is not saved until you click Save Changes.",
             prop="muted",
         )
         action_row.addWidget(self.status, 1)
@@ -198,6 +230,21 @@ class RepurposeDialog(QDialog):
         buttons.rejected.connect(self.reject)
         lay.addWidget(buttons)
 
+        if parent is not None and hasattr(parent, "destroyed"):
+            parent.destroyed.connect(self._mark_closed)
+
+    @staticmethod
+    def _format_source_snapshot(snapshot: dict[str, str]) -> str:
+        return "\n".join(
+            [
+                f"Title: {snapshot.get('title') or '(none)'}",
+                f"Description: {snapshot.get('description') or '(none)'}",
+                f"Notes (Topic / Keywords): {snapshot.get('notes') or '(none)'}",
+                f"Transcript: {snapshot.get('transcript') or '(none)'}",
+                f"Brand Voice Guidance: {snapshot.get('brand_voice') or '(none)'}",
+            ]
+        )
+
     def _on_opt_in_toggled(self, checked: bool) -> None:
         if self.store is not None:
             try:
@@ -217,6 +264,10 @@ class RepurposeDialog(QDialog):
             ed.setPlainText(value)
         else:
             ed.setText(value)
+
+    def _set_editors_read_only(self, read_only: bool) -> None:
+        for ed in self.editors.values():
+            ed.setReadOnly(read_only)
 
     def _update_field_count(self, key: str) -> None:
         text = self._get_field_text(key)
@@ -238,6 +289,8 @@ class RepurposeDialog(QDialog):
         self._sync_apply_enabled()
 
     def _can_apply(self) -> bool:
+        if self._busy or (self.worker is not None and self.worker.isRunning()):
+            return False
         has_any = any(bool(self._get_field_text(k)) for k in SCHEMA_FIELDS)
         if not has_any:
             return False
@@ -255,41 +308,69 @@ class RepurposeDialog(QDialog):
             self.apply_btn.setEnabled(self._can_apply())
 
     def _run(self) -> None:
-        if self.worker and self.worker.isRunning():
+        if self._busy or (self.worker and self.worker.isRunning()):
             return
-        if not self.opt_in_box.isChecked() and not is_cloud_ai_enabled(self.store):
+        if not self.opt_in_box.isChecked():
+            self._on_opt_in_toggled(False)
             self.status.setText(
                 "Cloud AI is disabled. Tick 'Enable Cloud AI' above before generating a proposal."
             )
             set_prop(self.status, "danger", True)
+            self._sync_apply_enabled()
             return
 
+        self._on_opt_in_toggled(True)
+        self._busy = True
+        self._closed = False
+        self._active_request_id += 1
+        req_id = self._active_request_id
+        snapshot = dict(self._source_snapshot)
+
         self.run_btn.setEnabled(False)
+        self._set_editors_read_only(True)
+        self._sync_apply_enabled()
         set_prop(self.status, "danger", False)
         self.status.setText("Asking Meta Muse Spark (muse-spark-1.3) for 6-platform copy…")
 
         def work() -> dict[str, str]:
             try:
                 return self._generate_fn(
-                    title=self.source_title,
-                    description=self.source_description,
-                    notes=self.source_notes,
-                    transcript=self.source_transcript,
-                    brand_voice=self.brand_voice,
+                    title=snapshot["title"],
+                    description=snapshot["description"],
+                    notes=snapshot["notes"],
+                    transcript=snapshot["transcript"],
+                    brand_voice=snapshot["brand_voice"],
                     store=self.store,
                     opt_in=True,
                 )
             except (RepurposeError, PrivacyOptInRequiredError) as exc:
                 raise AssistError(str(exc)) from None
 
-        self.worker = CallWorker(work, parent=self)
-        self.worker.succeeded.connect(self.populate_proposal)
-        self.worker.failed.connect(self._on_failed)
-        self.worker.start()
+        worker = CallWorker(work, parent=None)
+        RepurposeDialog._in_flight_workers.add(worker)
+        worker.finished.connect(lambda w=worker: RepurposeDialog._in_flight_workers.discard(w))
+        worker.finished.connect(worker.deleteLater)
+        worker.succeeded.connect(lambda res, r=req_id: self._on_worker_succeeded(r, res))
+        worker.failed.connect(lambda msg, r=req_id: self._on_worker_failed(r, msg))
+        self.worker = worker
+        self._sync_apply_enabled()
+        worker.start()
+
+    def _on_worker_succeeded(self, req_id: int, result: dict[str, str]) -> None:
+        if self._closed or req_id != self._active_request_id:
+            return
+        self.populate_proposal(result)
+
+    def _on_worker_failed(self, req_id: int, message: str) -> None:
+        if self._closed or req_id != self._active_request_id:
+            return
+        self._on_failed(message)
 
     def populate_proposal(self, result: dict[str, str]) -> None:
         """Fills the 9 review editors with the generated proposal dictionary."""
+        self._busy = False
         self.run_btn.setEnabled(True)
+        self._set_editors_read_only(False)
         set_prop(self.status, "danger", False)
         for key in SCHEMA_FIELDS:
             self._set_field_text(key, str(result.get(key, "") or ""))
@@ -300,18 +381,29 @@ class RepurposeDialog(QDialog):
         self._sync_apply_enabled()
 
     def _on_failed(self, message: str) -> None:
+        self._busy = False
         self.run_btn.setEnabled(True)
+        self._set_editors_read_only(False)
         self.status.setText(message)
         set_prop(self.status, "danger", True)
+        self._sync_apply_enabled()
 
     def _accept_proposal(self) -> None:
-        if not self._can_apply():
+        if self._busy or (self.worker is not None and self.worker.isRunning()) or not self._can_apply():
             return
         self.proposal = {key: self._get_field_text(key) for key in SCHEMA_FIELDS}
         self.accept()
 
-    def reject(self) -> None:
-        if self.worker and self.worker.isRunning():
-            self.worker.wait(2000)
+    def _mark_closed(self) -> None:
+        self._closed = True
+        self._busy = False
+        self._active_request_id += 1
         self.proposal = None
+
+    def reject(self) -> None:
+        self._mark_closed()
         super().reject()
+
+    def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
+        self._mark_closed()
+        super().closeEvent(event)

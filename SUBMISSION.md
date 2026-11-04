@@ -32,18 +32,18 @@ Built on November 4, 2026 for the Meta Global AI Developer Hackathon, the **Repu
 2. **Zero-Truncation Guarantee:**
    * Every field is validated against `reelay.platform_specs.FIELD_LIMITS`.
    * Copy is **never mechanically truncated**. If a generated field exceeds its platform limit, the engine rejects the over-limit draft and triggers a targeted refinement prompt asking Muse Spark to rewrite that specific field shorter within the exact limit.
-3. **Creator Voice & Factuality:**
+3. **Creator Voice & Factuality Safeguards:**
    * Preserves Andrew's direct, technical builder voice using the profile's brand voice guidance.
-   * Never invents facts, quotes, products, people, or claims not present in the source input.
-   * Untrusted transcript text is isolated inside `<input_transcript>` data markers with tag-escape sanitization so spoken text is treated strictly as data, never instructions.
+   * System prompt constraints instruct `muse-spark-1.3` to rely strictly on the provided source fields rather than inventing unsupported facts, quotes, products, people, or claims, paired with mandatory human review before saving.
+   * Untrusted transcript text is isolated inside `<input_transcript>` data markers with closing-tag escape sanitization (`</input_` &rarr; `< /input_`) to mitigate delimiter breakout and frame spoken text as source data rather than instructions.
    * Copy-only: zero AI-generated imagery or synthetic photos.
 4. **Privacy & Local-First Security (`reelay/privacy.py` & `reelay/tokens.py`):**
    * **Opt-In by Default:** Cloud AI defaults to **OFF** (`False`) for every new user (`privacy.cloud_ai_opt_in`). No data leaves the Mac without explicit creator opt-in.
    * **Standard Non-Contributor Tier:** Uses `muse-spark-1.3` (standard tier, not a contributor model) so creator transcripts are not used to train Meta's models.
    * **OS Keychain Storage:** Reuses `reelay/tokens.py` (`KeyringTokenStore`, service `"Reelay"`, key `"META_API_KEY"`). The API key is set once via a no-echo prompt (`python -m reelay.repurpose_engine --setup`) and never stored in `.env` files, repo files, or logs.
 5. **Proposal Only — Human Approval Gate (Desktop GUI & CLI):**
-   * Returns an in-memory proposal dictionary only. Never writes to SQLite by itself, never auto-saves to a ticket, never schedules, and never auto-publishes.
-   * **Desktop GUI Integration (`reelay/gui/post_panel.py` & `reelay/gui/repurpose_dialog.py`):** Clicking **"Repurpose with Muse Spark"** on a ticket opens the `RepurposeDialog`, displaying the privacy disclosure, running `muse-spark-1.3` asynchronously via `CallWorker`, and presenting all 9 fields with live limit counters and `PASS` badges. Clicking **"Apply to Ticket"** populates the in-memory editor boxes only—requiring the creator to click **"Save Changes"** to commit to SQLite.
+   * `generate_repurpose_proposal` returns an in-memory proposal dictionary only and never writes ticket copy to SQLite, schedules, or auto-publishes.
+   * **Desktop GUI Integration (`reelay/gui/post_panel.py` & `reelay/gui/repurpose_dialog.py`):** Clicking **"Repurpose with Muse Spark"** on a ticket opens `RepurposeDialog`, displaying the privacy disclosure, an explicit opt-in checkbox, and a read-only **Source Snapshot** of the exact title, description, notes, transcript, and brand voice being sent. Toggling the opt-in checkbox persists only the `privacy.cloud_ai_opt_in` preference setting, while generated copy remains in memory: clicking **"Apply to Ticket"** populates the in-memory `PostPanel` editor blocks (after verifying the target ticket is unchanged and unlocked), requiring the creator to explicitly click **"Save Changes"** to persist ticket copy to SQLite.
 
 ---
 
@@ -56,15 +56,15 @@ Built on November 4, 2026 for the Meta Global AI Developer Hackathon, the **Repu
 * Platform limit registry (`reelay/platform_specs.py`, `reelay/platform_text.py`) and OS keychain wrapper (`reelay/tokens.py`).
 * Local loopback Agent API at `127.0.0.1:8471` (`reelay/api.py`, `reelay/scoped_pipeline.py`).
 
-### Built Exclusively During the Hackathon (November 4, 2026 — `pre-hackathon...hackathon-all-nov4`)
+### Built Exclusively During the Hackathon (November 4, 2026 — 9 Files in `pre-hackathon...hackathon-all-nov4`)
 * `reelay/repurpose_engine.py`: Core Meta Model API (`muse-spark-1.3`) client, prompt isolation, transcript & brand voice injection, Threads hashtag sanitizer, zero-truncation `FIELD_LIMITS` validator/refiner, OS keychain lookup/setup CLI, and formatted human-review runner.
 * `reelay/privacy.py`: Cloud AI opt-in gate (`is_cloud_ai_enabled`, `set_cloud_ai_enabled`, `require_cloud_ai_opt_in`) and transparent privacy disclosure (`DISCLOSURE_TEXT`).
-* `reelay/gui/repurpose_dialog.py`: Native PySide6 modal review dialog displaying the privacy disclosure, explicit opt-in checkbox, non-blocking `CallWorker` execution, and 9 editable platform fields with live `FIELD_LIMITS` counters and `PASS` badges.
-* `reelay/gui/post_panel.py`: Minimal wiring adding the **"Repurpose with Muse Spark"** button to the ticket editor and applying accepted proposals into in-memory blocks without auto-saving.
+* `reelay/gui/repurpose_dialog.py`: Native PySide6 modal review dialog displaying the privacy disclosure, explicit opt-in checkbox, read-only source snapshot preview, non-blocking `CallWorker` lifecycle management, and 9 editable platform fields with live `FIELD_LIMITS` counters and `PASS` badges.
+* `reelay/gui/post_panel.py`: Minimal wiring adding the **"Repurpose with Muse Spark"** button to the ticket editor and applying accepted proposals into in-memory blocks (with stale-ticket protection) without auto-saving ticket copy.
 * `reelay/REPURPOSE_README.md`: Module documentation, CLI reference, and desktop GUI approval workflow guide.
-* `tests/test_repurpose_engine.py`: 17 unit tests covering schema normalization, `FIELD_LIMITS` validation, zero-truncation refinement, Threads hashtag migration, `MemoryTokenStore` keychain fallback, hidden-prompt setup, and transcript prompt-injection escaping.
+* `tests/test_repurpose_engine.py`: 17 unit tests covering schema normalization, `FIELD_LIMITS` validation, zero-truncation refinement, Threads hashtag migration, `MemoryTokenStore` keychain fallback, hidden-prompt setup, and transcript delimiter escaping.
 * `tests/test_privacy.py`: 6 unit tests covering default-off privacy state, blocked calls when disabled, blocked direct calls with no store/opt_in/env var, allowed calls after explicit opt-in, environment overrides, and disclosure completeness.
-* `tests/test_repurpose_gui.py`: 6 GUI unit tests verifying the button in `PostPanel`, privacy disclosure & opt-in enforcement in `RepurposeDialog`, in-memory block application without SQLite auto-save, and cancel behavior.
+* `tests/test_repurpose_gui.py`: 10 GUI unit tests verifying the button in `PostPanel`, privacy disclosure & unchecked consent blocking (even when `REELAY_CLOUD_AI_OPT_IN=1`), read-only source snapshot fidelity, non-blocking cancel during active generation, disabled Apply during regeneration, stale-ticket protection, and persisted SQLite store verification confirming ticket copy is not saved until **Save Changes**.
 * `SUBMISSION.md`: Hackathon submission write-up and build diff reference.
 
 ---
@@ -78,16 +78,19 @@ Built on November 4, 2026 for the Meta Global AI Developer Hackathon, the **Repu
 # 2. Verify key availability without displaying the key
 ./.venv/bin/python -m reelay.repurpose_engine --check
 
-# 3. Run live Muse Spark proposal & review output on one of Andrew's own videos
+# 3. Launch Reelay Desktop GUI from source
+./.venv/bin/python -c 'from reelay.gui.app import main; raise SystemExit(main())'
+
+# 4. Run live Muse Spark CLI proposal & review output on one of Andrew's own videos
 ./.venv/bin/python -m reelay.repurpose_engine \
   --title "Building Local AI Desktop Tools on macOS" \
   --description "Walking through local-first media management and agent APIs." \
   --transcript "Hey everyone, today we are looking at how Reelay runs locally on Mac while using Meta Muse Spark for six-platform copy generation." \
   --brand-voice "Direct, technical builder tone; clear and grounded."
 
-# 4. Run unit test suites (29 tests — no API key or network required)
+# 5. Run unit test suites (33 tests — no API key or network required)
 ./.venv/bin/pytest tests/test_repurpose_engine.py tests/test_privacy.py tests/test_repurpose_gui.py -v
 
-# 5. Inspect exact hackathon build diff
+# 6. Inspect exact hackathon build diff (9 files)
 git diff pre-hackathon...hackathon-all-nov4
 ```

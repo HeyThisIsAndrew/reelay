@@ -727,6 +727,9 @@ class PostPanel(QFrame):
             return
         from .repurpose_dialog import RepurposeDialog
         b = self.blocks
+        target_card_id = self.card.id
+        target_row_id = getattr(getattr(self.card, "row", None), "id", self.card.id)
+        starting_values = {key: block.text() for key, block in b.items()}
         title = b["title"].text().strip() if "title" in b else ""
         description = b["description"].text().strip() if "description" in b else ""
         dialog = RepurposeDialog(
@@ -737,10 +740,33 @@ class PostPanel(QFrame):
             description=description,
         )
         if dialog.exec() == RepurposeDialog.Accepted and dialog.proposal:
+            current_row_id = (
+                getattr(getattr(self.card, "row", None), "id", self.card.id)
+                if self.card is not None
+                else None
+            )
+            same_ticket = (
+                self.card is not None
+                and self.card.id == target_card_id
+                and current_row_id == target_row_id
+            )
+            editable = not self._locked() and not any(
+                block.editor.isReadOnly() for block in b.values()
+            )
+            unchanged = all(
+                b[key].text() == starting_val for key, starting_val in starting_values.items()
+            )
+            if not (same_ticket and editable and unchanged):
+                self.copied.setText(
+                    "Ticket changed while reviewing proposal; proposal was not applied."
+                )
+                self._copied_timer.start()
+                return
+
             p = dialog.proposal
             for key, val in p.items():
-                if key in self.blocks and val is not None:
-                    self.blocks[key].set_text(val)
+                if key in b and val is not None:
+                    b[key].set_text(val)
             self._update_counts()
             self.copied.setText("Applied Muse Spark proposal! Click Save Changes to commit.")
             self._copied_timer.start()
