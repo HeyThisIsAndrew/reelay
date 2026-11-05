@@ -74,7 +74,7 @@ Everything up to and including the `pre-hackathon` tag (`f93d360`): feature work
 * Local loopback Agent API at `127.0.0.1:8471` (`reelay/api.py`, `reelay/scoped_pipeline.py`).
 
 ### Built on November 4, 2026 (`pre-hackathon...hackathon-all-nov4`)
-The diff touches **13 files** (+3,233 / −3 lines): **10 net-new files** plus **3 modified pre-existing files**. The feature and review integration are accompanied by maintenance fixes for source-listing metadata handover and date ordering; those fixes are distinguished below.
+The diff touches **14 files** (+3,236 / −4 lines): **10 net-new files** plus **4 modified pre-existing files**. The feature and review integration are accompanied by maintenance fixes for source-listing metadata handover and date ordering; those fixes are distinguished below.
 
 Net-new:
 * `reelay/repurpose_engine.py`: Meta Model API client for `muse-spark-1.3`, prompt construction and transcript isolation, Threads hashtag migration, `FIELD_LIMITS` validation with targeted rewrites (no truncation), keychain key lookup/setup CLI, and a review runner.
@@ -92,6 +92,7 @@ Modified:
 * `reelay/gui/post_panel.py` (+81 / −1): adds the **Repurpose** card with a full-width **Repurpose with Muse Spark** button and its `_repurpose()` handler (passes the live Posting to selection, applies an accepted proposal to the in-memory editor with stale-ticket protection, never auto-saves), and moves the existing "Fill Empty from Original Post" button to its own row.
 * `reelay/gui/download_page.py` (+63 / −2): maintenance fixes for interrupted metadata/product lookups, stale metadata results, and reordering after dates arrive.
 * `reelay/gui/table_model.py` (+10): maintenance fix keeping unknown dates last in both date-sort directions.
+* `reelay/gui/accounts_page.py` (+2 / −1): maintenance fix so the Accounts page's hidden "sign-in not available yet" notes no longer pop up as empty windows at launch.
 
 **Repurpose Engine, privacy, and GUI suites: 47 tests** (21 engine, 6 privacy, 20 GUI), no API key or network required. The listing maintenance suite adds **5 regression cases**.
 
@@ -136,6 +137,6 @@ The engine uses `requests` for HTTP. `requests` is **not listed directly** in `p
 #    Listing maintenance regression cases (5 tests)
 ./.venv/bin/pytest tests/test_listing_refresh.py -v
 
-# 6. Inspect the hackathon build diff (13 files, including the listing maintenance fixes)
+# 6. Inspect the hackathon build diff (14 files, including the maintenance fixes)
 git diff --stat pre-hackathon...hackathon-all-nov4
 ```

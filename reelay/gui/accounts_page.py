@@ -875,8 +875,9 @@ class SignInButton(QPushButton):
         set_prop(self, "primary")
         tip(self, f"Connect your {label} account in your browser. Reelay never sees your password.")
         self.available, why = availability(self.provider) if self.provider else (False, "")
+        # Only its text is used (in the card's help). It's never placed in a layout, so it must never be
+        # shown: showing a parentless label opens it as its own window at launch.
         self.note = _label("" if self.available else why, "faint")
-        self.note.setVisible(bool(why) and not self.available)
         self.setVisible(self.available)
         self.clicked.connect(self._sign_in)
 
