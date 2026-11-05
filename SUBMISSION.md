@@ -23,7 +23,7 @@ Reelay brings Meta Muse Spark (`muse-spark-1.3`) directly into a local-first des
 
 * **The ticket is the unit of work.** Each video in Reelay already has a ticket with its title, description, notes, transcript, and the creator's brand voice.
 * **`RepurposeDialog` is the human approval surface.** It shows a read-only Source Snapshot of exactly what will be sent, and a double approval gate: *Apply to Ticket* fills the ticket editor in memory, then *Save Changes* writes it to SQLite.
-* **The same engine scales across a creator's entire video library**, one ticket at a time, always with the creator approving.
+* **It works on any ticket in the creator's library**, one ticket at a time, always with the creator approving.
 
 Reelay is a **local desktop workflow with optional, explicit cloud generation**. Ticket text is sent to Meta only after the creator ticks the Cloud AI consent box and clicks Generate Proposal. (Reelay's pre-existing optional YouTube SEO keyword ideas also use the network, only when the creator clicks "Get SEO Suggestions".)
 
@@ -51,7 +51,7 @@ The **Repurpose Engine** (`reelay/repurpose_engine.py`) sends a ticket's title, 
    * As a **prompt-isolation safeguard**, the transcript is wrapped in `<input_transcript>` tags, and any closing tag inside it is escaped, in any letter case (`</input_` → `< /input_`) so spoken text is framed as source data, not instructions. This reduces risk; it does not make hallucination or prompt injection impossible, which is why every proposal goes through human review before it is saved.
    * Copy only: no AI-generated images.
 5. **Privacy and key storage (`reelay/privacy.py`, `reelay/tokens.py`):**
-   * **Off by default:** the Cloud AI setting (`privacy.cloud_ai_opt_in`) starts off for every user, and generation is blocked until the creator opts in. In the dialog, an unchecked consent box always blocks generation, even if `REELAY_CLOUD_AI_OPT_IN=1` is set.
+   * **Off by default:** the Cloud AI setting (`privacy.cloud_ai_opt_in`) starts off for every user, and the desktop app blocks generation until the creator opts in. (The developer CLI treats running it with source text as explicit consent.) In the dialog, an unchecked consent box always blocks generation, even if `REELAY_CLOUD_AI_OPT_IN=1` is set.
    * **Standard non-contributor tier:** requests go to `muse-spark-1.3` on `https://api.meta.ai/v1`. Per Meta's documentation for this tier, Standard-mode requests are not used to train Meta's models.
    * **OS keychain storage:** the API key is stored with Reelay's existing `KeyringTokenStore` (service `"Reelay"`, account `"META_API_KEY"`), set once through a no-echo prompt (`python -m reelay.repurpose_engine --setup`), and never written to `.env` files, repo files, or logs.
 6. **Proposal only, with a double approval gate:**
@@ -69,11 +69,11 @@ Everything up to and including the `pre-hackathon` tag (`f93d360`): feature work
 * Ticket model, SQLite store, and revision history (`reelay/models.py`, `reelay/store.py`, `reelay/pipeline.py`).
 * Video downloading, inspection, and scheduling (`reelay/downloader.py`, `reelay/scheduler.py`).
 * Platform-limit registry (`reelay/platform_specs.py`, `reelay/platform_text.py`) and OS keychain wrapper (`reelay/tokens.py`).
-* YouTube SEO help (`reelay/seo.py`, the **"Get SEO Suggestions"** button): a local 0–100 title/tags/description checklist plus keyword ideas from YouTube search suggestions. Because the Muse Spark proposal lands in the same ticket editor, the creator can run this existing checklist on the new copy right away.
+* YouTube SEO help (`reelay/seo.py`, the **"Get SEO Suggestions"** button): a local 0–100 title/tags/description checklist (an explainable heuristic, not a ranking prediction) plus keyword ideas from YouTube search suggestions. Because the Muse Spark proposal lands in the same ticket editor, the creator can run this existing checklist on the new copy right away.
 * Local loopback Agent API at `127.0.0.1:8471` (`reelay/api.py`, `reelay/scoped_pipeline.py`).
 
 ### Built on November 4, 2026 (`pre-hackathon...hackathon-all-nov4`)
-The diff touches **14 files** (+2,787 / −2 lines): **11 net-new files** plus **3 modified pre-existing files**. The feature and review integration are accompanied by maintenance fixes for source-listing metadata handover and date ordering; those fixes are distinguished below.
+The diff touches **13 files** (+2,736 / −2 lines): **10 net-new files** plus **3 modified pre-existing files**. The feature and review integration are accompanied by maintenance fixes for source-listing metadata handover and date ordering; those fixes are distinguished below.
 
 Net-new:
 * `reelay/repurpose_engine.py`: Meta Model API client for `muse-spark-1.3`, prompt construction and transcript isolation, Threads hashtag migration, `FIELD_LIMITS` validation with targeted rewrites (no truncation), keychain key lookup/setup CLI, and a review runner.
@@ -86,16 +86,22 @@ Net-new:
 * `tests/test_repurpose_gui.py`: 12 tests (button present, `python -m reelay` entry point, disclosure and unchecked-consent blocking, Source Snapshot fidelity, non-blocking cancel, Apply disabled during regeneration, stale-ticket protection, SQLite check that nothing is saved before Save Changes, and edit/apply/regenerate after a background run completes).
 * `SUBMISSION.md`: This write-up.
 * `tests/test_listing_refresh.py`: 5 regression cases for asynchronous date ordering, repeated source listings, interrupted product lookups, and stale profile metadata.
-* `CLAUDE_HANDOFF.md`: Cloud-review handoff, runtime workaround, verification history, and remaining local walkthrough/video tasks.
 
 Modified:
 * `reelay/gui/post_panel.py` (+58 lines): only adds the **"Repurpose with Muse Spark"** button and its `_repurpose()` handler, which applies an accepted proposal to the in-memory editor with stale-ticket protection and never auto-saves.
 * `reelay/gui/download_page.py` (+63 / −2): maintenance fixes for interrupted metadata/product lookups, stale metadata results, and reordering after dates arrive.
 * `reelay/gui/table_model.py` (+10): maintenance fix keeping unknown dates last in both date-sort directions.
 
-**Repurpose Engine, privacy, and GUI suites: 39 tests** (21 engine, 6 privacy, 12 GUI), no API key or network required. The listing maintenance suite adds **5 regression cases**. See `CLAUDE_HANDOFF.md` for exact verification history and remaining real-data checks.
+**Repurpose Engine, privacy, and GUI suites: 39 tests** (21 engine, 6 privacy, 12 GUI), no API key or network required. The listing maintenance suite adds **5 regression cases**.
 
-**Local runtime note:** repeated listings produced a native crash on Python 3.14.0. Python 3.13.7 with PySide6 6.11.2 passed local checks as a workaround; a real-data macOS walkthrough remains necessary. See `CLAUDE_HANDOFF.md` for environment setup and limitations.
+**Local runtime note:** repeated listings produced a native crash on Python 3.14.0 (root cause not yet established). Run Reelay on Python 3.13 (tested with 3.13.7 and PySide6 6.11.2):
+
+```bash
+python3.13 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt -r requirements-dev.txt
+```
+
+**AI-assisted development:** parts of this build were written with AI coding assistants (Claude Code and ChatGPT) under Andrew's direction. Commits made through Claude Code are marked with `Co-Authored-By` lines.
 
 ---
 
@@ -129,6 +135,6 @@ The engine uses `requests` for HTTP. `requests` is **not listed directly** in `p
 #    Listing maintenance regression cases (5 tests)
 ./.venv/bin/pytest tests/test_listing_refresh.py -v
 
-# 6. Inspect the hackathon build diff (14 files, including maintenance fixes and handoff)
+# 6. Inspect the hackathon build diff (13 files, including the listing maintenance fixes)
 git diff --stat pre-hackathon...hackathon-all-nov4
 ```

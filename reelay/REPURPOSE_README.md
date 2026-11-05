@@ -19,7 +19,7 @@ The Repurpose Engine transforms an original video from a Reelay ticket into plat
 * **Shared Hashtags:** Concentrates platform hashtags in the shared `hashtags` field.
 
 ### Key Safeguards
-* **Creator Voice:** Maintains Andrew's authentic, direct, technical voice using the active brand voice profile.
+* **Creator Voice:** Follows the creator's active brand voice profile (falling back to a clear, direct tone when none is set).
 * **Source Grounding:** System prompt rules instruct the model to rely only on the provided source input and not to invent claims, quotes, partners, or facts.
 * **Prompt-Isolation Safeguard:** Transcripts are wrapped in `<input_transcript>` tags with case-insensitive closing-tag escaping (`</input_` &rarr; `< /input_`) so spoken text is framed as data rather than instructions. This reduces risk but does not make hallucination or prompt injection impossible, so every proposal goes through human review before it is saved.
 * **No-Truncation Policy:** Every field is validated against Reelay's configured platform-limit registry, `reelay.platform_specs.FIELD_LIMITS`. Copy is **never mechanically truncated**: an over-limit field gets one targeted shorter rewrite from Muse Spark, and if it is still over the limit the engine raises `RepurposeValidationError` instead of returning it.

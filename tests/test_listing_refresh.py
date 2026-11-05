@@ -4,11 +4,9 @@ from dataclasses import replace
 import threading
 
 import pytest
-from PySide6.QtCore import Qt
 
-from reelay.gui.table_model import Col
 from reelay.models import VideoItem
-from tests.test_sources import page_env
+from tests.test_sources import page_env  # noqa: F401  (pytest fixture)
 
 
 def item(vid, date="", platform="YouTube"):

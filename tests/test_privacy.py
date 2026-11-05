@@ -146,4 +146,5 @@ def test_disclosure_text_completeness():
     assert "https://api.meta.ai/v1" in DISCLOSURE_TEXT
     assert "muse-spark-1.3" in DISCLOSURE_TEXT
     assert "non-contributor" in DISCLOSURE_TEXT
+    assert "brand voice" in DISCLOSURE_TEXT
     assert CLOUD_AI_SETTING_KEY == "privacy.cloud_ai_opt_in"

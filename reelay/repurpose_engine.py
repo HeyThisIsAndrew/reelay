@@ -3,14 +3,15 @@
 Built exclusively for the Meta Global AI Developer Hackathon (November 4, 2026).
 Startup Track: Build for Your World.
 
-Transforms source metadata from Andrew's original videos into platform-ready
+Transforms source metadata from a creator's own videos into platform-ready
 copy for YouTube, TikTok, Instagram, Bluesky, Threads, and Facebook.
 
-Guarantees:
+Design:
 - Model: Meta `muse-spark-1.3` via Meta Model API (https://api.meta.ai/v1).
-- Voice & Authenticity: Retains Andrew's authentic voice; never hallucinates facts,
-  quotes, products, or claims. If a field cannot be authentically derived, it is
-  left as an empty string.
+- Voice & Source Grounding: The prompt asks the model to follow the creator's brand
+  voice and to use only the provided source fields, leaving a field empty rather
+  than inventing filler. Model output can still be wrong, so every proposal goes
+  through human review before it is saved.
 - Platform Constraints:
     * YouTube gets title, description, and tags (comma-separated, no #).
     * Threads copy contains ZERO hashtags in body.
@@ -113,11 +114,12 @@ def _build_system_prompt(brand_voice: str = "") -> str:
             f"{brand_voice.strip()}\n\n"
         )
     return (
-        "You are an expert social media copy repurposer assisting creator Andrew Baxter. "
+        "You are an expert social media copy repurposer assisting an independent video creator. "
         "Your task is to adapt source video metadata into platform-ready copy across 6 networks.\n\n"
         f"{voice_block}"
         "STRICT VOICE & FACTUALITY RULES:\n"
-        "1. Keep Andrew's authentic, direct, technical, builder voice.\n"
+        "1. Keep the creator's authentic voice as described in the brand voice profile; if none is "
+        "given, use a clear, direct, natural tone.\n"
         "2. Do NOT invent facts, statistics, quotes, products, people, partners, or claims "
         "not supported by the input.\n"
         "3. If a field cannot be written honestly and meaningfully from the input, leave it as an "
@@ -226,7 +228,7 @@ def _call_meta_model(
     if resp.status_code in (402, 403):
         raise RepurposeAPIError(
             f"Meta Model API access error ({resp.status_code}). "
-            "Please check that your Meta Developer account has active billing and that the $150 credit is applied.",
+            "Please check that your Meta Developer account has API access and active billing or credits.",
             status_code=resp.status_code,
             response_text=resp.text,
         )
@@ -479,14 +481,14 @@ def generate_repurpose_proposal(
     timeout: float = 60.0,
     allow_refinement: bool = True,
 ) -> dict[str, str]:
-    """Generates platform-ready copy proposals from Andrew's source video details using Muse Spark.
+    """Generates platform-ready copy proposals from a creator's source video details using Muse Spark.
 
     This function is functional and proposal-only: it never writes to the SQLite database,
     never updates a Reelay ticket directly, and never triggers publishing. A human review
     step is required before any proposal is applied to a ticket.
 
     Args:
-        title: Title of Andrew's source video.
+        title: Title of the creator's source video.
         description: Description of the video.
         notes: Creator notes, directives, or target audience details.
         transcript: Spoken transcript of the video (treated strictly as source data).

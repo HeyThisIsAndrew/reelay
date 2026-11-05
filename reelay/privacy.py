@@ -7,7 +7,8 @@ powered by Meta Muse Spark via the Meta Model API) are strictly opt-in:
 2. Before any transcript, title, description, or notes leave this Mac for
    https://api.meta.ai/v1, the creator must explicitly opt in.
 3. Reelay uses the standard non-contributor tier ('muse-spark-1.3'), never a
-   contributor model, so creator content is not used to train Meta's models.
+   contributor model. Per Meta's documentation for that tier, requests are not
+   used to train Meta's models.
 4. Opt-in state is persisted locally in the Reelay settings table under
    'privacy.cloud_ai_opt_in' (or controlled via REELAY_CLOUD_AI_OPT_IN in the
    environment) and can be toggled at any time.
@@ -29,12 +30,12 @@ _FALSE = {"0", "false", "no", "off"}
 
 DISCLOSURE_TEXT = (
     "Optional Cloud AI (Meta Model API):\n"
-    "- What is sent: Only the selected ticket's title, description, notes, and transcript "
-    "when you explicitly request platform copy.\n"
+    "- What is sent: Only the selected ticket's title, description, notes, transcript, and "
+    "brand voice guidance, when you explicitly request platform copy.\n"
     "- Where it goes: Meta via the official Meta Model API (https://api.meta.ai/v1) using "
     "the standard non-contributor tier (muse-spark-1.3).\n"
-    "- Privacy & training: Standard non-contributor tier requests are not used to improve "
-    "Meta's models.\n"
+    "- Privacy & training: Per Meta's documentation, Standard non-contributor tier requests "
+    "are not used to improve Meta's models.\n"
     "- Control: Nothing runs automatically in the background, and nothing is saved to a "
     "ticket or published without your review and approval."
 )
