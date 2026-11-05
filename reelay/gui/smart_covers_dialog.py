@@ -40,13 +40,14 @@ from .widgets import label
 class SmartCoversDialog(QDialog):
     """Local-first Smart Covers creator: extract frames, isolate subjects, composite safe-area covers."""
 
-    def __init__(self, video_path: str | Path, ticket_title: str = "", brand_color: str = "#3182CE", parent=None):
+    def __init__(self, video_path: str | Path, ticket_title: str = "", brand_color: str | None = None, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Smart Covers")
         self.resize(780, 620)
         self.video_path = Path(video_path)
         self.ticket_title = ticket_title
-        self.brand_color = brand_color
+        from . import theme
+        self.brand_color = brand_color or theme.P.accent_color   # the active theme's accent unless given
         self.selected_cover_path: str | None = None
 
         self.current_frame_path: Path | None = None
