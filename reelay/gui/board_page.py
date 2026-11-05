@@ -825,11 +825,29 @@ class BoardPage(QWidget):
         self.panel.soundRemoved.connect(self.remove_sound)
         self.panel.recoverRequested.connect(self.open_recovery)
         self.panel.transcriptRequested.connect(lambda row_id: self._get_transcripts([row_id], ask_replace=True))
+        self.panel.batchRepurposeRequested.connect(lambda row_id: self.open_batch_repurpose([row_id] if row_id else None))
+        self.panel.multiSelectRequested.connect(self.select_all_in_column)
         self.bulk = BulkPanel()
         self.bulk.applyRequested.connect(self._bulk_apply)
         self.bulk.fillRequested.connect(lambda: self._fill(self.bulk_ids))
         self.bulk.transcriptsRequested.connect(lambda: self._get_transcripts(self.bulk_ids))
         self.bulk.archiveRequested.connect(lambda: self._archive(self.bulk_ids))
+        self.bulk_repurpose_btn = tip(
+            QPushButton("Batch Repurpose with Muse Spark"),
+            "Draft copy across 6 platforms for all selected videos with Meta Muse Spark. "
+            "You review and approve each video before anything is saved.",
+        )
+        self.bulk_repurpose_btn.setIcon(icons.icon("sparkles", 16, theme.P.text_primary))
+        self.bulk_repurpose_btn.setStyleSheet(
+            f"QPushButton {{ background: {theme.P.accent_soft}; border: 1px solid {theme.P.accent_ring}; "
+            f"border-radius: 10px; padding: 8px 12px; font-weight: 700; color: {theme.P.text_primary}; }}"
+            f"QPushButton:hover {{ border-color: {theme.P.accent_color}; }}"
+        )
+        self.bulk_repurpose_btn.clicked.connect(lambda: self.open_batch_repurpose(self.bulk_ids))
+        if hasattr(self.bulk, "fill_btn") and self.bulk.fill_btn.parentWidget():
+            _bulk_lay = self.bulk.fill_btn.parentWidget().layout()
+            if _bulk_lay is not None:
+                _bulk_lay.insertWidget(_bulk_lay.indexOf(self.bulk.fill_btn), self.bulk_repurpose_btn)
         self.side = QStackedWidget()
         self.side.addWidget(self.panel)
         self.side.addWidget(self.bulk)
@@ -1286,6 +1304,7 @@ class BoardPage(QWidget):
         ids = [c.id for c in chosen]
         n = len(ids)
         menu = QMenu(self)
+        menu.addAction("Batch Repurpose with Muse Spark…", lambda: self.open_batch_repurpose(ids))
         menu.addAction("Fill Empty Copy from Original Post" + ("s" if n > 1 else ""), lambda: self._fill(ids))
         menu.addAction("Get Transcript" + ("s" if n > 1 else "") + " from Original Post" + ("s" if n > 1 else ""),
                        lambda: self._get_transcripts(ids, ask_replace=n == 1))
@@ -1402,6 +1421,57 @@ class BoardPage(QWidget):
         if dialog.exec() == ImportDialog.Accepted and dialog.applied:
             self._status(f"Imported {dialog.applied} ticket{'s' if dialog.applied != 1 else ''} from the sheet.")
             self.reload()
+
+    def open_batch_repurpose(self, card_ids: list[int] | int | None = None) -> None:
+        """Opens the Batch Review GUI for the selected tickets (or current stage)."""
+        if isinstance(card_ids, int):
+            ids = [card_ids]
+        elif card_ids is not None:
+            ids = list(card_ids)
+        elif self.bulk_ids:
+            ids = list(self.bulk_ids)
+        elif self.selected_id:
+            ids = [self.selected_id]
+        else:
+            ids = list(self.cards.keys())
+
+        # If a single card id was requested, include other cards in the same column/stage if available
+        if len(ids) == 1 and ids[0] in self.cards:
+            card = self.cards[ids[0]]
+            col = self._column_for(card.row.stage)
+            if col and len(col.model.cards) > 1:
+                ids = [c.id for c in col.model.cards]
+
+        cards = [self.cards[i] for i in ids if i in self.cards]
+        if not cards:
+            return
+
+        from .batch_dialog import BatchReviewDialog
+        dialog = BatchReviewDialog(
+            cards=cards,
+            store=self.store,
+            pipeline=self.pipeline,
+            thumbs=self.thumbs,
+            parent=self,
+        )
+        dialog.exec()
+        self.reload()
+
+    def select_all_in_column(self, card_id: int | None = None) -> None:
+        """Selects all cards in the column containing the specified card."""
+        cid = card_id or self.selected_id
+        if not cid or cid not in self.cards:
+            return
+        stage = self.cards[cid].row.stage
+        col = self._column_for(stage)
+        if not col or not col.model.cards:
+            return
+        sel = col.view.selectionModel()
+        sel.blockSignals(True)
+        for row in range(len(col.model.cards)):
+            sel.select(col.model.index(row), QItemSelectionModel.Select)
+        sel.blockSignals(False)
+        self._on_selection(col)
 
     def _reselect(self) -> None:
         card = self.cards.get(self.selected_id) if self.selected_id else None

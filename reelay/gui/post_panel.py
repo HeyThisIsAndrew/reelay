@@ -167,6 +167,8 @@ class PostPanel(QFrame):
     soundRequested = Signal(int, str)                       # row id, platform: choose its own sound
     soundRemoved = Signal(int, str)                         # row id, platform: back to the ticket's sound
     recoverRequested = Signal(int)                          # row id: decide about interrupted sends
+    batchRepurposeRequested = Signal(int)                   # video row id
+    multiSelectRequested = Signal(int)                      # video row id
 
     def __init__(self, thumbs: ThumbnailCache, parent=None):
         super().__init__(parent)
@@ -311,6 +313,24 @@ class PostPanel(QFrame):
         self.repurpose_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)   # full width, never clipped
         self.repurpose_btn.clicked.connect(self._repurpose)
         rc.addWidget(self.repurpose_btn)
+        batch_row = QHBoxLayout()
+        batch_row.setSpacing(8)
+        self.batch_repurpose_btn = tip(
+            QPushButton("Batch Repurpose…"),
+            "Repurpose multiple videos at once with Meta Muse Spark. "
+            "Opens the batch review queue.",
+        )
+        self.batch_repurpose_btn.setObjectName("RpQuiet")
+        self.batch_repurpose_btn.clicked.connect(lambda: self.card and self.batchRepurposeRequested.emit(self.card.id))
+        batch_row.addWidget(self.batch_repurpose_btn)
+        self.multi_select_btn = tip(
+            QPushButton("Select All in Column"),
+            "Select all tickets in this column for batch operations.",
+        )
+        self.multi_select_btn.setObjectName("RpQuiet")
+        self.multi_select_btn.clicked.connect(lambda: self.card and self.multiSelectRequested.emit(self.card.id))
+        batch_row.addWidget(self.multi_select_btn)
+        rc.addLayout(batch_row)
         lay.addWidget(self.repurpose_card)
         fill_row = QHBoxLayout()
         self.fill_btn = tip(QPushButton("Fill Empty from Original Post"),
@@ -586,7 +606,17 @@ class PostPanel(QFrame):
         if self.card is None:
             return
         from ..products import video_products
-        self.details.set_ticket(self.card.row.ticket, self.card.id, others, video_products(self.card.row.item))
+        vpath = ""
+        if hasattr(self, "profile") and self.profile and self.card.row and self.card.row.item:
+            vpath = self.card.row.item.path(self.profile.output_folder)
+        self.details.set_ticket(
+            self.card.row.ticket,
+            self.card.id,
+            others,
+            video_products(self.card.row.item),
+            video_path=vpath,
+            ticket_title=getattr(self.card, "title", ""),
+        )
         self.history.set_history(history)
         # the newest live link per platform, for its section's header
         self._links = {p: e.url for p, entries in history.items() for e in entries

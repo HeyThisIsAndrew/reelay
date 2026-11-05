@@ -262,6 +262,9 @@ class TicketDetails(QWidget):
         choose = tip(QPushButton("Choose…"), "Pick a cover image file")
         choose.clicked.connect(self._choose_cover)
         crow.addWidget(choose)
+        self.smart_covers_btn = tip(QPushButton("Smart Covers…"), "Extract frames, isolate subject, and make branded covers")
+        self.smart_covers_btn.clicked.connect(self._open_smart_covers)
+        crow.addWidget(self.smart_covers_btn)
         bl.addLayout(crow)
 
         grid = QVBoxLayout()
@@ -353,8 +356,20 @@ class TicketDetails(QWidget):
             self.thumbnail.setText(path)
             self._commit("thumbnail_path", path)
 
-    def set_ticket(self, ticket: Ticket, row_id: int, others: list[tuple[int, str]], products=()) -> None:
+    def _open_smart_covers(self) -> None:
+        from .smart_covers_dialog import SmartCoversDialog
+        vpath = getattr(self, "_video_path", "") or self.thumbnail.text()
+        title = getattr(self, "_ticket_title", "") or ""
+        dialog = SmartCoversDialog(vpath, ticket_title=title, parent=self)
+        if dialog.exec() == QDialog.Accepted and dialog.selected_cover_path:
+            self.thumbnail.setText(dialog.selected_cover_path)
+            self._commit("thumbnail_path", dialog.selected_cover_path)
+
+    def set_ticket(self, ticket: Ticket, row_id: int, others: list[tuple[int, str]], products=(),
+                   video_path: str = "", ticket_title: str = "") -> None:
         """Fill the fields. `others`: (video id, title) for the "Cut from" choice."""
+        self._video_path = video_path
+        self._ticket_title = ticket_title or ticket.topic or ""
         self._loading = True
         try:
             if not self.transcript.hasFocus():

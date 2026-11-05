@@ -33,7 +33,7 @@ import logging
 import os
 import re
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any
 
 import requests
@@ -651,6 +651,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Display the Cloud AI privacy and non-contributor tier disclosure.",
     )
+    parser.add_argument(
+        "--variants",
+        action="store_true",
+        help="Generate up to 2 alternate variants for title and short-form hooks alongside the base proposal.",
+    )
     parser.add_argument("--title", default="", help="Source video title for generating a proposal.")
     parser.add_argument("--description", default="", help="Source video description.")
     parser.add_argument("--notes", default="", help="Creator notes or audience guidance.")
@@ -679,19 +684,32 @@ def main(argv: list[str] | None = None) -> int:
         print(DISCLOSURE_TEXT)
         print()
         try:
-            proposal = generate_repurpose_proposal(
-                title=args.title,
-                description=args.description,
-                notes=args.notes,
-                transcript=args.transcript,
-                brand_voice=args.brand_voice,
-                opt_in=True,
-            )
+            if args.variants:
+                from .variants import generate_variants
+
+                proposal_with_vars = generate_variants(
+                    title=args.title,
+                    description=args.description,
+                    notes=args.notes,
+                    transcript=args.transcript,
+                    brand_voice=args.brand_voice,
+                    opt_in=True,
+                )
+                print(proposal_with_vars.format_review())
+            else:
+                proposal = generate_repurpose_proposal(
+                    title=args.title,
+                    description=args.description,
+                    notes=args.notes,
+                    transcript=args.transcript,
+                    brand_voice=args.brand_voice,
+                    opt_in=True,
+                )
+                print(format_proposal_review(proposal))
         except RepurposeError as exc:
             print(f"Error: {exc}")
             return 1
 
-        print(format_proposal_review(proposal))
         print(
             "Proposal ready for creator review. "
             "No database write or auto-publish was performed."
@@ -700,6 +718,79 @@ def main(argv: list[str] | None = None) -> int:
 
     parser.print_help()
     return 0
+
+
+# ---------------------------------------------------------------------- Variant Engine Hooks
+# Dynamically dispatched from reelay.variants to prevent circular import issues
+_VARIANT_EXPORTS = {
+    "ALT1_VARIANT_ID",
+    "ALT2_VARIANT_ID",
+    "BASE_VARIANT_ID",
+    "DEFAULT_ALTERNATE_COUNT",
+    "DEFAULT_VARIANT_FIELDS",
+    "LABEL_HOOK_QUESTION",
+    "LABEL_PRIMARY",
+    "LABEL_STORY_DIRECT",
+    "ProposalWithVariants",
+    "Variant",
+    "apply_variant_choice",
+    "generate_variants",
+    "generate_proposal_with_variants",
+}
+
+
+def __getattr__(name: str) -> Any:
+    if name in _VARIANT_EXPORTS:
+        from . import variants
+
+        if name == "generate_proposal_with_variants":
+            return variants.generate_variants
+        return getattr(variants, name)
+    if name in ("BatchJob", "BatchRepurposeQueue", "BatchQueueManager"):
+        from . import batch_repurpose
+
+        return getattr(batch_repurpose, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def generate_batch_repurpose_proposals(
+    tickets: Sequence[Any],
+    *,
+    store: Any | None = None,
+    opt_in: bool | None = None,
+    api_key: str | None = None,
+    brand_voice: str = "",
+    platforms: list[str] | None = None,
+    max_concurrency: int = 1,
+    **kwargs: Any,
+) -> list[Any]:
+    """Helper hook to execute batch proposal generation across multiple tickets."""
+    from .batch_repurpose import BatchRepurposeQueue
+
+    queue = BatchRepurposeQueue(
+        max_concurrency=max_concurrency,
+        store=store,
+        opt_in=opt_in,
+        api_key=api_key,
+        **kwargs,
+    )
+    queue.add_tickets(tickets, brand_voice=brand_voice, platforms=platforms)
+    return queue.process_sync()
+
+
+def generate_proposal_from_snapshot(
+    snapshot: dict[str, str],
+    **kwargs: Any,
+) -> dict[str, str]:
+    """Convenience helper to generate a proposal directly from a source snapshot dictionary."""
+    return generate_repurpose_proposal(
+        title=snapshot.get("title", ""),
+        description=snapshot.get("description", ""),
+        notes=snapshot.get("notes", ""),
+        transcript=snapshot.get("transcript", ""),
+        brand_voice=snapshot.get("brand_voice", ""),
+        **kwargs,
+    )
 
 
 if __name__ == "__main__":

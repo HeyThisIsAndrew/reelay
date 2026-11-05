@@ -163,8 +163,12 @@ class SettingsPage(QWidget):
                                     "Replace the key. Agents using the old key stop working until you give "
                                     "them the new one.")
         self.rotate_token_btn.clicked.connect(self._rotate_token)
+        self.pair_client_btn = tip(QPushButton("Pair AI Client…"),
+                                   "Pair an external AI assistant (Claude Code, Cursor, Muse) with a one-time code")
+        self.pair_client_btn.clicked.connect(self._open_pairing)
         row.addWidget(self.copy_token_btn)
         row.addWidget(self.rotate_token_btn)
+        row.addWidget(self.pair_client_btn)
         row.addStretch()
         cl.addLayout(row)
         cl.addWidget(_muted("Public web address (only needed for posting to Threads). Threads fetches each video "
@@ -554,3 +558,8 @@ class SettingsPage(QWidget):
             QGuiApplication.clipboard().setText(self.services.agent_token())
             self._refresh_api()
             self.api_status.setText(self.api_status.text() + "\nNew key copied to the clipboard.")
+
+    def _open_pairing(self) -> None:
+        from .pairing_dialog import PairingDialog
+        dialog = PairingDialog(self.store, self)
+        dialog.exec()

@@ -651,13 +651,28 @@ def create_app(store: Store, pipeline: Pipeline, accounts: AccountService, token
     credential_present = accounts.has_credentials
     oauth_client = accounts.oauth_client             # bound now: `accounts` itself is dropped just below
     pipeline, store, accounts = scoped, scoped.store, None
+
+    from .pairing import PairingManager
+    from .mcp_server import create_mcp_router
+
+    pairing_mgr = PairingManager(store=scoped._store)
+    app.state.pairing_manager = pairing_mgr
+
     bearer = HTTPBearer(auto_error=False, description="Agent API token (system keychain: service \"Reelay\", "
                                                       "account \"agent_api_token\"; or REELAY_API_TOKEN).")
 
-    def require_token(creds: HTTPAuthorizationCredentials | None = Security(bearer)) -> None:
+    def check_token(creds: HTTPAuthorizationCredentials | None) -> tuple[bool, str | None]:
+        if creds is None or creds.scheme.lower() != "bearer":
+            return False, None
+        tok = creds.credentials
         expected = token_provider()
-        if creds is None or creds.scheme.lower() != "bearer" or not expected or \
-                not secrets.compare_digest(creds.credentials.encode(), expected.encode()):
+        if expected and secrets.compare_digest(tok.encode(), expected.encode()):
+            return True, "master"
+        return pairing_mgr.verify_token(tok, scoped._store)
+
+    def require_token(creds: HTTPAuthorizationCredentials | None = Security(bearer)) -> None:
+        ok, _ = check_token(creds)
+        if not ok:
             raise ApiError(401, "Missing or invalid bearer token.", "unauthorized")
 
     # ---------------------------------------------------------------- error handlers
@@ -1272,6 +1287,32 @@ def create_app(store: Store, pipeline: Pipeline, accounts: AccountService, token
         if path is None or not path.is_file() or not looks_like_video(path):
             raise ApiError(404, "This link has expired or doesn't exist.", "not_found")
         return FileResponse(path, media_type="video/mp4")
+
+    # ---------------------------------------------------------------- AI client pairing (Issue #7)
+    @app.post("/v1/pair", include_in_schema=False)
+    async def pair_client(request: Request):
+        try:
+            body = await request.json()
+        except Exception:
+            raise ApiError(400, "Invalid JSON body.", "invalid_request")
+        code = body.get("code")
+        client_name = body.get("client_name") or "External AI Agent"
+        if not code:
+            raise ApiError(400, "Pairing code is required.", "code_required")
+        ok, msg, token = pairing_mgr.claim_pairing_code(code, client_name, scoped._store)
+        if not ok:
+            pairing_mgr.record_failed_attempt(code, scoped._store)
+            raise ApiError(400, msg, "pairing_failed")
+        return {"status": "paired", "token": token, "client_name": client_name}
+
+    # ---------------------------------------------------------------- MCP Server (Issue #6)
+    def mcp_token_verifier(tok: str) -> tuple[bool, str | None]:
+        expected = token_provider()
+        if expected and secrets.compare_digest(tok.encode(), expected.encode()):
+            return True, "master"
+        return pairing_mgr.verify_token(tok, scoped._store)
+
+    app.include_router(create_mcp_router(scoped, mcp_token_verifier), include_in_schema=False)
 
     return app
 
