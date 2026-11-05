@@ -135,3 +135,33 @@ def test_client_listing_and_revocation():
     valid2, name2 = mgr.verify_token(token2, store=store)
     assert valid2 is True
     assert name2 == "Local Agent"
+
+
+def test_wrong_codes_count_globally_and_lock_pairing(monkeypatch):
+    """Guessing (codes that don't exist) is limited too: after MAX_GLOBAL_FAILURES wrong codes every
+    live code is cancelled and pairing is refused until the lockout passes."""
+    from reelay import pairing as pairing_mod
+
+    store = FakeStore()
+    mgr = PairingManager(store=store)
+    real_code, _ = mgr.create_pairing_code(store=store)
+
+    for i in range(pairing_mod.MAX_GLOBAL_FAILURES):
+        guess = f"RLY-AAAA-AA{i:02d}"
+        ok, _msg, _tok = mgr.claim_pairing_code(guess, "Attacker", store=store)
+        assert ok is False
+        mgr.record_failed_attempt(guess, store=store)
+
+    assert mgr.locked_out_for(store) > 0
+    ok, msg, token = mgr.claim_pairing_code(real_code, "Attacker", store=store)
+    assert ok is False and token is None
+    assert "Too many wrong pairing codes" in msg
+
+    # After the lockout passes, the old code is gone; a fresh code works.
+    now = time.time()
+    monkeypatch.setattr(pairing_mod.time, "time", lambda: now + pairing_mod.LOCKOUT_SECONDS + 1)
+    ok_old, _, _ = mgr.claim_pairing_code(real_code, "Late", store=store)
+    assert ok_old is False
+    fresh, _ = mgr.create_pairing_code(store=store)
+    ok_new, _, token_new = mgr.claim_pairing_code(fresh, "Claude Code", store=store)
+    assert ok_new is True and token_new.startswith("rly_client_")

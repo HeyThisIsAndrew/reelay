@@ -662,13 +662,16 @@ def create_app(store: Store, pipeline: Pipeline, accounts: AccountService, token
                                                       "account \"agent_api_token\"; or REELAY_API_TOKEN).")
 
     def check_token(creds: HTTPAuthorizationCredentials | None) -> tuple[bool, str | None]:
+        """The REST API takes only the agent API token. Paired-client tokens (rly_client_…) are
+        scoped to the MCP endpoints (see mcp_token_verifier), where every call is tagged with the
+        client's name."""
         if creds is None or creds.scheme.lower() != "bearer":
             return False, None
         tok = creds.credentials
         expected = token_provider()
         if expected and secrets.compare_digest(tok.encode(), expected.encode()):
             return True, "master"
-        return pairing_mgr.verify_token(tok, scoped._store)
+        return False, None
 
     def require_token(creds: HTTPAuthorizationCredentials | None = Security(bearer)) -> None:
         ok, _ = check_token(creds)

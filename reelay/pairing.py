@@ -7,7 +7,9 @@ manual token extraction or copying.
 Security Model:
 - Code format: RLY-XXXX-XXXX using unambiguous characters (no 0/O, 1/I, L).
 - Short Time-To-Live (TTL): 5 minutes (300 seconds).
-- Rate-limited attempts: 3 failed code attempts invalidates the request.
+- Rate-limited attempts: 3 failed tries against a live code invalidate it, and wrong codes count too:
+  MAX_GLOBAL_FAILURES bad codes within GLOBAL_WINDOW_SECONDS cancel every pending code and refuse
+  pairing for LOCKOUT_SECONDS (a guess is by definition a code that doesn't exist).
 - Human-in-the-loop: A person generates the pairing code inside Reelay GUI.
 - Hashed token storage: Only the SHA-256 hash of issued tokens is stored, never plain text.
 - Scoped tokens: Token origin tagged as 'mcp:<client_name>'.
@@ -29,7 +31,11 @@ log = logging.getLogger("reelay.pairing")
 
 PAIRING_TTL_SECONDS = 300.0  # 5 minutes
 MAX_FAILED_ATTEMPTS = 3
-CODE_ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"  # 30 unambiguous characters
+CODE_ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"  # 31 unambiguous characters
+MAX_GLOBAL_FAILURES = 5          # wrong codes (any code) within the window before pairing locks
+GLOBAL_WINDOW_SECONDS = 300.0
+LOCKOUT_SECONDS = 60.0
+FAILURES_SETTING = "auth.pairing_failures"
 PAIRED_CLIENTS_SETTING = "auth.paired_clients"
 PENDING_CODES_SETTING = "auth.pending_pairing_codes"
 
@@ -79,6 +85,27 @@ class PairingManager:
             except Exception as exc:
                 log.warning("Could not save pending pairing codes: %s", exc)
 
+    # ---------------------------------------------------------------- global brute-force guard
+    def _failures(self, store: Any) -> dict[str, float]:
+        try:
+            data = json.loads(store.get_setting(FAILURES_SETTING, "{}") or "{}")
+            return {k: float(v) for k, v in data.items()}
+        except Exception:
+            return {}
+
+    def _save_failures(self, data: dict[str, float], store: Any) -> None:
+        try:
+            store.set_setting(FAILURES_SETTING, json.dumps(data))
+        except Exception as exc:
+            log.warning("Could not save pairing failure count: %s", exc)
+
+    def locked_out_for(self, store: Any = None) -> float:
+        """Seconds until pairing is allowed again after too many wrong codes (0 if not locked)."""
+        target = store or self.store
+        if not target or not hasattr(target, "get_setting"):
+            return 0.0
+        return max(0.0, self._failures(target).get("locked_until", 0.0) - time.time())
+
     def create_pairing_code(self, client_name: str | None = None, store: Any = None) -> tuple[str, float]:
         """Creator clicks 'Pair AI Client…' in GUI.
 
@@ -115,6 +142,11 @@ class PairingManager:
         if not target_store:
             return False, "Reelay store is unavailable.", None
 
+        wait = self.locked_out_for(target_store)
+        if wait > 0:
+            return False, (f"Too many wrong pairing codes. Try again in about {int(wait) + 1} s with a new code "
+                           "from Reelay."), None
+
         pending = self._get_pending(target_store)
         session = pending.get(clean_code)
 
@@ -136,9 +168,10 @@ class PairingManager:
         client_id = secrets.token_hex(8)
         cname = client_name.strip() or session.get("client_name") or "AI Assistant"
 
-        # Remove from pending
+        # Remove from pending; a successful pairing clears the failure count
         pending.pop(clean_code, None)
         self._save_pending(pending, target_store)
+        self._save_failures({}, target_store)
 
         # Save client record with hashed token
         self._save_client_record(target_store, client_id, cname, thash)
@@ -150,6 +183,8 @@ class PairingManager:
         """Records an invalid attempt against a pairing code for brute-force defense."""
         clean_code = code.strip().upper()
         target_store = store or self.store
+        if not target_store or not hasattr(target_store, "get_setting"):
+            return
         pending = self._get_pending(target_store)
         session = pending.get(clean_code)
         if session:
@@ -157,6 +192,18 @@ class PairingManager:
             if session["failed_attempts"] >= MAX_FAILED_ATTEMPTS:
                 pending.pop(clean_code, None)
             self._save_pending(pending, target_store)
+
+        # Count every failure, including codes that don't exist (that's what a guess looks like).
+        now = time.time()
+        failures = self._failures(target_store)
+        if now - failures.get("window_start", 0.0) > GLOBAL_WINDOW_SECONDS:
+            failures = {"window_start": now, "count": 0.0}
+        failures["count"] = failures.get("count", 0.0) + 1
+        if failures["count"] >= MAX_GLOBAL_FAILURES:
+            failures = {"window_start": now, "count": 0.0, "locked_until": now + LOCKOUT_SECONDS}
+            self._save_pending({}, target_store)            # every live code is now void
+            log.warning("Pairing locked for %d s after %d wrong codes.", LOCKOUT_SECONDS, MAX_GLOBAL_FAILURES)
+        self._save_failures(failures, target_store)
 
     def _save_client_record(self, store: Any, client_id: str, client_name: str, token_hash: str) -> None:
         try:

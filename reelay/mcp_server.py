@@ -150,6 +150,21 @@ MCP_TOOLS = [
 ]
 
 
+def client_origin(client_name: str | None) -> str:
+    """'mcp:<client name>' with the name cleaned up (it comes from the pairing request)."""
+    import re
+    name = re.sub(r"[^A-Za-z0-9 ._-]", "", str(client_name or "")).strip()[:40] or "client"
+    return f"mcp:{name}"
+
+
+def scoped_for_client(scoped: ScopedPipeline, client_name: str | None) -> ScopedPipeline:
+    """The same pipeline, profiles, rate limiter and clock, but with edits and approval requests
+    recorded as this MCP client ('mcp:<name>'), so the creator can see which client did what."""
+    tag = client_origin(client_name)
+    return ScopedPipeline(scoped._pipeline, scoped.profile_ids, requested_by=tag, limiter=scoped.limiter,
+                          clock=scoped.clock, origin=tag)
+
+
 def execute_mcp_tool(
     scoped: ScopedPipeline,
     name: str,
@@ -157,6 +172,7 @@ def execute_mcp_tool(
     client_name: str = "mcp_client",
 ) -> dict[str, Any]:
     """Dispatches tool execution against ScopedPipeline, returning MCP content payload."""
+    scoped = scoped_for_client(scoped, client_name)
     try:
         # Resolve target profile if needed
         profile = None

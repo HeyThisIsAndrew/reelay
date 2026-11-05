@@ -295,7 +295,9 @@ def test_save_changes_per_ticket(qtbot, tmp_path):
         row_id = store.save_video(profile.id, card.row.item)
         card.id = row_id
         card.row.id = row_id
-        post = store.save_post(Post(video_row=row_id, title="Old Title", description="Old Desc"))
+        post = store.save_post(Post(video_row=row_id, title="Old Title", description="Old Desc",
+                                    target_platforms=["youtube", "tiktok", "bluesky"],
+                                    instagram_text="My own Instagram caption"))
         card.post = post
 
         dialog = BatchReviewDialog(cards=[card], store=store)
@@ -324,6 +326,41 @@ def test_save_changes_per_ticket(qtbot, tmp_path):
         assert saved_post.description == SYNTHETIC_PROPOSAL["description"]
         assert saved_post.tiktok_text == SYNTHETIC_PROPOSAL["tiktok_text"]
         assert saved_post.bluesky_text == SYNTHETIC_PROPOSAL["bluesky_text"]
+        # Not in Posting to: left exactly as the creator had it
+        assert saved_post.instagram_text == "My own Instagram caption"
+        assert saved_post.threads_text is None and saved_post.facebook_text is None
+    finally:
+        store.close()
+
+
+def test_batch_save_refuses_when_ticket_changed_after_batch_started(qtbot, tmp_path):
+    """An edit made elsewhere while the batch is open is never overwritten by Batch Save."""
+    store = Store(tmp_path / "test_stale.db")
+    try:
+        profile = store.create_profile("Andrew", tmp_path / "library")
+        card = _make_andrew_card(row_id=1, profile_id=profile.id)
+        row_id = store.save_video(profile.id, card.row.item)
+        card.id = row_id
+        card.row.id = row_id
+        card.post = store.save_post(Post(video_row=row_id, title="Old Title", target_platforms=["youtube"]))
+
+        dialog = BatchReviewDialog(cards=[card], store=store)
+        qtbot.addWidget(dialog)
+        dialog._on_worker_ticket_succeeded(row_id, SYNTHETIC_PROPOSAL, None)
+        ticket = dialog.tickets_by_id[row_id]
+        ticket.reviewed = True
+        dialog.apply_reviewed_only()
+
+        # The creator edits the same ticket in the normal panel while the batch is open.
+        from dataclasses import replace
+        store.save_post(replace(store.get_post(row_id), description="Edited by hand meanwhile"))
+
+        assert dialog.save_single_ticket(row_id) is False
+        assert ticket.saved is False
+        latest = store.get_post(row_id)
+        assert latest.description == "Edited by hand meanwhile"
+        assert latest.title == "Old Title"
+        assert "changed after the batch started" in dialog.footer_note.text()
     finally:
         store.close()
 

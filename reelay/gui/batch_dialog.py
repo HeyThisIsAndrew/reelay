@@ -243,6 +243,69 @@ class BatchTicket:
         return "PASS"
 
 
+# ====================================================================== Saving (shared by both Save Changes paths)
+# Destinations whose posts use the shared hashtag set (same rule as the single-ticket Repurpose dialog).
+_HASHTAG_PLATFORMS = {Platform.TIKTOK, Platform.INSTAGRAM, Platform.FACEBOOK}
+_COPY_FIELDS = ("title", "description", "tags", "tiktok_text", "instagram_text", "bluesky_text",
+                "threads_text", "facebook_text", "hashtags")
+STALE_MESSAGE = ("This ticket changed after the batch started, so nothing was saved. "
+                 "Reopen it from the Board to review the latest copy.")
+
+
+def allowed_fields(post: Any) -> set[str]:
+    """Copy fields belonging to the ticket's Posting to platforms (plus shared hashtags when one of
+    them uses hashtags). Batch saves never touch copy for platforms the ticket isn't going to."""
+    targets = [p for p in (getattr(post, "target_platforms", None) or []) if p in SPECS]
+    fields = {f for p in targets for f in SPECS[p].copy_fields}
+    if _HASHTAG_PLATFORMS & set(targets):
+        fields.add("hashtags")
+    return fields
+
+
+def _comparable(post: Any) -> tuple:
+    return tuple((f, getattr(post, f, None)) for f in _COPY_FIELDS) + (
+        ("target_platforms", tuple(getattr(post, "target_platforms", None) or ())),)
+
+
+def commit_ticket_copy(ticket_id: int, snapshot: Any, copy: dict[str, str], pipeline: Any = None,
+                       store: Any = None) -> tuple[Post | None, str]:
+    """Save reviewed copy to one ticket, or explain why not.
+
+    - Re-reads the ticket's current post and refuses (saving nothing) if it no longer matches the
+      `snapshot` taken when the batch opened, so edits made elsewhere are never overwritten.
+    - Writes only non-empty fields for the ticket's Posting to platforms, on top of the CURRENT post.
+    Returns (saved_post, "") or (None, reason).
+    """
+    from dataclasses import replace
+    reader = getattr(pipeline, "store", None) or store
+    current = reader.get_post(ticket_id) if reader is not None and hasattr(reader, "get_post") else snapshot
+    if snapshot is not None and current is not None and _comparable(current) != _comparable(snapshot):
+        return None, STALE_MESSAGE
+    base = current or snapshot or Post(video_row=ticket_id)
+    allowed = allowed_fields(base)
+    if not allowed:
+        return None, "Tick at least one platform under Posting to for this ticket, then save."
+    changes: dict[str, Any] = {}
+    for key in _COPY_FIELDS:
+        value = (copy.get(key) or "").strip()
+        if key not in allowed or not value:
+            continue
+        if key == "tags":
+            changes["tags"] = [t.strip().lstrip("#") for t in value.split(",") if t.strip()]
+        else:
+            changes[key] = value
+    if not changes:
+        return None, "No reviewed copy for this ticket's platforms, so nothing was saved."
+    updated = replace(base, **changes)
+    if pipeline is not None and hasattr(pipeline, "save_draft"):
+        saved = pipeline.save_draft(updated)
+    elif store is not None and hasattr(store, "save_post"):
+        saved = store.save_post(updated)
+    else:
+        saved = updated
+    return saved or updated, ""
+
+
 # ====================================================================== Worker Thread
 class BatchWorker(QThread):
     """Background worker executing batch proposal generation without blocking GUI."""
@@ -718,42 +781,25 @@ class TicketProposalReviewDialog(QDialog):
         return res
 
     def _save_ticket_changes(self) -> None:
-        """Commits changes directly to the ticket via pipeline or store."""
+        """Commits reviewed copy to the ticket (Posting to platforms only; refuses if the ticket changed)."""
         copy = self.get_current_proposal()
+        try:
+            saved, problem = commit_ticket_copy(self.ticket.id, getattr(self.ticket.card, "post", None), copy,
+                                                self.pipeline, self.store)
+        except Exception as exc:
+            saved, problem = None, f"Save error: {exc}"
+        if saved is None:
+            self.footer_note.setText(problem)
+            set_prop(self.footer_note, "danger", True)
+            return
         self.edited_copy = copy
         self.ticket.applied_copy = dict(copy)
         self.ticket.reviewed = True
         self.ticket.applied = True
-
-        card = self.ticket.card
-        base_post = getattr(card, "post", None) or Post(video_row=self.ticket.id)
-        raw_tags = copy.get("tags", "")
-        tags = [s.strip().lstrip("#") for s in raw_tags.split(",") if s.strip()] if raw_tags else base_post.tags
-        from dataclasses import replace
-        updated_post = replace(
-            base_post,
-            title=copy.get("title", base_post.title),
-            description=copy.get("description", base_post.description),
-            tags=tags,
-            tiktok_text=copy.get("tiktok_text", base_post.tiktok_text),
-            instagram_text=copy.get("instagram_text", base_post.instagram_text),
-            bluesky_text=copy.get("bluesky_text", base_post.bluesky_text),
-            threads_text=copy.get("threads_text", base_post.threads_text),
-            facebook_text=copy.get("facebook_text", base_post.facebook_text),
-            hashtags=copy.get("hashtags", base_post.hashtags),
-        )
-
-        try:
-            if self.pipeline is not None and hasattr(self.pipeline, "save_draft"):
-                self.pipeline.save_draft(updated_post)
-            elif self.store is not None and hasattr(self.store, "save_post"):
-                self.store.save_post(updated_post)
-            self.ticket.card.post = updated_post
-            self.ticket.saved = True
-            self.footer_note.setText("Changes committed to database. (Never auto-published).")
-        except Exception as exc:
-            self.footer_note.setText(f"Save error: {exc}")
-            set_prop(self.footer_note, "danger", True)
+        self.ticket.card.post = saved
+        self.ticket.saved = True
+        self.footer_note.setText("Changes saved to this ticket's Posting to platforms. (Never auto-published).")
+        set_prop(self.footer_note, "danger", False)
 
     def _accept_and_apply(self) -> None:
         self.edited_copy = self.get_current_proposal()
@@ -1391,42 +1437,23 @@ class BatchReviewDialog(QDialog):
             return False
 
         copy = ticket.active_proposal or {}
-        card = ticket.card
-        base_post = getattr(card, "post", None) or Post(video_row=ticket.id)
-        raw_tags = copy.get("tags", "")
-        tags = [s.strip().lstrip("#") for s in raw_tags.split(",") if s.strip()] if raw_tags else base_post.tags
-
-        from dataclasses import replace
-        updated_post = replace(
-            base_post,
-            title=copy.get("title", base_post.title),
-            description=copy.get("description", base_post.description),
-            tags=tags,
-            tiktok_text=copy.get("tiktok_text", base_post.tiktok_text),
-            instagram_text=copy.get("instagram_text", base_post.instagram_text),
-            bluesky_text=copy.get("bluesky_text", base_post.bluesky_text),
-            threads_text=copy.get("threads_text", base_post.threads_text),
-            facebook_text=copy.get("facebook_text", base_post.facebook_text),
-            hashtags=copy.get("hashtags", base_post.hashtags),
-        )
-
         try:
-            if self.pipeline is not None and hasattr(self.pipeline, "save_draft"):
-                self.pipeline.save_draft(updated_post)
-            elif self.store is not None and hasattr(self.store, "save_post"):
-                self.store.save_post(updated_post)
-            ticket.card.post = updated_post
-            ticket.saved = True
-            ticket.job.status = JOB_STATUS_SAVED
-            if ticket_id in self.row_widgets:
-                self.row_widgets[ticket_id].refresh()
-            self._update_batch_buttons()
-            return True
+            saved, problem = commit_ticket_copy(ticket.id, getattr(ticket.card, "post", None), copy,
+                                                self.pipeline, self.store)
         except Exception as exc:
-            log.warning("Save failed for ticket %s: %s", ticket.id, exc)
-            self.footer_note.setText(f"Save failed for ticket {ticket.id}: {exc}")
+            saved, problem = None, str(exc)
+        if saved is None:
+            log.warning("Save skipped for ticket %s: %s", ticket.id, problem)
+            self.footer_note.setText(f"Ticket {ticket.id}: {problem}")
             set_prop(self.footer_note, "danger", True)
             return False
+        ticket.card.post = saved
+        ticket.saved = True
+        ticket.job.status = JOB_STATUS_SAVED
+        if ticket_id in self.row_widgets:
+            self.row_widgets[ticket_id].refresh()
+        self._update_batch_buttons()
+        return True
 
     # ------------------------------------------------------------------ Batch Actions
     def apply_reviewed_only(self) -> None:
@@ -1462,11 +1489,14 @@ class BatchReviewDialog(QDialog):
                 saved_count += 1
 
         self._update_batch_buttons()
-        self.footer_note.setText(
-            f"Saved {saved_count} ticket{'s' if saved_count != 1 else ''} to database. "
-            "(Never auto-published or auto-posted)."
-        )
-        set_prop(self.footer_note, "danger", False)
+        skipped = len(to_save) - saved_count
+        note = (f"Saved {saved_count} ticket{'s' if saved_count != 1 else ''} to database. "
+                "(Never auto-published or auto-posted).")
+        if skipped:
+            note += (f" {skipped} not saved because the ticket changed after the batch started or has no "
+                     "matching Posting to platform; reopen it from the Board.")
+        self.footer_note.setText(note)
+        set_prop(self.footer_note, "danger", bool(skipped))
 
     def _update_batch_buttons(self) -> None:
         total = len(self.tickets)

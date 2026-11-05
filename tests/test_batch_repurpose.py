@@ -350,6 +350,7 @@ def test_variant_generation_under_field_limits():
             fields=["title", "tiktok_text"],
             num_alternates=2,
             opt_in=True,
+            api_key="test-key-mock",  # never read the real key from env/Keychain
         )
 
         title_variants = proposal_variants.get_variants_for_field("title")
@@ -382,6 +383,7 @@ def test_variants_never_contain_em_dashes():
             fields=["title"],
             num_alternates=2,
             opt_in=True,
+            api_key="test-key-mock",  # never read the real key from env/Keychain
             strict=False,
         )
         title_variants = proposal_variants.get_variants_for_field("title")

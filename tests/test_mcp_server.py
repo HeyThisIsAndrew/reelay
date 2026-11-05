@@ -202,3 +202,44 @@ def test_mcp_tool_execution_reads_and_consequential_approval_gating(tmp_path, mo
     finally:
         server.stop()
         world.store.close()
+
+
+def test_paired_token_is_mcp_only_and_calls_are_tagged_with_the_client(tmp_path, monkeypatch):
+    """A paired client's token works on /mcp but not on the REST API, and its edits and approval
+    requests are recorded as 'mcp:<client name>'."""
+    world = make_world(tmp_path, monkeypatch)
+    app = create_app(world.store, world.pipeline, world.accounts, lambda: "master_token_abc")
+    server = ApiServer(app, host="127.0.0.1", port=0)
+    assert server.start()
+    try:
+        code, _ = app.state.pairing_manager.create_pairing_code(store=world.store)
+        res = requests.post(f"{server.url}/v1/pair", json={"code": code, "client_name": "Claude Code"})
+        assert res.status_code == 200
+        paired = res.json()["token"]
+        headers = {"Authorization": f"Bearer {paired}"}
+
+        # REST API: refused for paired tokens
+        profile_id = world.store.list_profiles()[0].id
+        rest = requests.get(f"{server.url}/v1/board?profile={profile_id}", headers=headers)
+        assert rest.status_code == 401
+
+        video_id = world.rows[0]
+        url = f"{server.url}/mcp/messages"
+        edit = requests.post(url, headers=headers, json={
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": "reelay_set_platform_copy",
+                       "arguments": {"video_id": video_id, "copy": {"title": "Title from a paired client"}}}})
+        assert edit.status_code == 200 and not edit.json()["result"].get("isError")
+        origins = {r.origin for r in world.store.revisions(video_id)}
+        assert "mcp:Claude Code" in origins
+
+        sched = requests.post(url, headers=headers, json={
+            "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": {"name": "reelay_schedule_post",
+                       "arguments": {"video_id": video_id, "platform": "youtube",
+                                     "publish_at": "2026-11-10T15:00:00Z"}}})
+        approval_id = sched.json()["result"]["approval_id"]
+        assert world.store.get_approval(approval_id).requested_by == "mcp:Claude Code"
+    finally:
+        server.stop()
+        world.store.close()
