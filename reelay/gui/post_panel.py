@@ -285,22 +285,30 @@ class PostPanel(QFrame):
         self.none_note.setProperty("faint", True)
         self.none_note.setWordWrap(True)
         lay.addWidget(self.none_note)
+        repurpose_row = QHBoxLayout()
+        repurpose_row.setSpacing(8)
+        self.repurpose_label = QLabel("Repurpose")
+        self.repurpose_label.setProperty("muted", True)
+        repurpose_row.addWidget(self.repurpose_label)
+        repurpose_row.addStretch()
+        self.repurpose_btn = tip(
+            QPushButton("Muse Spark"),
+            "Draft copy for the platforms ticked in Posting to with Meta Muse Spark. "
+            "You review and edit it before anything reaches this ticket.",
+        )
+        set_prop(self.repurpose_btn, "primary")
+        self.repurpose_btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)   # never squeezed or clipped
+        self.repurpose_btn.clicked.connect(self._repurpose)
+        repurpose_row.addWidget(self.repurpose_btn)
+        lay.addLayout(repurpose_row)
         fill_row = QHBoxLayout()
-        fill_row.addStretch()
         self.fill_btn = tip(QPushButton("Fill Empty from Original Post"),
                             "Fill this ticket's empty boxes from the original caption, within each platform's "
                             "limits. Nothing already written changes, and nothing is shortened.")
         set_prop(self.fill_btn, "flat")
         self.fill_btn.clicked.connect(lambda: self.card and self.fillRequested.emit(self.card.id))
         fill_row.addWidget(self.fill_btn)
-        self.repurpose_btn = tip(
-            QPushButton("Repurpose with Muse Spark"),
-            "Generate platform-ready copy across YouTube, TikTok, Instagram, Bluesky, Threads, "
-            "and Facebook using Meta Muse Spark. Shows a proposal for your review before applying.",
-        )
-        set_prop(self.repurpose_btn, "primary")
-        self.repurpose_btn.clicked.connect(self._repurpose)
-        fill_row.addWidget(self.repurpose_btn)
+        fill_row.addStretch()
         lay.addLayout(fill_row)
         self.blocks: dict[str, CopyBlock] = {}
         self.sections: dict[str, PlatformSection] = {}
@@ -732,12 +740,15 @@ class PostPanel(QFrame):
         starting_values = {key: block.text() for key, block in b.items()}
         title = b["title"].text().strip() if "title" in b else ""
         description = b["description"].text().strip() if "description" in b else ""
+        # The live "Posting to" chips, including changes not saved yet, pick what is shown and applied.
+        platforms = [p for p, chip in self.platform_boxes.items() if chip.isChecked()]
         dialog = RepurposeDialog(
             self.card,
             self.store,
             parent=self,
             title=title,
             description=description,
+            platforms=platforms,
         )
         if dialog.exec() == RepurposeDialog.Accepted and dialog.proposal:
             current_row_id = (
@@ -834,6 +845,7 @@ class PostPanel(QFrame):
             block.set_read_only(locked)
         self.fill_btn.setVisible(not locked)
         self.repurpose_btn.setVisible(not locked)
+        self.repurpose_label.setVisible(not locked)
         self.form.setVisible(not locked)
         self.save_btn.setVisible(not locked)
         self.upload_btn.setVisible(not locked)

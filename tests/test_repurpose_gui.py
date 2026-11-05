@@ -6,6 +6,8 @@ import threading
 import time
 from types import SimpleNamespace
 
+from PySide6.QtWidgets import QLabel
+
 from reelay.gui.post_panel import PostPanel
 from reelay.gui.repurpose_dialog import RepurposeDialog
 from reelay.gui.thumbnails import ThumbnailCache
@@ -74,7 +76,8 @@ def test_repurpose_button_present_in_post_panel(qtbot, tmp_path):
     panel = PostPanel(ThumbnailCache(tmp_path / "thumbs"))
     qtbot.addWidget(panel)
     assert hasattr(panel, "repurpose_btn")
-    assert panel.repurpose_btn.text() == "Repurpose with Muse Spark"
+    assert panel.repurpose_btn.text() == "Muse Spark"
+    assert panel.repurpose_label.text() == "Repurpose"
     assert "Meta Muse Spark" in panel.repurpose_btn.toolTip()
 
 
@@ -154,8 +157,9 @@ def test_unchecked_checkbox_blocks_even_when_environment_enables_cloud(qtbot, mo
         generate_fn=lambda **_kw: called.append(True) or SYNTHETIC_PROPOSAL,
     )
     qtbot.addWidget(dialog)
-    assert dialog.opt_in_box.isChecked()
+    assert not dialog.opt_in_box.isChecked(), "Consent must start unticked even when the env var is 1"
 
+    dialog.opt_in_box.setChecked(True)
     dialog.opt_in_box.setChecked(False)
     assert store_dict.get("privacy.cloud_ai_opt_in") == "0"
 
@@ -286,8 +290,17 @@ def test_post_panel_repurpose_applies_to_blocks_without_auto_save(qtbot, tmp_pat
 
         panel.show_card(card, [], False)
         assert not panel.has_unsaved_changes()
+        # Live "Posting to" selection (not saved yet): YouTube + Bluesky only.
+        for p, chip in panel.platform_boxes.items():
+            chip.setChecked(p in ("youtube", "bluesky"))
+        panel.blocks["tiktok_text"].set_text("")
+        panel.blocks["hashtags"].set_text("#existing")
+        unsaved_before = panel.has_unsaved_changes()
+
+        seen_platforms: list[tuple[str, ...]] = []
 
         def auto_accept(self):
+            seen_platforms.append(self.platforms)
             self.populate_proposal(SYNTHETIC_PROPOSAL)
             self._accept_proposal()
             return RepurposeDialog.Accepted
@@ -295,8 +308,13 @@ def test_post_panel_repurpose_applies_to_blocks_without_auto_save(qtbot, tmp_pat
         monkeypatch.setattr(RepurposeDialog, "exec", auto_accept)
         panel._repurpose()
 
-        for key, expected in SYNTHETIC_PROPOSAL.items():
-            assert panel.blocks[key].text() == expected
+        assert seen_platforms == [("youtube", "bluesky")]
+        for key in ("title", "description", "tags", "bluesky_text"):
+            assert panel.blocks[key].text() == SYNTHETIC_PROPOSAL[key]
+        for key in ("tiktok_text", "instagram_text", "threads_text", "facebook_text"):
+            assert panel.blocks[key].text() != SYNTHETIC_PROPOSAL[key], f"{key} overwritten though unselected"
+        assert panel.blocks["hashtags"].text() == "#existing", "hidden shared hashtags were changed"
+        _ = unsaved_before
 
         assert panel.has_unsaved_changes()
         assert "Click Save Changes to commit" in panel.copied.text()
@@ -314,6 +332,7 @@ def test_post_panel_repurpose_applies_to_blocks_without_auto_save(qtbot, tmp_pat
         assert len(save_signals) == 1
         assert save_signals[0].title == SYNTHETIC_PROPOSAL["title"]
         assert save_signals[0].bluesky_text == SYNTHETIC_PROPOSAL["bluesky_text"]
+        assert save_signals[0].tiktok_text != SYNTHETIC_PROPOSAL["tiktok_text"]
     finally:
         store.close()
 
@@ -426,3 +445,113 @@ def test_async_generation_completion_allows_edit_apply_and_regeneration(qtbot, m
     flush_deferred_deletes()
     assert dialog.worker is None
     assert dialog._can_apply()
+
+
+# ---------------------------------------------------------------- destination-filtered review (redesign)
+def _dialog_for(qtbot, platforms, generate_fn=None):
+    dialog = RepurposeDialog(store={}, title="Example", platforms=platforms,
+                             generate_fn=generate_fn or (lambda **_kw: dict(SYNTHETIC_PROPOSAL)))
+    qtbot.addWidget(dialog)
+    return dialog
+
+
+def _shown(dialog):
+    return [k for k, box in dialog.field_boxes.items() if not box.isHidden()]
+
+
+def test_results_hidden_until_generation_and_consent_starts_unticked(qtbot):
+    dialog = _dialog_for(qtbot, ["youtube"])
+    assert not dialog.opt_in_box.isChecked()
+    assert dialog.results.isHidden() and not dialog.placeholder.isHidden()
+    assert all(section.isHidden() for section in dialog.sections.values())
+    assert "Source Snapshot — Read-only" in [lab.text().replace("<b>", "").replace("</b>", "")
+                                             for lab in dialog.findChildren(QLabel)]
+    assert not dialog.apply_btn.isEnabled()
+
+
+def test_youtube_only_shows_and_applies_only_youtube_fields(qtbot):
+    dialog = _dialog_for(qtbot, ["youtube"])
+    dialog.populate_proposal(SYNTHETIC_PROPOSAL)
+    assert list(dialog.sections) == ["youtube"]
+    assert _shown(dialog) == ["title", "description", "tags"]
+    assert "hashtags" not in dialog.editors
+    dialog._accept_proposal()
+    assert dialog.proposal == {k: SYNTHETIC_PROPOSAL[k] for k in ("title", "description", "tags")}
+
+
+def test_youtube_and_instagram_group_by_platform_with_shared_hashtags(qtbot):
+    dialog = _dialog_for(qtbot, ["instagram", "youtube"])
+    dialog.populate_proposal(SYNTHETIC_PROPOSAL)
+    assert [k for k, s in dialog.sections.items() if not s.isHidden()] == ["youtube", "instagram", "_shared"]
+    assert set(_shown(dialog)) == {"title", "description", "tags", "instagram_text", "hashtags"}
+    dialog._accept_proposal()
+    assert set(dialog.proposal) == {"title", "description", "tags", "instagram_text", "hashtags"}
+
+
+def test_bluesky_only_counts_graphemes_and_threads_only_flags_hashtags(qtbot):
+    bluesky = _dialog_for(qtbot, ["bluesky"])
+    bluesky.populate_proposal(SYNTHETIC_PROPOSAL)
+    assert _shown(bluesky) == ["bluesky_text"]
+    assert "graphemes · PASS" in bluesky.counters["bluesky_text"].text()
+
+    threads = _dialog_for(qtbot, ["threads"])
+    threads.populate_proposal(SYNTHETIC_PROPOSAL)
+    assert _shown(threads) == ["threads_text"]
+    threads._set_field_text("threads_text", "Short post #tag")
+    assert "remove #" in threads.counters["threads_text"].text()
+    assert not threads.apply_btn.isEnabled()
+
+
+def test_no_destination_selected_blocks_generation(qtbot):
+    called = []
+    dialog = _dialog_for(qtbot, [], generate_fn=lambda **_kw: called.append(1) or SYNTHETIC_PROPOSAL)
+    dialog.opt_in_box.setChecked(True)
+    assert not dialog.run_btn.isEnabled()
+    dialog._run()
+    assert called == []
+    assert "at least one destination" in dialog.status.text().lower()
+
+
+def test_empty_returned_field_is_hidden_and_never_applied(qtbot):
+    partial = dict(SYNTHETIC_PROPOSAL, tags="", description="   ")
+    dialog = _dialog_for(qtbot, ["youtube"])
+    dialog.populate_proposal(partial)
+    assert _shown(dialog) == ["title"]
+    dialog._accept_proposal()
+    assert dialog.proposal == {"title": SYNTHETIC_PROPOSAL["title"]}
+
+
+def test_regeneration_failure_keeps_previous_result_visible(qtbot, monkeypatch):
+    monkeypatch.delenv("REELAY_CLOUD_AI_OPT_IN", raising=False)
+    gate, started = threading.Event(), threading.Event()
+
+    def failing(**_kw):
+        started.set()
+        gate.wait(10)
+        raise RepurposeNetworkError("Simulated timeout")
+
+    dialog = _dialog_for(qtbot, ["youtube"], generate_fn=failing)
+    dialog.populate_proposal(SYNTHETIC_PROPOSAL)
+    dialog.opt_in_box.setChecked(True)
+    dialog._run()
+    qtbot.waitUntil(started.is_set, timeout=2000)
+    assert not dialog.busy_bar.isHidden()
+    assert dialog._get_field_text("title") == SYNTHETIC_PROPOSAL["title"]
+    assert not dialog.apply_btn.isEnabled()
+    gate.set()
+    qtbot.waitUntil(lambda: not dialog._busy, timeout=3000)
+    assert dialog.busy_bar.isHidden()
+    assert dialog._get_field_text("title") == SYNTHETIC_PROPOSAL["title"]
+    assert "previous proposal is unchanged" in dialog.status.text()
+    assert dialog.apply_btn.isEnabled()
+
+
+def test_launch_button_fits_at_narrow_inspector_width(qtbot, tmp_path):
+    panel = PostPanel(ThumbnailCache(tmp_path / "thumbs"))
+    qtbot.addWidget(panel)
+    panel.resize(340, 900)
+    panel.show()
+    qtbot.wait(20)
+    btn = panel.repurpose_btn
+    assert btn.width() >= btn.sizeHint().width(), "Muse Spark button is narrower than its text"
+    assert btn.fontMetrics().horizontalAdvance(btn.text()) < btn.width()
