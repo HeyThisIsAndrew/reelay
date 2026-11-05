@@ -3,7 +3,7 @@
 **Hackathon Feature:** Meta Global AI Developer Hackathon — Startup Track (Build for Your World)  
 **Date Built:** November 4, 2026  
 **Author:** Andrew Baxter  
-**Model:** Meta `muse-spark-1.3` (Meta Model API `https://api.meta.ai/v1`, Standard non-contributor tier)
+**Model:** Meta Muse Spark (`muse-spark-1.3`) via the Meta Model API (`https://api.meta.ai/v1`, Standard non-contributor tier)
 
 ---
 

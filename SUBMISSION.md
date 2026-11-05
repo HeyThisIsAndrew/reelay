@@ -11,6 +11,16 @@
 
 ---
 
+## Built with Meta Muse Spark
+
+* Live chat-completion calls to `muse-spark-1.3` through the Meta Model API (`https://api.meta.ai/v1/chat/completions`), made from `reelay/repurpose_engine.py`.
+* One proposal returns nine copy fields for six platforms (YouTube, TikTok, Instagram, Bluesky, Threads, and Facebook) plus shared hashtags.
+* If a field is over its platform limit or contains an em dash, the engine asks Muse Spark for a targeted rewrite of that field instead of truncating it.
+* Every request requires creator consent first: Cloud AI is off by default and the dialog consent box starts unticked.
+* The creator reviews the proposal and applies it to the ticket editor, and nothing is saved until Save Changes.
+
+---
+
 ## 1. The Problem ("Build for Your World")
 
 Recording a video finishes only part of a creator's publishing work. The same ideas still need different titles, descriptions, captions, and tags across six networks (YouTube, TikTok, Instagram, Bluesky, Threads, and Facebook), each with its own measurement rules: UTF-8 bytes for YouTube descriptions, graphemes for Bluesky, characters elsewhere. That means six rewrites under conflicting limits. Doing them by hand takes time, while generic AI copy loses the creator's voice, invents unsupported claims, or gets cut off mid-sentence.
@@ -19,7 +29,7 @@ Recording a video finishes only part of a creator's publishing work. The same id
 
 ## 2. Solution & Startup Thesis
 
-Reelay brings Meta Muse Spark (`muse-spark-1.3`) directly into a local-first desktop video workflow for independent educators and technical creators.
+Reelay brings Muse Spark (`muse-spark-1.3`) directly into a local-first desktop video workflow for independent educators and technical creators.
 
 * **The ticket is the unit of work.** Each video in Reelay already has a ticket with its title, description, notes, transcript, and the creator's brand voice.
 * **`RepurposeDialog` is the human approval surface.** It shows a read-only Source Snapshot of exactly what will be sent, and a double approval gate: *Apply to Ticket* fills the ticket editor in memory, then *Save Changes* writes it to SQLite.
@@ -75,7 +85,7 @@ Everything up to and including the `pre-hackathon` tag (`f93d360`): feature work
 * Local loopback Agent API at `127.0.0.1:8471` (`reelay/api.py`, `reelay/scoped_pipeline.py`).
 
 ### Built on November 4, 2026 (`pre-hackathon...hackathon-all-nov4`)
-The diff touches **14 files** (+3,293 / −4 lines): **10 net-new files** plus **4 modified pre-existing files**. The feature and review integration are accompanied by maintenance fixes for source-listing metadata handover and date ordering; those fixes are distinguished below.
+The diff touches **14 files** (+3,305 / −4 lines): **10 net-new files** plus **4 modified pre-existing files**. The feature and review integration are accompanied by maintenance fixes for source-listing metadata handover and date ordering; those fixes are distinguished below.
 
 Net-new:
 * `reelay/repurpose_engine.py`: Meta Model API client for `muse-spark-1.3`, prompt construction and transcript isolation, Threads hashtag migration, `FIELD_LIMITS` validation with targeted rewrites (no truncation), keychain key lookup/setup CLI, and a review runner.
@@ -105,6 +115,8 @@ python3.13 -m venv .venv
 ```
 
 **AI-assisted development:** parts of this build were written with AI coding assistants (Claude Code and ChatGPT) under Andrew's direction. Commits made through Claude Code are marked with `Co-Authored-By` lines.
+
+Final branding and documentation pass done with Meta Muse in the terminal.
 
 ---
 
