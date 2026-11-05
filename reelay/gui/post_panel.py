@@ -285,22 +285,33 @@ class PostPanel(QFrame):
         self.none_note.setProperty("faint", True)
         self.none_note.setWordWrap(True)
         lay.addWidget(self.none_note)
-        repurpose_row = QHBoxLayout()
-        repurpose_row.setSpacing(8)
+        from .icons import icon as _icon
+        from .theme import P as _pal
+        self.repurpose_card = QFrame(objectName="Card")
+        rc = QVBoxLayout(self.repurpose_card)
+        rc.setContentsMargins(12, 10, 12, 12)
+        rc.setSpacing(6)
         self.repurpose_label = QLabel("Repurpose")
-        self.repurpose_label.setProperty("muted", True)
-        repurpose_row.addWidget(self.repurpose_label)
-        repurpose_row.addStretch()
+        self.repurpose_label.setStyleSheet("font-weight: 700;")
+        rc.addWidget(self.repurpose_label)
+        hint = QLabel("Draft copy for the platforms ticked above. You approve before anything is saved.")
+        hint.setProperty("faint", True)
+        hint.setWordWrap(True)
+        rc.addWidget(hint)
         self.repurpose_btn = tip(
-            QPushButton("Muse Spark"),
+            QPushButton("Repurpose with Muse Spark"),
             "Draft copy for the platforms ticked in Posting to with Meta Muse Spark. "
             "You review and edit it before anything reaches this ticket.",
         )
-        set_prop(self.repurpose_btn, "primary")
-        self.repurpose_btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)   # never squeezed or clipped
+        self.repurpose_btn.setIcon(_icon("sparkles", 16, _pal.text_primary))
+        self.repurpose_btn.setStyleSheet(
+            f"QPushButton {{ background: {_pal.accent_soft}; border: 1px solid {_pal.accent_ring}; "
+            f"border-radius: 10px; padding: 8px 12px; font-weight: 700; color: {_pal.text_primary}; }}"
+            f"QPushButton:hover {{ border-color: {_pal.accent_color}; }}")
+        self.repurpose_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)   # full width, never clipped
         self.repurpose_btn.clicked.connect(self._repurpose)
-        repurpose_row.addWidget(self.repurpose_btn)
-        lay.addLayout(repurpose_row)
+        rc.addWidget(self.repurpose_btn)
+        lay.addWidget(self.repurpose_card)
         fill_row = QHBoxLayout()
         self.fill_btn = tip(QPushButton("Fill Empty from Original Post"),
                             "Fill this ticket's empty boxes from the original caption, within each platform's "
@@ -844,8 +855,7 @@ class PostPanel(QFrame):
         for block in self.blocks.values():   # copy stays copyable; edits wait until it's unscheduled
             block.set_read_only(locked)
         self.fill_btn.setVisible(not locked)
-        self.repurpose_btn.setVisible(not locked)
-        self.repurpose_label.setVisible(not locked)
+        self.repurpose_card.setVisible(not locked)
         self.form.setVisible(not locked)
         self.save_btn.setVisible(not locked)
         self.upload_btn.setVisible(not locked)

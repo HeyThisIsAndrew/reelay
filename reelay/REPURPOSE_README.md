@@ -118,7 +118,7 @@ Reelay adheres strictly to creator agency: **AI proposes, human decides**.
 ```
 [ Reelay Video Ticket (PostPanel) ]
           │
-          ▼ (Click Repurpose · "Muse Spark")
+          ▼ (Click "Repurpose with Muse Spark")
 [ RepurposeDialog + CallWorker (muse-spark-1.3) ]
           │
           ▼ (Proposal Dict: 9 fields in memory with PASS badges)
@@ -133,7 +133,7 @@ Launch the desktop app directly:
 ```bash
 ./.venv/bin/python -m reelay
 ```
-1. The creator selects a video card on the Board, ticks the destinations under **Posting to**, and clicks **Muse Spark** in the **Repurpose** row of `PostPanel`.
+1. The creator selects a video card on the Board, ticks the destinations under **Posting to**, and clicks **Repurpose with Muse Spark** in the **Repurpose** card of `PostPanel`.
 2. `RepurposeDialog` opens, displays the Cloud AI transparency disclosure (`DISCLOSURE_TEXT`), an explicit opt-in checkbox, and a read-only **Source Snapshot** showing the exact title, description, notes, transcript, and brand voice guidance being sent.
 3. Clicking **"Generate Proposal"** requires the consent checkbox to be checked (an unchecked box blocks generation even if `REELAY_CLOUD_AI_OPT_IN=1` is set in the environment) and runs `generate_repurpose_proposal` on a background `CallWorker` thread without blocking cancel/close.
 4. The engine returns all 9 fields; the dialog shows only the selected destinations' non-empty fields, grouped by platform, in editable boxes with live `FIELD_LIMITS` counters and `PASS` badges. Consent starts unticked each time the dialog opens.

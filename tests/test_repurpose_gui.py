@@ -76,7 +76,7 @@ def test_repurpose_button_present_in_post_panel(qtbot, tmp_path):
     panel = PostPanel(ThumbnailCache(tmp_path / "thumbs"))
     qtbot.addWidget(panel)
     assert hasattr(panel, "repurpose_btn")
-    assert panel.repurpose_btn.text() == "Muse Spark"
+    assert panel.repurpose_btn.text() == "Repurpose with Muse Spark"
     assert panel.repurpose_label.text() == "Repurpose"
     assert "Meta Muse Spark" in panel.repurpose_btn.toolTip()
 
