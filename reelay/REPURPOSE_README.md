@@ -104,7 +104,7 @@ python -m reelay.repurpose_engine \
 ```
 
 ### Dry-Run Test (No API Key Required)
-Run the automated test suite (47 tests) verifying schema, limit validation, privacy opt-in gate, GUI dialog, and error handling:
+Run the automated test suite (49 tests) verifying schema, limit validation, privacy opt-in gate, GUI dialog, and error handling:
 ```bash
 pytest tests/test_repurpose_engine.py tests/test_privacy.py tests/test_repurpose_gui.py -v
 ```

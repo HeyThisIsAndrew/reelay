@@ -232,6 +232,40 @@ def test_closing_input_tag_escaped_case_insensitively():
     assert escaped == "a < /INPUT_TRANSCRIPT> b < /Input_Transcript> c < /input_notes> d < /input_title>"
 
 
+@patch("reelay.repurpose_engine._call_meta_model")
+def test_em_dash_triggers_rewrite_and_rule_is_in_both_prompts(mock_call):
+    """An em dash in any field is rejected and rewritten; the no-em-dash rule is in both prompts."""
+    payload = dict(SAMPLE_VALID_PAYLOAD)
+    payload["bluesky_text"] = "One video \u2014 six platforms."
+    mock_call.side_effect = [json.dumps(payload), json.dumps({"bluesky_text": "One video, six platforms."})]
+
+    proposal = generate_repurpose_proposal(
+        title="Title \u2014 with a dash", description="Desc", api_key="test-key-mock", opt_in=True,
+    )
+
+    assert proposal["bluesky_text"] == "One video, six platforms."
+    assert all("\u2014" not in v for v in proposal.values())
+    first_system = mock_call.call_args_list[0][0][0][0]["content"]
+    rewrite_msgs = mock_call.call_args_list[1][0][0]
+    assert "Never use em dashes" in first_system
+    assert "Never use em dashes" in rewrite_msgs[0]["content"]
+    assert "Never use em dashes" in rewrite_msgs[1]["content"]
+    assert "Title \u2014 with a dash" in mock_call.call_args_list[0][0][0][1]["content"], "source left unaltered"
+
+
+@patch("reelay.repurpose_engine._call_meta_model")
+def test_em_dash_that_survives_rewrite_is_rejected_not_stripped(mock_call):
+    payload = dict(SAMPLE_VALID_PAYLOAD)
+    payload["threads_text"] = "Built today \u2014 shipped tonight."
+    mock_call.side_effect = [json.dumps(payload), json.dumps({"threads_text": "Still \u2014 here."})]
+
+    with pytest.raises(RepurposeValidationError) as exc_info:
+        generate_repurpose_proposal(title="T", description="D", api_key="test-key-mock", opt_in=True)
+
+    assert "em dash" in str(exc_info.value)
+    assert "threads_text" in exc_info.value.field_errors
+
+
 # ---------------------------------------------------------------------- Key Management Tests
 def test_env_var_wins_over_keychain(monkeypatch):
     """When both env var and keychain store a key, env var wins."""

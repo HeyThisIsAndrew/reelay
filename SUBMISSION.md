@@ -44,7 +44,8 @@ The **Repurpose Engine** (`reelay/repurpose_engine.py`) sends a ticket's title, 
 2. **Limit checks without truncation:**
    * Every field is validated against Reelay's configured platform-limit registry, `reelay.platform_specs.FIELD_LIMITS`.
    * Copy is never mechanically cut. If a field is over its limit, the engine asks Muse Spark for a targeted shorter rewrite of that field. If the rewrite is still over the limit, the engine stops with a clear validation error instead of returning over-limit or chopped copy.
-3. **Threads editorial policy:** Any `#tags` in `threads_text` are moved automatically into the shared `hashtags` field, both after the first draft and again after any shorter rewrite.
+3. **No em dashes:** the prompts tell Muse Spark never to use em dashes (U+2014). Any field that still contains one is sent back for one targeted rewrite, and rejected with a clear error if it still has one. Nothing is silently deleted, and the source text is never altered.
+4. **Threads editorial policy:** Any `#tags` in `threads_text` are moved automatically into the shared `hashtags` field, both after the first draft and again after any shorter rewrite.
 4. **Voice and source safeguards:**
    * The creator's brand voice guidance is sent with every request.
    * The system prompt instructs `muse-spark-1.3` to rely only on the provided source fields and not to invent facts, quotes, products, people, or claims.
@@ -74,7 +75,7 @@ Everything up to and including the `pre-hackathon` tag (`f93d360`): feature work
 * Local loopback Agent API at `127.0.0.1:8471` (`reelay/api.py`, `reelay/scoped_pipeline.py`).
 
 ### Built on November 4, 2026 (`pre-hackathon...hackathon-all-nov4`)
-The diff touches **14 files** (+3,236 / −4 lines): **10 net-new files** plus **4 modified pre-existing files**. The feature and review integration are accompanied by maintenance fixes for source-listing metadata handover and date ordering; those fixes are distinguished below.
+The diff touches **14 files** (+3,293 / −4 lines): **10 net-new files** plus **4 modified pre-existing files**. The feature and review integration are accompanied by maintenance fixes for source-listing metadata handover and date ordering; those fixes are distinguished below.
 
 Net-new:
 * `reelay/repurpose_engine.py`: Meta Model API client for `muse-spark-1.3`, prompt construction and transcript isolation, Threads hashtag migration, `FIELD_LIMITS` validation with targeted rewrites (no truncation), keychain key lookup/setup CLI, and a review runner.
@@ -82,7 +83,7 @@ Net-new:
 * `reelay/gui/repurpose_dialog.py`: The review dialog (disclosure, consent checkbox, Source Snapshot, background `CallWorker` lifecycle, results grouped by the selected destinations with live counters).
 * `reelay/__main__.py`: Lets `python -m reelay` launch the desktop app.
 * `reelay/REPURPOSE_README.md`: Module documentation, CLI reference, and approval workflow.
-* `tests/test_repurpose_engine.py`: 21 tests (schema normalization, `FIELD_LIMITS` validation, rewrite-instead-of-truncate including fenced-JSON rewrites, Threads hashtag migration including after a rewrite and without duplicates, keychain fallback, hidden-prompt setup, case-insensitive transcript tag escaping).
+* `tests/test_repurpose_engine.py`: 23 tests (no em dashes in generated copy, schema normalization, `FIELD_LIMITS` validation, rewrite-instead-of-truncate including fenced-JSON rewrites, Threads hashtag migration including after a rewrite and without duplicates, keychain fallback, hidden-prompt setup, case-insensitive transcript tag escaping).
 * `tests/test_privacy.py`: 6 tests (off by default, blocked when disabled, blocked with no store/opt-in/env var, allowed after opt-in, environment override, disclosure completeness).
 * `tests/test_repurpose_gui.py`: 20 tests (button present and fitting at a narrow panel width, `python -m reelay` entry point, disclosure and unchecked-consent blocking, Source Snapshot fidelity, non-blocking cancel, Apply disabled during regeneration, stale-ticket protection, SQLite check that nothing is saved before Save Changes, edit/apply/regenerate after a background run completes, YouTube-only / YouTube + Instagram / Bluesky-only / Threads-only / no-destination reviews, unselected and empty fields left untouched, and failed regeneration keeping the previous result).
 * `SUBMISSION.md`: This write-up.
@@ -94,7 +95,7 @@ Modified:
 * `reelay/gui/table_model.py` (+10): maintenance fix keeping unknown dates last in both date-sort directions.
 * `reelay/gui/accounts_page.py` (+2 / −1): maintenance fix so the Accounts page's hidden "sign-in not available yet" notes no longer pop up as empty windows at launch.
 
-**Repurpose Engine, privacy, and GUI suites: 47 tests** (21 engine, 6 privacy, 20 GUI), no API key or network required. The listing maintenance suite adds **5 regression cases**.
+**Repurpose Engine, privacy, and GUI suites: 49 tests** (23 engine, 6 privacy, 20 GUI), no API key or network required. The listing maintenance suite adds **5 regression cases**.
 
 **Local runtime note:** repeated listings produced a native crash on Python 3.14.0 (root cause not yet established). Run Reelay on Python 3.13 (tested with 3.13.7 and PySide6 6.11.2):
 
@@ -132,7 +133,7 @@ The engine uses `requests` for HTTP. `requests` is **not listed directly** in `p
   --transcript "Hey everyone, today we are looking at how Reelay runs locally on Mac while using Meta Muse Spark for six-platform copy generation." \
   --brand-voice "Direct, technical builder tone; clear and grounded."
 
-# 5. Run the hackathon tests (47 tests, no API key or network required)
+# 5. Run the hackathon tests (49 tests, no API key or network required)
 ./.venv/bin/pytest tests/test_repurpose_engine.py tests/test_privacy.py tests/test_repurpose_gui.py -v
 #    Listing maintenance regression cases (5 tests)
 ./.venv/bin/pytest tests/test_listing_refresh.py -v
