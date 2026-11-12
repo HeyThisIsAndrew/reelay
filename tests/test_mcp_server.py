@@ -11,11 +11,16 @@ Verifies Streamable HTTP / JSON-RPC endpoints:
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
+
 import pytest
 import requests
 
 from reelay.api import ApiServer, create_app
 from tests.fakes import make_world
+
+# Always in the future, so the "scheduled_at is in the past" check never trips as the calendar moves on.
+FUTURE = (datetime.now(timezone.utc) + timedelta(days=30)).strftime("%Y-%m-%dT15:00:00Z")
 
 
 def test_mcp_auth_and_host_validation(tmp_path, monkeypatch):
@@ -175,7 +180,7 @@ def test_mcp_tool_execution_reads_and_consequential_approval_gating(tmp_path, mo
                     "arguments": {
                         "video_id": video_id,
                         "platform": "youtube",
-                        "publish_at": "2026-11-10T15:00:00Z",
+                        "publish_at": FUTURE,
                     },
                 },
             },
@@ -237,7 +242,7 @@ def test_paired_token_is_mcp_only_and_calls_are_tagged_with_the_client(tmp_path,
             "jsonrpc": "2.0", "id": 2, "method": "tools/call",
             "params": {"name": "reelay_schedule_post",
                        "arguments": {"video_id": video_id, "platform": "youtube",
-                                     "publish_at": "2026-11-10T15:00:00Z"}}})
+                                     "publish_at": FUTURE}}})
         approval_id = sched.json()["result"]["approval_id"]
         assert world.store.get_approval(approval_id).requested_by == "mcp:Claude Code"
     finally:
