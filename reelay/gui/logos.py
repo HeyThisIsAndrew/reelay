@@ -156,8 +156,21 @@ def _snapchat(p: QPainter, s: float) -> None:
     p.drawPath(ghost)
 
 
+def _local(p: QPainter, s: float) -> None:
+    """A video made on this computer (not downloaded from a platform): a small laptop."""
+    p.setRenderHint(QPainter.Antialiasing)
+    ink = QColor("#3a3a3a")
+    p.setPen(QPen(ink, max(1.0, s * 0.09)))
+    p.setBrush(Qt.NoBrush)
+    p.drawRoundedRect(QRectF(s * 0.17, s * 0.2, s * 0.66, s * 0.46), s * 0.06, s * 0.06)
+    p.setPen(Qt.NoPen)
+    p.setBrush(ink)
+    p.drawRoundedRect(QRectF(s * 0.06, s * 0.72, s * 0.88, s * 0.1), s * 0.04, s * 0.04)
+
+
 DRAW = {"youtube": _youtube, "youtube_shorts": _youtube_shorts, "tiktok": _tiktok, "instagram": _instagram,
-        "bluesky": _bluesky, "threads": _threads, "facebook": _facebook, "snapchat": _snapchat}
+        "bluesky": _bluesky, "threads": _threads, "facebook": _facebook, "snapchat": _snapchat,
+        "local": _local}
 
 
 @lru_cache(maxsize=64)

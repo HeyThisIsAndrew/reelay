@@ -64,7 +64,8 @@ def source_badge(item: VideoItem, cover: QPixmap | None = None) -> tuple[str, st
     if key == "youtube" and short:
         key = "youtube_shorts"
     form = "Short" if short else "Long-form"
-    parts = [f"From {item.platform or 'an unknown platform'}", form, resolution_label(item)]
+    origin = "Made on this computer" if key == "local" else f"From {item.platform or 'an unknown platform'}"
+    parts = [origin, form, resolution_label(item)]
     return key, " · ".join(p for p in parts if p)
 
 

@@ -101,6 +101,15 @@ class MainWindow(QMainWindow):
         self.settings_page.themeChosen.connect(self.set_theme)
         self.settings_page.editProfileRequested.connect(self.edit_profile)
 
+        # A finished video from this computer: drop it anywhere in the window, or Library → Add Video Files…
+        from .local_drop import LocalImporter
+        self.local_import = LocalImporter(store, lambda: self.profile, self)
+        self.setAcceptDrops(True)
+        QApplication.instance().installEventFilter(self.local_import)
+        self.download.addFilesRequested.connect(lambda: self.local_import.choose(self))
+        self.local_import.imported.connect(self._on_local_imported)
+        self.local_import.failed.connect(lambda msg: self.download._set_status(f"Couldn't add the video: {msg}"))
+
         geo = QSettings().value("geometry")
         if geo is not None:
             self.restoreGeometry(geo)
@@ -292,6 +301,17 @@ class MainWindow(QMainWindow):
         dialog = RecoveryDialog(self.services.pipeline, held, self)
         dialog.exec()
         self.board.reload()
+
+    def _on_local_imported(self, row_ids: list, message: str) -> None:
+        """New tickets from files: show them on the Board with the first one open."""
+        self.download.reload()
+        self.download._set_status(message)
+        if not row_ids:
+            return
+        self.go("board")
+        self.board.selected_id = row_ids[0]
+        self.board._reselect()
+        self.board._status(message)
 
     def go(self, key: str) -> None:
         page = self.pages.get(key, self.download)

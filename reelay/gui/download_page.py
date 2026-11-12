@@ -149,6 +149,7 @@ class DownloadPage(QWidget):
     videosChanged = Signal()        # downloads finished / files renamed (board should reload)
     busyChanged = Signal(bool)
     openAccounts = Signal()
+    addFilesRequested = Signal()    # Add Video Files…: the main window brings them in (local_drop.py)
 
     def __init__(self, store: Store, thumbs: ThumbnailCache, accounts: AccountService | None = None, parent=None):
         super().__init__(parent)
@@ -284,6 +285,11 @@ class DownloadPage(QWidget):
         set_prop(self.fetch_btn, "primary")
         tip(self.fetch_btn, "Show every video from this link below. Nothing is downloaded until you click Download.")
         il.addWidget(self.fetch_btn)
+        self.add_files_btn = QPushButton("Add Video Files…")
+        tip(self.add_files_btn, "Bring in a finished video from this computer (or drop it anywhere on Reelay): it "
+                                "becomes a ticket on the Board. A caption file with the same name (.srt, .vtt or "
+                                ".txt) next to it becomes the transcript.")
+        il.addWidget(self.add_files_btn)
         outer.addWidget(intake)
         self.doors_note = muted("Only import media you own or have permission to manage.", "faint")
         tip(self.doors_note, "Downloading pulls videos in from these sources; posting pushes videos out to the "
@@ -743,6 +749,7 @@ class DownloadPage(QWidget):
 
     def _connect(self) -> None:
         self.fetch_btn.clicked.connect(self._fetch)
+        self.add_files_btn.clicked.connect(self.addFilesRequested.emit)
         self.url.returnPressed.connect(self._fetch)
         self.source_btn.clicked.connect(self.open_sources)
         self.url.textChanged.connect(self._sync_source_button)
