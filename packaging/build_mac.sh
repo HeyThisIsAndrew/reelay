@@ -102,6 +102,11 @@ if [ -n "$NOTARIZE" ]; then
   rm -f "$ZIP"
 fi
 
+if [ -n "${REELAY_SKIP_DMG:-}" ]; then   # scripts/build_local.sh --no-dmg: the .app is all /Applications needs
+  echo "Built: $APP (no .dmg: REELAY_SKIP_DMG is set)"
+  exit 0
+fi
+
 # Stage the .app next to an Applications shortcut, then compress into a .dmg.
 STAGE=$(mktemp -d)
 cp -R "$APP" "$STAGE/"

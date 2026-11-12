@@ -3,3 +3,4 @@ pytest>=8
 pytest-qt>=4.4
 pyyaml>=6  # api/openapi.yaml contract
 pyinstaller>=6.10
+pytest-xdist>=3.6  # optional: pytest -n auto runs the suite in parallel
