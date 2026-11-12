@@ -28,12 +28,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterable, Iterator
 
-from .models import (TICKET_FIELDS, Account, ApprovalRequest, BrandProfile, Dispatch, DispatchStatus, ManualPost, Post, PostStatus, Profile,
+from .models import (EMOJI_LEVELS, TICKET_FIELDS, Account, ApprovalRequest, BrandProfile, Dispatch, DispatchStatus, ManualPost, Post, PostStatus, Profile,
                      Revision, Source, Ticket, VideoItem, VideoRow)
 
 log = logging.getLogger("reelay")
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 # Post fields whose edits are logical metadata commits (logged as revisions).
 # Status, remote ids and errors are publishing state, tracked by dispatches.
@@ -322,6 +322,14 @@ _MIGRATIONS: dict[int, str] = {
         updated_at TEXT NOT NULL,
         UNIQUE (video_row, platform)
     );
+    """,
+    11: """
+    -- Voice profiles drive the Repurpose Engine: emoji use, hashtag style, call to action, and a footer added
+    -- (never written by the model) to the end of every YouTube description, e.g. socials and gear links.
+    ALTER TABLE brand_profiles ADD COLUMN emoji TEXT NOT NULL DEFAULT '';
+    ALTER TABLE brand_profiles ADD COLUMN hashtag_style TEXT NOT NULL DEFAULT '';
+    ALTER TABLE brand_profiles ADD COLUMN cta TEXT NOT NULL DEFAULT '';
+    ALTER TABLE brand_profiles ADD COLUMN footer TEXT NOT NULL DEFAULT '';
     """,
 }
 
@@ -702,17 +710,20 @@ class Store:
         with self.tx() as c:
             if brand.active:
                 c.execute("UPDATE brand_profiles SET active=0 WHERE profile_id=?", (brand.profile_id,))
+            brand.emoji = brand.emoji.strip() if brand.emoji.strip() in EMOJI_LEVELS else ""
             values = (brand.name, brand.tone.strip(), brand.avoid.strip(), brand.hashtags.strip(),
-                      brand.guidance.strip(), int(brand.active), now)
+                      brand.guidance.strip(), brand.emoji, brand.hashtag_style.strip(), brand.cta.strip(),
+                      brand.footer.strip(), int(brand.active), now)
             if brand.id is None:
                 brand.created_at = now
-                cur = c.execute("INSERT INTO brand_profiles (name, tone, avoid, hashtags, guidance, active, "
-                                "updated_at, profile_id, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
-                                (*values, brand.profile_id, now))
+                cur = c.execute("INSERT INTO brand_profiles (name, tone, avoid, hashtags, guidance, emoji, "
+                                "hashtag_style, cta, footer, active, updated_at, profile_id, created_at) "
+                                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", (*values, brand.profile_id, now))
                 brand.id = cur.lastrowid
             else:
-                c.execute("UPDATE brand_profiles SET name=?, tone=?, avoid=?, hashtags=?, guidance=?, active=?, "
-                          "updated_at=? WHERE id=?", (*values, brand.id))
+                c.execute("UPDATE brand_profiles SET name=?, tone=?, avoid=?, hashtags=?, guidance=?, emoji=?, "
+                          "hashtag_style=?, cta=?, footer=?, active=?, updated_at=? WHERE id=?",
+                          (*values, brand.id))
         self._emit("brand", (brand.id,), brand.profile_id)
         return brand
 
@@ -730,7 +741,9 @@ class Store:
     @staticmethod
     def _brand(row) -> BrandProfile:
         return BrandProfile(profile_id=row["profile_id"], name=row["name"], tone=row["tone"], avoid=row["avoid"],
-                            hashtags=row["hashtags"], guidance=row["guidance"], active=bool(row["active"]),
+                            hashtags=row["hashtags"], guidance=row["guidance"], emoji=row["emoji"],
+                            hashtag_style=row["hashtag_style"], cta=row["cta"], footer=row["footer"],
+                            active=bool(row["active"]),
                             id=row["id"], created_at=row["created_at"], updated_at=row["updated_at"])
 
     # ================================================================ settings

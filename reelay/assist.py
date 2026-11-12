@@ -36,6 +36,8 @@ from dataclasses import dataclass, field
 
 import requests
 
+from .models import EMOJI_LEVELS
+
 DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434"
 DEFAULT_MODEL = "llama3.2:3b"
 SETTINGS = {"engine": "assist.engine", "ollama_url": "assist.ollama_url", "model": "assist.model",
@@ -191,8 +193,15 @@ def system_prompt(brand) -> str:
     if words:
         lines.append("Never use these words or phrases: " + ", ".join(f"“{w}”" for w in words) + ".")
     if brand.hashtags.strip():
-        lines.append(f"Their usual hashtags are {brand.hashtags.strip()}. When a caption needs hashtags, prefer "
-                     "these over inventing new ones.")
+        lines.append(f"Their usual hashtags are {brand.hashtags.strip()}. Use one only when it fits what this "
+                     "video is about; otherwise pick specific hashtags for this video's own topic and products.")
+    if getattr(brand, "hashtag_style", "").strip():
+        lines.append(f"Hashtag style: {brand.hashtag_style.strip()}.")
+    emoji = getattr(brand, "emoji", "")
+    if emoji in EMOJI_LEVELS:
+        lines.append(f"Emoji: {EMOJI_LEVELS[emoji]}")
+    if getattr(brand, "cta", "").strip():
+        lines.append(f"Call to action: {brand.cta.strip()}.")
     if brand.guidance.strip():
         lines.append("More about how they write:\n" + brand.guidance.strip())
     return "\n".join(lines)

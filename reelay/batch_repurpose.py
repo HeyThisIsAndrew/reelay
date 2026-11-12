@@ -43,6 +43,7 @@ from .privacy import (
 from .repurpose_engine import (
     DEFAULT_BASE_URL,
     DEFAULT_MODEL,
+    DEFAULT_TIMEOUT,
     RepurposeAPIError,
     RepurposeConfigError,
     RepurposeError,
@@ -226,6 +227,16 @@ def extract_source_snapshot(
         "transcript": source_transcript,
         "brand_voice": resolved_brand_voice,
     })
+
+
+def _accepts(fn, name: str) -> bool:
+    """Whether a generate function takes a keyword (test doubles may not take `voice`)."""
+    import inspect
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+    return name in params or any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
 
 
 # ---------------------------------------------------------------------- BatchJob Dataclass
@@ -462,7 +473,7 @@ class BatchRepurposeQueue:
         api_key: str | None = None,
         model: str = DEFAULT_MODEL,
         base_url: str = DEFAULT_BASE_URL,
-        timeout: float = 60.0,
+        timeout: float = DEFAULT_TIMEOUT,
         allow_refinement: bool = True,
         token_store: TokenStore | None = None,
         generate_fn: Callable[..., dict[str, str]] | None = None,
@@ -470,6 +481,7 @@ class BatchRepurposeQueue:
         on_ticket_status: TicketCallback | None = None,
         on_batch_progress: BatchProgressCallback | None = None,
         on_batch_finished: BatchFinishedCallback | None = None,
+        fetch_transcripts: bool | None = None,
     ) -> None:
         """Initializes the BatchRepurposeQueue.
 
@@ -504,6 +516,9 @@ class BatchRepurposeQueue:
         self.allow_refinement = allow_refinement
         self.token_store = token_store
         self._generate_fn = generate_fn or generate_repurpose_proposal
+        # Get missing transcripts from the original posts' captions before drafting. On by default with the
+        # real engine; off with an injected generate_fn (tests), unless asked for.
+        self.fetch_transcripts = (generate_fn is None) if fetch_transcripts is None else bool(fetch_transcripts)
         self._variant_generator = variant_generator
 
         # Callbacks
@@ -785,6 +800,25 @@ class BatchRepurposeQueue:
 
         # 4. Generate proposal with strict failure isolation
         try:
+            # What the video says comes first: fetch captions when the ticket has none and the video is posted
+            # somewhere that has them. Then the profile's voice (rules, banned phrases, footer).
+            extra: dict[str, Any] = {}
+            row = None
+            if self.store is not None and hasattr(self.store, "get_video"):
+                try:
+                    row = self.store.get_video(job.ticket_id)
+                except Exception:  # noqa: BLE001
+                    row = None
+            if row is not None and not job.source_snapshot.get("transcript", "").strip() and self.fetch_transcripts:
+                from .transcripts import fetch_and_save
+                fetched = fetch_and_save(self.store, job.ticket_id)
+                if fetched:
+                    job.source_snapshot["transcript"] = fetched
+            if row is not None and hasattr(self.store, "active_brand_profile") and _accepts(self._generate_fn,
+                                                                                              "voice"):
+                voice = self.store.active_brand_profile(row.profile_id)
+                if voice is not None:
+                    extra["voice"] = voice
             proposal = self._generate_fn(
                 title=job.source_snapshot.get("title", ""),
                 description=job.source_snapshot.get("description", ""),
@@ -799,6 +833,7 @@ class BatchRepurposeQueue:
                 opt_in=self.opt_in,
                 timeout=self.timeout,
                 allow_refinement=self.allow_refinement,
+                **extra,
             )
 
             # Optional variant generation hook

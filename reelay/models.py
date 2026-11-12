@@ -441,6 +441,14 @@ class VideoRow:
     archived_at: str | None = None    # hidden from the board and Download list (files and history kept)
 
 
+EMOJI_LEVELS = {
+    "none": "No emoji at all.",
+    "sparing": "At most one or two emoji in a post, only where they carry meaning (for example as a section "
+               "marker); none in titles.",
+    "natural": "Emoji where they feel natural, never more than one per sentence and never a row of them.",
+}
+
+
 @dataclass
 class BrandProfile:
     """How a creator or brand sounds, for the local AI helper (Settings → Brand voice)."""
@@ -449,7 +457,11 @@ class BrandProfile:
     tone: str = ""        # e.g. "warm, encouraging, a little playful"
     avoid: str = ""       # words or phrases never to use, comma separated
     hashtags: str = ""    # default hashtags, e.g. "#livingood #healing"
-    guidance: str = ""    # anything else: audience, example captions, emoji habits
+    guidance: str = ""    # anything else: audience, example captions that sound exactly right
+    emoji: str = ""       # "" (no rule) | none | sparing | natural  (EMOJI_LEVELS)
+    hashtag_style: str = ""   # e.g. "3 to 5 specific tags; #Shorts first on Shorts; none on Threads"
+    cta: str = ""         # the call to action, e.g. "end with one real question for the comments"
+    footer: str = ""      # added to the end of every YouTube description as written (socials, gear links)
     active: bool = False
     id: int | None = None
     created_at: str = ""

@@ -85,6 +85,16 @@ def counter_text(key: str, text: str) -> tuple[str, bool]:
     return f"{shown} · {'⚠ OVER LIMIT' if over else 'PASS'}", over
 
 
+def _accepts(fn, name: str) -> bool:
+    """Whether a generate function takes a keyword (test doubles may not take `voice`)."""
+    import inspect
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+    return name in params or any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
+
+
 class RepurposeDialog(QDialog):
     """Modal proposal review dialog for Meta Muse Spark (muse-spark-1.3).
 
@@ -109,6 +119,7 @@ class RepurposeDialog(QDialog):
         brand_voice: str = "",
         generate_fn=None,
         platforms: list[str] | None = None,
+        fetch_transcripts: bool = False,      # with an injected generate_fn (tests); the real engine always does
     ):
         super().__init__(parent)
         self.setWindowTitle("Repurpose with Muse Spark")
@@ -161,13 +172,21 @@ class RepurposeDialog(QDialog):
             ]
             self.source_notes = " · ".join(parts)
 
+        self.voice = None          # the profile's voice in use (models.BrandProfile): rules, banned phrases, footer
+        if store is not None and row is not None and hasattr(store, "active_brand_profile"):
+            self.voice = store.active_brand_profile(row.profile_id)
         if brand_voice.strip():
             self.brand_voice = brand_voice.strip()
-        elif store is not None and row is not None and hasattr(store, "active_brand_profile"):
-            brand = store.active_brand_profile(row.profile_id)
-            self.brand_voice = assist.system_prompt(brand) if brand else ""
         else:
-            self.brand_voice = ""
+            self.brand_voice = assist.system_prompt(self.voice) if self.voice else ""
+        # No transcript yet, but the video is posted somewhere with captions: get them before drafting, so the
+        # draft is about what the video says (transcripts.py). None = nothing to fetch from.
+        self._transcript_fetch = None
+        source_url = (getattr(ticket, "source_url", "") or getattr(item, "url", "") or "") if row else ""
+        if (not self.source_transcript and source_url and store is not None and hasattr(store, "update_ticket")
+                and (generate_fn is None or fetch_transcripts)):
+            from ..transcripts import fetch_and_save
+            self._transcript_fetch = lambda row_id=row.id: fetch_and_save(store, row_id)
 
         self._source_snapshot: dict[str, str] = {
             "title": self.source_title,
@@ -560,7 +579,16 @@ class RepurposeDialog(QDialog):
         elif self._has_result:
             self.status.setText("Proposal ready. Review or edit, then click Apply to Ticket.")
         else:
-            self.status.setText("Tick “Allow Muse Spark” above, then click Generate Proposal.")
+            self.status.setText("Tick “Allow Muse Spark” above, then click Generate Proposal." + self._transcript_note())
+
+    def _transcript_note(self) -> str:
+        """Drafts are written from what the video says; say plainly when that isn't available."""
+        if self.source_transcript:
+            return ""
+        if self._transcript_fetch is not None:
+            return " The transcript will be fetched from the original post's captions first."
+        return (" This video has no transcript, so the draft can only use the title and notes: paste one into "
+                "the ticket's Transcript field first for a draft about what you actually say.")
 
     def _on_opt_in_toggled(self, checked: bool) -> None:
         if self.store is not None:
@@ -672,12 +700,17 @@ class RepurposeDialog(QDialog):
         set_prop(self.status, "danger", False)
         self.status.setText(
             "Asking Meta Muse Spark… the previous proposal stays here until the new one arrives."
-            if self._has_result else "Asking Meta Muse Spark… this can take up to a minute."
+            if self._has_result else "Asking Meta Muse Spark… a full draft usually takes about a minute."
         )
 
+        fetch_transcript = self._transcript_fetch if not snapshot["transcript"] else None
+        extra = {"voice": self.voice} if self.voice is not None and _accepts(self._generate_fn, "voice") else {}
+
         def work() -> dict[str, str]:
+            if fetch_transcript is not None:
+                snapshot["transcript"] = fetch_transcript()
             try:
-                return self._generate_fn(
+                result = self._generate_fn(
                     title=snapshot["title"],
                     description=snapshot["description"],
                     notes=snapshot["notes"],
@@ -685,9 +718,11 @@ class RepurposeDialog(QDialog):
                     brand_voice=snapshot["brand_voice"],
                     store=self.store,
                     opt_in=True,
+                    **extra,
                 )
             except (RepurposeError, PrivacyOptInRequiredError) as exc:
                 raise AssistError(str(exc)) from None
+            return {**result, "__transcript__": snapshot["transcript"]} if fetch_transcript else result
 
         worker = CallWorker(work, parent=None)
         RepurposeDialog._in_flight_workers.add(worker)
@@ -708,6 +743,12 @@ class RepurposeDialog(QDialog):
         if self._closed or req_id != self._active_request_id:
             return
         self.worker = None
+        result = dict(result)
+        fetched = result.pop("__transcript__", None)
+        if fetched:                      # the captions came in with this run: keep them for the next one
+            self.source_transcript = fetched
+            self._source_snapshot["transcript"] = fetched
+            self._transcript_fetch = None
         self.populate_proposal(result)
 
     def _on_worker_failed(self, req_id: int, message: str) -> None:

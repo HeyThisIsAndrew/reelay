@@ -33,6 +33,7 @@ from .tokens import TokenStore
 from .repurpose_engine import (
     DEFAULT_BASE_URL,
     DEFAULT_MODEL,
+    DEFAULT_TIMEOUT,
     EM_DASH,
     EM_DASH_ERROR,
     EM_DASH_RULE,
@@ -562,7 +563,7 @@ def generate_variants(
     token_store: TokenStore | None = None,
     store: Any | None = None,
     opt_in: bool | None = None,
-    timeout: float = 60.0,
+    timeout: float = DEFAULT_TIMEOUT,
     allow_refinement: bool = True,
     strict: bool = True,
 ) -> ProposalWithVariants:

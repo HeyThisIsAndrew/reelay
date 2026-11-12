@@ -555,3 +555,40 @@ def test_launch_button_fits_at_narrow_inspector_width(qtbot, tmp_path):
     btn = panel.repurpose_btn
     assert btn.width() >= btn.sizeHint().width(), "Muse Spark button is narrower than its text"
     assert btn.fontMetrics().horizontalAdvance(btn.text()) < btn.width()
+
+
+def test_a_missing_transcript_is_fetched_first_and_the_voice_is_passed(qtbot, tmp_path, monkeypatch):
+    """Drafts are written from what the video says: captions are fetched before the draft when the ticket has
+    none, kept on the ticket, and the profile's voice (rules, banned phrases, footer) goes to the engine."""
+    from reelay import transcripts
+    from reelay.models import BrandProfile
+    monkeypatch.setenv("REELAY_CLOUD_AI_OPT_IN", "1")
+    store = Store(tmp_path / "t.db")
+    profile = store.create_profile("Hey This Is Andrew", tmp_path / "lib")
+    ids = store.save_videos(profile.id, [VideoItem(platform="YouTube", video_id="abc", title="Lens",
+                                                   url="https://www.youtube.com/shorts/abc")])
+    row = store.get_video(ids["YouTube_abc"])
+    store.save_brand_profile(BrandProfile(profile_id=profile.id, name="Andrew", emoji="none", active=True))
+    monkeypatch.setattr(transcripts, "fetch_transcript", lambda url, opts: ("what I actually said", {}))
+    seen = {}
+
+    def fake_generate(**kwargs):
+        seen.update(kwargs)
+        return SYNTHETIC_PROPOSAL
+    card = SimpleNamespace(row=row, post=None)
+    dialog = RepurposeDialog(card, store, generate_fn=fake_generate, fetch_transcripts=True)
+    qtbot.addWidget(dialog)
+    assert "fetched from the original post's captions" in dialog.status.text()
+    dialog.opt_in_box.setChecked(True)
+    dialog._run()
+    qtbot.waitUntil(lambda: dialog._has_result, timeout=3000)
+    assert seen["transcript"] == "what I actually said" and seen["voice"].name == "Andrew"
+    assert store.get_video(row.id).ticket.transcript == "what I actually said"
+    assert dialog.source_transcript == "what I actually said"
+    store.close()
+
+
+def test_no_transcript_and_nowhere_to_get_one_is_said_plainly(qtbot):
+    dialog = RepurposeDialog(store={}, title="A new edit", generate_fn=lambda **_kw: SYNTHETIC_PROPOSAL)
+    qtbot.addWidget(dialog)
+    assert "no transcript" in dialog.status.text() and "Transcript field" in dialog.status.text()

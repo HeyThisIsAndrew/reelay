@@ -1,12 +1,14 @@
-"""Settings → Brand voice: how the local AI helper should sound for this creator."""
+"""Settings → Brand voice: how Repurpose drafts and the AI helper should sound for this creator."""
 
 from __future__ import annotations
+
+from pathlib import Path
 
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QFormLayout, QFrame, QHBoxLayout, QLabel, QLineEdit,
                                QMessageBox, QPlainTextEdit, QPushButton, QVBoxLayout)
 
 from .. import assist
-from ..models import BrandProfile
+from ..models import EMOJI_LEVELS, BrandProfile
 from .theme import set_prop
 from .tips import tip
 
@@ -37,8 +39,17 @@ class BrandVoiceCard(QFrame):
         self.delete_btn = tip(QPushButton("Delete"), "Delete this voice")
         set_prop(self.delete_btn, "flat")
         self.delete_btn.clicked.connect(self._delete)
+        self.import_btn = tip(QPushButton("Import…"), "Add a voice from a Reelay voice file (.json)")
+        set_prop(self.import_btn, "flat")
+        self.import_btn.clicked.connect(self._import)
+        self.export_btn = tip(QPushButton("Export…"), "Save this voice as a file, to use it on another computer "
+                                                       "or profile")
+        set_prop(self.export_btn, "flat")
+        self.export_btn.clicked.connect(self._export)
         top.addWidget(self.picker, 1)
         top.addWidget(new)
+        top.addWidget(self.import_btn)
+        top.addWidget(self.export_btn)
         top.addWidget(self.delete_btn)
         lay.addLayout(top)
         form = QFormLayout()
@@ -55,10 +66,30 @@ class BrandVoiceCard(QFrame):
                                               "captions that sound exactly right")
         self.guidance.setPlaceholderText("Audience, emoji habits, example captions that sound like you…")
         self.guidance.setFixedHeight(90)
+        self.emoji = tip(QComboBox(), "How many emoji drafts may use. “None” removes any the AI adds.")
+        self.emoji.addItem("No rule", "")
+        self.emoji.addItem("None", "none")
+        self.emoji.addItem("Sparing (one or two, never in titles)", "sparing")
+        self.emoji.addItem("Natural", "natural")
+        self.hashtag_style = tip(QLineEdit(), "How many hashtags and where, e.g. “3 to 5 specific tags, #Shorts "
+                                              "first on Shorts, none on Threads”")
+        self.hashtag_style.setPlaceholderText("e.g. 3 to 5 specific tags, #Shorts first on Shorts")
+        self.cta = tip(QLineEdit(), "How posts end, e.g. “one real question for the comments; never ask to like "
+                                    "or subscribe”")
+        self.cta.setPlaceholderText("e.g. end with one real question for the comments")
+        self.footer = tip(QPlainTextEdit(), "Added exactly as written to the end of every YouTube description "
+                                            "Repurpose drafts: socials, gear links, an affiliate note. The AI "
+                                            "never writes or changes it.")
+        self.footer.setPlaceholderText("Socials, gear and affiliate links for the end of YouTube descriptions")
+        self.footer.setFixedHeight(90)
         form.addRow("Name", self.name)
         form.addRow("Preferred tone", self.tone)
         form.addRow("Words to avoid", self.avoid)
+        form.addRow("Emoji", self.emoji)
         form.addRow("Default hashtags", self.hashtags)
+        form.addRow("Hashtag style", self.hashtag_style)
+        form.addRow("Call to action", self.cta)
+        form.addRow("YouTube footer", self.footer)
         form.addRow("More guidance", self.guidance)
         lay.addLayout(form)
         brow = QHBoxLayout()
@@ -88,9 +119,10 @@ class BrandVoiceCard(QFrame):
         active = self.store.get_setting("active_profile")
         self.profile_id = int(active) if active.isdigit() else None
         profile = self.store.get_profile(self.profile_id) if self.profile_id else None
-        self.intro.setText(f"How {profile.name if profile else 'this profile'} sounds. The Assist ▾ menu's "
-                           "rewrites follow it, so captions sound like you, not like generic AI. Stays on this "
-                           "computer.")
+        self.intro.setText(f"How {profile.name if profile else 'this profile'} sounds. Repurpose drafts and the "
+                           "Assist ▾ menu's rewrites follow it, so captions sound like you, not like generic AI. "
+                           "It's saved on this computer and sent only with the requests you make to the AI "
+                           "provider you set up.")
         brands = self.store.list_brand_profiles(self.profile_id) if self.profile_id else []
         keep = select_id if select_id is not None else (self.brand.id if self.brand else None)
         self.picker.blockSignals(True)
@@ -115,8 +147,13 @@ class BrandVoiceCard(QFrame):
         self.avoid.setText(b.avoid)
         self.hashtags.setText(b.hashtags)
         self.guidance.setPlainText(b.guidance)
+        self.emoji.setCurrentIndex(max(0, self.emoji.findData(b.emoji if b.emoji in EMOJI_LEVELS else "")))
+        self.hashtag_style.setText(b.hashtag_style)
+        self.cta.setText(b.cta)
+        self.footer.setPlainText(b.footer)
         self.active.setChecked(b.active)
         self.delete_btn.setEnabled(self.brand is not None)
+        self.export_btn.setEnabled(self.brand is not None)
         self.status.setText("")
 
     def _new(self) -> None:
@@ -125,9 +162,11 @@ class BrandVoiceCard(QFrame):
         self.picker.addItem("New voice (not saved)", None)
         self.picker.setCurrentIndex(self.picker.count() - 1)
         self.picker.blockSignals(False)
-        for w in (self.name, self.tone, self.avoid, self.hashtags):
+        for w in (self.name, self.tone, self.avoid, self.hashtags, self.hashtag_style, self.cta):
             w.clear()
         self.guidance.clear()
+        self.footer.clear()
+        self.emoji.setCurrentIndex(0)
         self.active.setChecked(not self.store.active_brand_profile(self.profile_id) if self.profile_id else True)
         self.delete_btn.setEnabled(False)
         self.name.setFocus()
@@ -136,7 +175,9 @@ class BrandVoiceCard(QFrame):
         b = self.brand or BrandProfile(profile_id=self.profile_id or 0, name="")
         return BrandProfile(profile_id=b.profile_id, name=self.name.text(), tone=self.tone.text(),
                             avoid=self.avoid.text(), hashtags=self.hashtags.text(),
-                            guidance=self.guidance.toPlainText(), active=self.active.isChecked(), id=b.id,
+                            guidance=self.guidance.toPlainText(), emoji=self.emoji.currentData() or "",
+                            hashtag_style=self.hashtag_style.text(), cta=self.cta.text(),
+                            footer=self.footer.toPlainText(), active=self.active.isChecked(), id=b.id,
                             created_at=b.created_at)
 
     def save(self) -> None:
@@ -162,6 +203,36 @@ class BrandVoiceCard(QFrame):
         self.store.delete_brand_profile(self.brand.id)
         self.brand = None
         self.refresh()
+
+    def _import(self) -> None:
+        from PySide6.QtWidgets import QFileDialog
+
+        from ..voices import VoiceFileError, import_voice
+        if not self.profile_id:
+            return
+        path, _ = QFileDialog.getOpenFileName(self, "Import a Voice", "", "Reelay voice (*.json)")
+        if not path:
+            return
+        try:
+            brand = import_voice(self.store, self.profile_id, path)
+        except VoiceFileError as exc:
+            self.status.setText(str(exc))
+            return
+        self.refresh(select_id=brand.id)
+        self.status.setText(f"Imported “{brand.name}”." + ("" if brand.active else
+                                                           " Tick “Use this voice” and save to use it."))
+
+    def _export(self) -> None:
+        from PySide6.QtWidgets import QFileDialog
+
+        from ..voices import export_voice
+        if not self.brand:
+            return
+        path, _ = QFileDialog.getSaveFileName(self, "Export Voice", f"{self.brand.name}.json",
+                                              "Reelay voice (*.json)")
+        if path:
+            export_voice(self.brand, path)
+            self.status.setText(f"Saved “{self.brand.name}” to {Path(path).name}.")
 
     def _show_prompt(self) -> None:
         text = assist.system_prompt(self.current()) or "Nothing yet: fill in the form."

@@ -113,3 +113,25 @@ def fetch_transcript(url: str, ydl_opts: dict, ydl_factory=None) -> tuple[str, d
     if not text:
         raise TranscriptError("The captions for this post are empty.")
     return text, track
+
+
+def fetch_and_save(store, row_id: int, ydl_opts: dict | None = None, fetch=None) -> str:
+    """Before drafting: when a ticket has no transcript but its video is posted somewhere with captions, get
+    them and save them as the transcript. Returns the text ("" when there is nothing to get). Never raises:
+    a missing transcript is never a reason not to draft."""
+    try:
+        row = store.get_video(row_id)
+        if row is None or (row.ticket.transcript or "").strip():
+            return (row.ticket.transcript or "") if row else ""
+        url = row.ticket.source_url or row.item.url
+        if not url:
+            return ""
+        if ydl_opts is None:
+            from .ytdl import base_options
+            ydl_opts = base_options(None)
+        text, _track = (fetch or fetch_transcript)(url, ydl_opts)
+    except Exception:  # noqa: BLE001
+        return ""
+    if text:
+        store.update_ticket(row_id, {"transcript": text})
+    return text
