@@ -258,3 +258,25 @@ class Lease:
             tmp.replace(self.path)
         except OSError:
             tmp.unlink(missing_ok=True)
+
+
+def backup_to(src: Path | str, dest: Path | str) -> Path:
+    """A consistent copy of the database (SQLite's backup API, so anything still in the WAL is included), made
+    private to this user. Used by scripts/build_local.sh before installing a version that may migrate it.
+
+    Opened read-write on purpose: a WAL database can't be opened read-only when its -shm file is gone, which is
+    exactly the state after Reelay quits cleanly."""
+    src, dest = Path(src), Path(dest)
+    if not src.is_file():
+        raise FileNotFoundError(src)
+    source = sqlite3.connect(src, timeout=10)
+    try:
+        target = sqlite3.connect(dest)
+        try:
+            source.backup(target)
+        finally:
+            target.close()
+    finally:
+        source.close()
+    os.chmod(dest, 0o600)
+    return dest

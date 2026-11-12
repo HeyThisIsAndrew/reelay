@@ -90,14 +90,8 @@ DB="$DATA_DIR/reelay.db"
 if [ -f "$DB" ]; then
   BACKUP="$DATA_DIR/reelay-backup-$(date +%Y-%m-%d-%H%M%S)-$COMMIT.db"
   echo "==> Backing up the database to $(basename "$BACKUP")"
-  "$PYTHON" -I - "$DB" "$BACKUP" <<'PY'
-import sqlite3, sys
-src = sqlite3.connect(f"file:{sys.argv[1]}?mode=ro", uri=True)
-dst = sqlite3.connect(sys.argv[2])
-src.backup(dst)          # consistent copy, including anything still in the WAL
-dst.close(); src.close()
-PY
-  chmod 600 "$BACKUP"
+  "$PYTHON" -c 'import sys; from reelay.dblocation import backup_to; backup_to(sys.argv[1], sys.argv[2])' \
+    "$DB" "$BACKUP"
 fi
 
 # ---- 6. install
