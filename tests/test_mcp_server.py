@@ -78,6 +78,8 @@ def test_mcp_initialize_and_tools_list(tmp_path, monkeypatch):
         assert res.status_code == 200
         data = res.json()
         assert data["result"]["serverInfo"]["name"] == "reelay-mcp"
+        from reelay import __version__
+        assert data["result"]["serverInfo"]["version"] == __version__     # one version for the whole app
         assert "tools" in data["result"]["capabilities"]
 
         # 2. Tools list

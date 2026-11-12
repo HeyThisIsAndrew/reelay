@@ -19,6 +19,7 @@ from typing import Any, Callable
 from fastapi import APIRouter, Header, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from . import __version__
 from .scoped_pipeline import ApprovalPending, ScopedPipeline
 
 log = logging.getLogger("reelay.mcp")
@@ -370,7 +371,7 @@ def create_mcp_router(
                     "id": rpc_id,
                     "result": {
                         "protocolVersion": MCP_PROTOCOL_VERSION,
-                        "serverInfo": {"name": "reelay-mcp", "version": "0.5.0"},
+                        "serverInfo": {"name": "reelay-mcp", "version": __version__},
                         "capabilities": {
                             "tools": {"listChanged": False},
                         },
