@@ -33,7 +33,7 @@ from .models import (EMOJI_LEVELS, TICKET_FIELDS, Account, ApprovalRequest, Bran
 
 log = logging.getLogger("reelay")
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 # Post fields whose edits are logical metadata commits (logged as revisions).
 # Status, remote ids and errors are publishing state, tracked by dispatches.
@@ -330,6 +330,19 @@ _MIGRATIONS: dict[int, str] = {
     ALTER TABLE brand_profiles ADD COLUMN hashtag_style TEXT NOT NULL DEFAULT '';
     ALTER TABLE brand_profiles ADD COLUMN cta TEXT NOT NULL DEFAULT '';
     ALTER TABLE brand_profiles ADD COLUMN footer TEXT NOT NULL DEFAULT '';
+    """,
+    12: """
+    -- YouTube API data is refreshed or cleared within 30 days (youtube_retention.py), so record when it was
+    -- fetched. Older rows don't know: a channel's details date from when it was connected, and a video listed
+    -- through the Data API (the only source of `availability`) from when it was first imported. Both are
+    -- the earliest the data could be from, so it's refreshed early rather than late.
+    ALTER TABLE accounts ADD COLUMN api_fetched_at TEXT;
+    UPDATE accounts SET api_fetched_at = connected_at WHERE platform = 'youtube';
+    UPDATE videos SET data = json_set(data,
+            '$.api_fields', json('["title","description","upload_date","duration","view_count","like_count","comment_count","tags","uploader","thumbnail_url","availability"]'),
+            '$.api_fetched_at', coalesce(imported_at, updated_at))
+        WHERE platform = 'YouTube' AND coalesce(json_extract(data, '$.availability'), '') != ''
+          AND coalesce(json_extract(data, '$.api_fetched_at'), '') = '';
     """,
 }
 
@@ -921,11 +934,13 @@ class Store:
         with self.tx() as c:
             c.execute(
                 "INSERT INTO accounts (profile_id, platform, external_id, display_name, handle, avatar_url, "
-                "connected_at) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(profile_id, platform, external_id) "
+                "connected_at, api_fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(profile_id, platform, external_id) "
                 "DO UPDATE SET display_name=excluded.display_name, handle=excluded.handle, "
-                "avatar_url=excluded.avatar_url",
+                "avatar_url=excluded.avatar_url, "
+                "api_fetched_at=COALESCE(excluded.api_fetched_at, accounts.api_fetched_at)",
                 (account.profile_id, account.platform, account.external_id, account.display_name,
-                 account.handle, account.avatar_url, account.connected_at))
+                 account.handle, account.avatar_url, account.connected_at, account.api_fetched_at))
         row = self.conn.execute("SELECT id FROM accounts WHERE profile_id=? AND platform=? AND external_id=?",
                                 (account.profile_id, account.platform, account.external_id)).fetchone()
         account.id = row["id"]
@@ -945,6 +960,20 @@ class Store:
         account = self.get_account(account_id)
         self._emit("account", (account_id,), account.profile_id if account else None)
 
+    def youtube_accounts(self) -> list[Account]:
+        """Every connected YouTube channel, in every profile."""
+        rows = self.conn.execute("SELECT * FROM accounts WHERE platform = 'youtube' ORDER BY id").fetchall()
+        return [self._account(r) for r in rows]
+
+    def set_account_api_data(self, account_id: int, display_name: str, handle: str, avatar_url: str,
+                             fetched_at: str | None) -> None:
+        """Replace a channel's details from the YouTube Data API (fetched_at None: they were cleared)."""
+        with self.tx() as c:
+            c.execute("UPDATE accounts SET display_name=?, handle=?, avatar_url=?, api_fetched_at=? WHERE id=?",
+                      (display_name, handle, avatar_url, fetched_at, account_id))
+        account = self.get_account(account_id)
+        self._emit("account", (account_id,), account.profile_id if account else None)
+
     def account_in_use_elsewhere(self, account: Account) -> bool:
         """Is the same remote account connected in another profile (shares its token)?"""
         row = self.conn.execute("SELECT COUNT(*) FROM accounts WHERE platform=? AND external_id=? AND id != ?",
@@ -956,7 +985,7 @@ class Store:
         return Account(id=row["id"], profile_id=row["profile_id"], platform=row["platform"],
                        external_id=row["external_id"], display_name=row["display_name"],
                        handle=row["handle"], avatar_url=row["avatar_url"], connected_at=row["connected_at"],
-                       last_verified_at=row["last_verified_at"])
+                       last_verified_at=row["last_verified_at"], api_fetched_at=row["api_fetched_at"])
 
     # ================================================================ videos
     def save_videos(self, profile_id: int, items: Iterable[VideoItem],
@@ -990,6 +1019,39 @@ class Store:
         if ids:
             self._emit("video", ids.values(), profile_id)
         return ids
+
+    def videos_with_youtube_api_data(self) -> list[VideoRow]:
+        """Every stored video (any profile, archived too) holding fields from the YouTube Data API."""
+        rows = self.conn.execute("SELECT * FROM videos WHERE coalesce(json_extract(data, '$.api_fetched_at'), "
+                                 "'') != '' ORDER BY profile_id, id").fetchall()
+        return [self._video_row(r) for r in rows]
+
+    def replace_youtube_api_data(self, row_id: int,
+                                 update: Callable[[VideoItem], VideoItem | None]) -> VideoItem | None:
+        """Refresh or clear a video's YouTube API fields (see youtube_retention.py).
+
+        `update` gets the video as stored right now (so edits made meanwhile aren't lost) and returns the
+        new item, or None to leave it. The ticket's creator and original publish date were copied from
+        the API at import; they follow the new values only while they still equal the old ones, so a
+        creator's own edits are kept. Returns the item written, or None."""
+        row = self.conn.execute("SELECT data FROM videos WHERE id=?", (row_id,)).fetchone()
+        if row is None:
+            return None
+        old = VideoItem.from_record(json.loads(row["data"]))
+        item = update(old)
+        if item is None:
+            return None
+        new_creator, old_creator = item.uploader or None, old.uploader or None
+        new_date, old_date = upload_date_iso(item.upload_date), upload_date_iso(old.upload_date)
+        with self.tx() as c:
+            c.execute(
+                "UPDATE videos SET data=?, updated_at=?, "
+                "creator = CASE WHEN creator IS ? THEN ? ELSE creator END, "
+                "original_publish_date = CASE WHEN original_publish_date IS ? THEN ? ELSE original_publish_date "
+                "END WHERE id=?",
+                (json.dumps(item.to_record()), utcnow(), old_creator, new_creator, old_date, new_date, row_id))
+        self._emit("video", (row_id,), self._profile_of_videos([row_id]))
+        return item
 
     def save_video(self, profile_id: int, item: VideoItem) -> int:
         return self.save_videos(profile_id, [item])[item.key]

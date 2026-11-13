@@ -11,6 +11,11 @@ goes in REELAY_AUTH_BROKER_URL.
     REELAY_TIKTOK_CLIENT_ID      (TikTok calls it the client key)
     REELAY_INSTAGRAM_CLIENT_ID / REELAY_THREADS_CLIENT_ID / REELAY_FACEBOOK_CLIENT_ID
     REELAY_AUTH_BROKER_URL       e.g. https://auth.reelay.app
+    REELAY_BLUESKY_CLIENT_ID     the address of Reelay's Bluesky client metadata file
+
+Bluesky needs no app review and no secret: its client ID is the https address of a small JSON file on the
+Reelay website (bluesky_oauth.CLIENT_ID_URL). It stays empty, so "Sign in with Bluesky" stays hidden, until that
+file is live; then set BLUESKY_CLIENT_ID below to bluesky_oauth.CLIENT_ID_URL.
 
 Until a value is filled in, that platform keeps its current setup (your own
 Google project, App Passwords, pasted tokens).
@@ -33,6 +38,7 @@ DEFAULTS: dict[str, str] = {
     "INSTAGRAM_CLIENT_ID": "",
     "THREADS_CLIENT_ID": "",
     "FACEBOOK_CLIENT_ID": "",
+    "BLUESKY_CLIENT_ID": "",      # "https://reelay.app/oauth/bluesky-client-metadata.json" once it's live
     "AUTH_BROKER_URL": "",
 }
 

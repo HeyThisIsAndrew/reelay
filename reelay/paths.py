@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import stat
 import sys
 from pathlib import Path
@@ -79,6 +80,11 @@ def cache_dir() -> Path:
     path = data_dir() / "cache"
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def cover_cache_file(folder: Path, key: str) -> Path:
+    """Where a video's cover image is cached (gui/thumbnails.py), by the video's key."""
+    return Path(folder) / (re.sub(r"[^\w.-]", "_", key) + ".img")
 
 
 def log_dir() -> Path:

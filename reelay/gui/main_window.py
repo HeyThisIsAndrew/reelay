@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import re
 
-from PySide6.QtCore import QSettings, Qt, QTimer, QUrl
+from PySide6.QtCore import QSettings, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QAction, QActionGroup, QColor, QDesktopServices, QKeySequence, QPainter
 from PySide6.QtWidgets import (QApplication, QButtonGroup, QFrame, QHBoxLayout, QLabel, QMainWindow,
                                QMenu, QMessageBox, QPushButton, QStackedWidget, QToolButton, QVBoxLayout, QWidget)
@@ -64,6 +64,8 @@ class BrandStrip(QWidget):
 
 
 class MainWindow(QMainWindow):
+    youtubeDataAged = Signal(list)   # video keys whose stored YouTube API data was refreshed or cleared
+
     def __init__(self, services: Services):
         super().__init__()
         store = services.store
@@ -100,6 +102,11 @@ class MainWindow(QMainWindow):
         self.accounts_page.listLinks.connect(lambda links: (self.go("download"), self.download.fetch_links(links)))
         self.settings_page.themeChosen.connect(self.set_theme)
         self.settings_page.editProfileRequested.connect(self.edit_profile)
+        # The 30-day YouTube data pass runs on its own thread; this signal brings its results to the GUI thread.
+        self.youtubeDataAged.connect(self._on_youtube_data_aged)
+        retention = getattr(services, "youtube_retention", None)
+        if retention is not None:
+            retention.on_changed = lambda report: self.youtubeDataAged.emit(list(report.keys))
 
         # A finished video from this computer: drop it anywhere in the window, or Library → Add Video Files…
         from .local_drop import LocalImporter
@@ -301,6 +308,10 @@ class MainWindow(QMainWindow):
         dialog = RecoveryDialog(self.services.pipeline, held, self)
         dialog.exec()
         self.board.reload()
+
+    def _on_youtube_data_aged(self, keys: list) -> None:
+        self.thumbs.forget(keys)
+        self.download.forget_fetched(keys)
 
     def _on_local_imported(self, row_ids: list, message: str) -> None:
         """New tickets from files: show them on the Board with the first one open."""

@@ -227,8 +227,16 @@ def iso_duration_seconds(value: str | None) -> float | None:
     return float(total) if total else None  # P0D = live / not processed yet
 
 
-def youtube_items(videos: list[dict]) -> list[VideoItem]:
-    """Data API video resources (snippet, contentDetails, statistics, status) → VideoItems."""
+# The VideoItem fields youtube_items() fills from the Data API. They're stored YouTube API data: refreshed or
+# cleared within 30 days (youtube_retention.py). Everything else on a video is the creator's or Reelay's own.
+API_VIDEO_FIELDS = ("title", "description", "upload_date", "duration", "view_count", "like_count",
+                    "comment_count", "tags", "uploader", "thumbnail_url", "availability")
+
+
+def youtube_items(videos: list[dict], fetched_at: str | None = None) -> list[VideoItem]:
+    """Data API video resources (snippet, contentDetails, statistics, status) → VideoItems,
+    stamped with when they were fetched and which fields came from the API."""
+    fetched_at = fetched_at or utcnow()
     items = []
     for v in videos:
         sn, st, stats = v.get("snippet", {}), v.get("status", {}), v.get("statistics", {})
@@ -248,6 +256,10 @@ def youtube_items(videos: list[dict]) -> list[VideoItem]:
             view_count=count("viewCount"), like_count=count("likeCount"), comment_count=count("commentCount"),
             tags=sn.get("tags") or [], uploader=sn.get("channelTitle", ""), thumbnail_url=thumb,
             availability=availability))
+        item = items[-1]
+        item.api_fields = [f for f in API_VIDEO_FIELDS if getattr(item, f) not in (None, "", [])]
+        item.api_fetched_at = fetched_at if item.api_fields else ""
+        item.api_channel_id = sn.get("channelId", "") if item.api_fields else ""
     return items
 
 

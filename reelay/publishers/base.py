@@ -42,6 +42,7 @@ class PublishJob:
     media_url: Callable[[], str] | None = None  # public expiring link (Threads)
     checkpoint: Callable[[str], None] = field(default=lambda _c: None)
     media: object | None = None                 # what the file really is (probe.MediaInfo), when it's known
+    save_credentials: Callable[[dict], None] = field(default=lambda _s: None)   # rotated tokens (Bluesky OAuth)
 
 
 @dataclass

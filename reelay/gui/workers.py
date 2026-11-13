@@ -220,10 +220,11 @@ class CallWorker(QThread):
         from ..transcripts import TranscriptError
         from ..video_tools import VideoToolError
         from ..youtube import YouTubeError
+        from ..oauth import SignInError
         try:
             result = self.fn(*self.args, **self.kwargs)
         except (YouTubeError, PublishError, SheetError, TranscriptError, PipelineError, AssistError,
-                SEOError, VideoToolError) as exc:  # plain, secret-free
+                SEOError, VideoToolError, SignInError) as exc:  # plain, secret-free
             self.failed.emit(str(exc))
         except requests.RequestException as exc:
             self.failed.emit(f"Network problem: {exc}")

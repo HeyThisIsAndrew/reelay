@@ -710,18 +710,21 @@ class PlatformCard(IntegrationCard):
         self.manage_btn = self.add_action(QPushButton("Manage…"))
         tip(self.manage_btn, f"Check or disconnect this profile's {label} accounts, or add another")
         self.manage_btn.clicked.connect(self.open_manage)
+        bluesky = spec.platform == Platform.BLUESKY
+        self.own_text = "Use an App Password Instead…" if bluesky else "Use Your Own App Instead…"
         if self.signin.available:
             # One click with Reelay's app; your own app or token stays available under Advanced Setup.
             self.help_text = (f"Sign in with your {label} account: one click, in your browser. Reelay never sees "
                               f"your password.\n\nAdvanced Setup: {spec.help}")
-            self.connect_btn.setText("Use Your Own App Instead…")
+            self.connect_btn.setText(self.own_text)
             self.advanced = QDialog(self)
             self.advanced.setWindowTitle(f"{label}: Advanced Setup")
             self.advanced.setMinimumWidth(460)
             al = QVBoxLayout(self.advanced)
             al.setContentsMargins(22, 20, 22, 16)
             al.setSpacing(10)
-            al.addWidget(QLabel("Advanced Setup: use my own developer keys", objectName="DetailTitle"))
+            al.addWidget(QLabel("Advanced Setup: connect with an App Password" if bluesky else
+                                "Advanced Setup: use my own developer keys", objectName="DetailTitle"))
             al.addWidget(_label(spec.help, "muted"))
             row = QHBoxLayout()
             row.addWidget(self.connect_btn)
@@ -731,8 +734,9 @@ class PlatformCard(IntegrationCard):
             row.addWidget(done)
             al.addLayout(row)
             self.connect_btn.clicked.connect(self.advanced.accept)
-            self.advanced_btn = self.add_quiet("Advanced Setup…", f"Connect through your own {label} developer "
-                                               "app and keys instead", self.advanced.exec)
+            self.advanced_btn = self.add_quiet(
+                "Advanced Setup…", "Connect with a Bluesky App Password instead" if bluesky else
+                f"Connect through your own {label} developer app and keys instead", self.advanced.exec)
         else:
             self.add_action(self.connect_btn)
             if self.signin.note.text():
@@ -744,7 +748,7 @@ class PlatformCard(IntegrationCard):
 
     def _hint(self) -> str:
         if self.spec.platform == Platform.BLUESKY:
-            return "Posts with an App Password"
+            return "Sign in to attach your account" if self.signin.available else "Posts with an App Password"
         noun = self.NOUN.get(self.spec.platform, "account")
         return (f"Sign in to attach your {noun}" if self.signin.available
                 else f"Connect your {noun} through your own Meta app")
@@ -752,7 +756,7 @@ class PlatformCard(IntegrationCard):
     def refresh(self) -> None:
         from ..flags import env_var, publishing_enabled
         if self.signin.available:   # Reelay's own app: one click; your own app/token stays as a fallback
-            self.connect_btn.setText("Use Your Own App Instead…")
+            self.connect_btn.setText(self.own_text)
             set_prop(self.connect_btn, "primary", False)
         on = publishing_enabled(self.spec.platform, self.page.store)
         self.flag_label.set_full("Automatic posting on" if on else "Automatic posting off")
@@ -841,7 +845,9 @@ class PlatformCard(IntegrationCard):
             return
         report = self._report
         report(f"Checking {account.display_name}…")
-        self.worker = CallWorker(self.spec.publisher().verify, secret, parent=self)
+        extra = {"save": self.page.service.credential_saver(account)} if self.spec.platform == Platform.BLUESKY \
+            else {}                                   # a Bluesky sign-in's tokens rotate when they're refreshed
+        self.worker = CallWorker(self.spec.publisher().verify, secret, parent=self, **extra)
         self.worker.succeeded.connect(lambda _identity: (self.page.store.mark_verified(account.id),
                                                          report(f"{account.display_name} is connected and working."),
                                                          self.refresh()))
@@ -887,7 +893,16 @@ class SignInButton(QPushButton):
         page = self.card.page
         if not page.profile or self.provider is None:
             return
-        dialog = ProviderSignInDialog(self.provider.key, self.window())
+        hint = ""
+        if self.provider.key == "bluesky":    # the handle finds the account's own server (it may not be bsky.social)
+            from PySide6.QtWidgets import QInputDialog
+            hint, ok = QInputDialog.getText(
+                self.window(), "Sign in with Bluesky",
+                "Your Bluesky handle, for example @yourname.bsky.social.\nLeave it empty to choose the account on "
+                "Bluesky's own page.")
+            if not ok:
+                return
+        dialog = ProviderSignInDialog(self.provider.key, self.window(), login_hint=hint.strip())
         dialog.signedIn.connect(self._finish)
         dialog.exec()
 

@@ -105,6 +105,8 @@ It's a native desktop app for macOS (Windows builds included) in a Light, Dark, 
 - Each creator gets a profile with their own library folder, board and connected channels. Switch profiles from the sidebar avatar (or ⌘⌥1–9). **My Channel** (the first profile) opens by default; other profiles stay as they are.
 - You can connect several YouTube channels per profile through Google sign-in. Tokens are kept in the macOS Keychain or Windows Credential Manager, never in files.
 - **Central sign-in** (`oauth.py`, `oauth_config.py`, `server/auth_broker.py`): once Reelay's own apps are registered with each platform (client IDs via `REELAY_*_CLIENT_ID` env or `oauth_config.DEFAULTS`) and the small auth broker is deployed, **Sign in with Google / TikTok / Instagram / Facebook / Threads** buttons appear. They ask only for the permissions a shipped feature uses, and `tests/test_review_scopes.py` keeps them identical to the website's permissions table. Getting each platform's approval is set out step by step in [docs/platform-review.md](docs/platform-review.md). Until then the existing bring-your-own-project setup (YouTube setup guide, Meta tokens, Bluesky App Password) stays exactly as it was.
+- **Sign in with Bluesky** (`bluesky_oauth.py`): Bluesky's own AT Protocol OAuth, with no app review, no secret and no broker. Reelay is a public native client whose client ID is the address of its metadata file, `https://reelay.app/oauth/bluesky-client-metadata.json` (in the website repo's `sites/reelay/public/oauth/`). It finds the account's server from the handle (handle → DID → PDS → authorization server), sends a pushed authorization request with PKCE, opens Bluesky's page in the browser, catches the redirect on `http://127.0.0.1:<port>/callback`, and exchanges the code with DPoP (a fresh ES256 key per sign-in, kept in the Keychain with the tokens). It asks for `atproto transition:generic`, the App Password level of access. Tokens refresh on their own and the rotated ones are saved back; Bluesky ends a sign-in after at most two weeks, and Reelay then asks to sign in again. **Disconnect** revokes the tokens. App Passwords keep working, under **Advanced Setup**.
+  - **Switching it on:** deploy the website so the metadata URL answers `200` with that JSON, then set `"BLUESKY_CLIENT_ID"` in `oauth_config.DEFAULTS` to `https://reelay.app/oauth/bluesky-client-metadata.json` (or export `REELAY_BLUESKY_CLIENT_ID` with it to try it first). Until then the button stays hidden. `tests/test_bluesky_oauth.py` checks the app's metadata against the website's file.
 - **Shared database:** Settings → Data can move the database into Google Drive, Dropbox, iCloud Drive or OneDrive (SQLite backup API, checked copy) or open one a teammate shares. In synced folders it uses a single-file journal, and a heartbeat lock file allows one editor at a time; everyone else is **view only** (no dispatcher, no API, so only one computer posts) and reloads as the file syncs (`dblocation.py`, `gui/shared_db.py`).
 - **Channel Schedule** shows a channel's latest uploads, including private and scheduled ones.
 
@@ -146,7 +148,7 @@ Limits to know about:
 |-----------|----------|---------|-------|
 | YouTube   | ✅ | ✅ Upload + schedule on YouTube (always on) | See the limits above. |
 | Facebook Pages | No | Copy-paste; automatic posting **off by default** (native scheduling when on) | Meta app + App Review (see below). |
-| Bluesky   | No | Copy-paste; automatic posting **off by default** (Reelay posts at the scheduled time when on) | App Password. |
+| Bluesky   | No | Copy-paste; automatic posting **off by default** (Reelay posts at the scheduled time when on) | Sign in with Bluesky (once switched on), or an App Password. |
 | Threads   | No | Copy-paste; automatic posting **off by default** (Reelay posts at the scheduled time when on) | Meta app + App Review, and a public URL (Cloudflare Tunnel). |
 | TikTok    | ✅ | Copy-paste only | TikTok only allows automatic posting from developer apps it has reviewed and approved; without approval, an app can only send private ("Only me") posts or drafts. |
 | Instagram | ✅ Your own profile through the official API (Accounts → Instagram → Advanced Setup); reel and post links for any account | Copy-paste only | Automatic posting needs a Meta app with instagram_business_content_publish that passes App Review. |
@@ -354,7 +356,7 @@ Secrets are only ever in the system keychain (macOS Keychain or Windows Credenti
 |---|---|---|
 | `agent_api_token` | Agent API bearer token (made on first run) | **Settings → AI agents → Make a New Key…** (copies the new one). Or delete the item (`security delete-generic-password -s Reelay -a agent_api_token`) and restart Reelay. `REELAY_API_TOKEN` overrides it. |
 | `youtube:<channel id>` | Google OAuth tokens | **Accounts → Disconnect**, then **Sign in with Google**. |
-| `bluesky:<did>` | Handle + App Password | Revoke the App Password in Bluesky, create a new one, then **Accounts → Connect Bluesky…** (replaces the old one). |
+| `bluesky:<did>` | Sign in with Bluesky: DID, PDS, DPoP-bound tokens and their DPoP key. Or: handle + App Password | **Accounts → Disconnect** (revokes the sign-in), then **Sign in with Bluesky**. For an App Password: revoke it in Bluesky, create a new one, then **Advanced Setup → Use an App Password Instead…** (replaces the old one). |
 | `threads:<user id>` | Threads user access token | Generate a new long-lived token, then **Accounts → Connect Threads…**. |
 | `facebook:<page id>` | Page ID + Page access token | Generate a new Page token, then **Accounts → Connect Facebook…**. |
 
@@ -364,9 +366,11 @@ Secrets are only ever in the system keychain (macOS Keychain or Windows Credenti
 
 - **YouTube:** the Google Cloud steps under *Connecting YouTube* above.
 - **Bluesky:**
-  1. In Bluesky, go to **Settings → Privacy and security → App passwords** and create one.
-  2. In Reelay, click **Accounts → Connect Bluesky…** and enter your handle (the @ is optional) and the App Password. Don't use your main password.
-  3. The account needs a verified email to post video. Bluesky also has daily video upload limits.
+  - With **Sign in with Bluesky** (once it's switched on): click it in **Accounts**, type your handle (the @ is optional; leave it empty to pick the account on Bluesky's page), and approve in the browser. Nothing to create or paste.
+  - With an App Password (always available, under **Advanced Setup**):
+    1. In Bluesky, go to **Settings → Privacy and security → App passwords** and create one.
+    2. In Reelay, click **Accounts → Connect Bluesky…** (or **Advanced Setup → Use an App Password Instead…**) and enter your handle (the @ is optional) and the App Password. Don't use your main password.
+  - Either way, the account needs a verified email to post video. Bluesky also has daily video upload limits.
 - **Threads:**
   1. Create a Meta app at [developers.facebook.com](https://developers.facebook.com/apps) with the **Threads API** use case.
   2. Request `threads_basic` and `threads_content_publish`. Posting for accounts other than your own needs App Review; for your own account, add yourself as a tester.

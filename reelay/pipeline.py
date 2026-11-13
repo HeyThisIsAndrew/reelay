@@ -1300,7 +1300,8 @@ class Pipeline:
         return PublishJob(dispatch=dispatch, post=replace(post, publish_at=dispatch.publish_at), item=row.item,
                           video_path=path, account=account, credentials=credentials, text=text,
                           media_url=media_url, checkpoint=lambda c: self.store.set_checkpoint(dispatch.id, c),
-                          media=cached_probe(self.store, path))    # off the GUI thread, so it may probe now
+                          media=cached_probe(self.store, path),    # off the GUI thread, so it may probe now
+                          save_credentials=self.accounts.credential_saver(account))
 
     # ================================================================ YouTube sync
     def sync_plan(self, profile_id: int) -> SyncPlan:

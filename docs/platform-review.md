@@ -63,8 +63,13 @@ identifiers and recordings that only the owner can make, listed below in the ord
 5. Record the demo (see "Recordings" below) and upload it to YouTube as unlisted.
 6. Submit for verification with the justifications from the website's permissions table.
 7. **Before the YouTube API audit** (the step that lets uploads be public and raises quota): the app must
-   refresh or delete stored YouTube API data within 30 days. It doesn't yet: the site deliberately says so
-   (`YOUTUBE_30_DAY_REFRESH = false`). That's app work to do before applying, then flip the flag.
+   refresh or delete stored YouTube API data within 30 days. **Done.** `reelay/youtube_retention.py` checks at
+   launch, daily and on every account change: data 27 days or older is refreshed through the connected
+   channel, or cleared when the channel isn't connected, the video is gone, or it would pass 30 days.
+   `docs/youtube-data-retention.md` lists which stored fields count (cite it in the audit form). The site
+   flag `YOUTUBE_30_DAY_REFRESH` is `true` on the website's local `reelay-1.0-site` branch (commit 61d7d2d,
+   not pushed). Ship an app build with this change before deploying that, so the site never runs ahead
+   of the app.
 
 ### 3. Meta (Instagram, Threads, Facebook): usually 2 to 6 weeks, business verification first
 

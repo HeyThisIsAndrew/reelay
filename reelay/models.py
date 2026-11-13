@@ -106,6 +106,11 @@ class VideoItem:
     downloaded_at: str = ""
     availability: str = ""         # YouTube listing via the Data API: public | unlisted | private | scheduled
     products: list | None = None   # products tagged on the post (TikTok Shop); None = not looked up yet
+    # YouTube Data API provenance (youtube_retention.py): which fields hold API data, when the oldest of them
+    # was fetched (UTC ISO) and the channel it belongs to. Empty when nothing here came from the API.
+    api_fields: list[str] = field(default_factory=list)
+    api_fetched_at: str = ""
+    api_channel_id: str = ""
     # runtime-only
     checked: bool = True
     status: str = Status.NEW
@@ -163,6 +168,7 @@ class VideoItem:
         def put(attr: str, value) -> None:
             if value not in (None, "", []):
                 setattr(self, attr, value)
+                self._not_from_api(attr)
 
         put("title", info.get("title"))
         put("description", info.get("description"))
@@ -182,15 +188,38 @@ class VideoItem:
             self.url = info["webpage_url"]
 
     def merge_metadata(self, other: VideoItem) -> None:
-        """Copy descriptive metadata (not file/runtime state) from another item."""
+        """Copy descriptive metadata (not file/runtime state) from another item.
+
+        Keeps the YouTube API provenance true: a field copied from an API listing is API data, one copied
+        from anywhere else isn't, and the stamp stays the oldest fetch still held."""
+        own_api, copied_api = set(self.api_fields), set()
         for name in ("title", "description", "upload_date", "duration", "view_count",
                      "like_count", "comment_count", "tags", "uploader", "thumbnail_url",
                      "width", "height", "url"):
             value = getattr(other, name)
             if value not in (None, "", []):
                 setattr(self, name, value)
+                own_api.discard(name)
+                if name in other.api_fields:
+                    copied_api.add(name)
+        if other.availability and "availability" in other.api_fields:
+            self.availability = other.availability
+            own_api.discard("availability")
+            copied_api.add("availability")
+        stamps = ([self.api_fetched_at] if own_api else []) + ([other.api_fetched_at] if copied_api else [])
+        self.api_fields = sorted(own_api | copied_api)
+        self.api_fetched_at = min((s for s in stamps if s), default="") if self.api_fields else ""
+        self.api_channel_id = (other.api_channel_id if copied_api else self.api_channel_id) \
+            if self.api_fields else ""
         if other.products is not None:
             self.products = other.products
+
+    def _not_from_api(self, name: str) -> None:
+        """`name` now holds a value from somewhere other than the YouTube Data API."""
+        if name in self.api_fields:
+            self.api_fields = [f for f in self.api_fields if f != name]
+            if not self.api_fields:
+                self.api_fetched_at = self.api_channel_id = ""
 
     def to_record(self) -> dict:
         return {k: v for k, v in asdict(self).items() if k not in RUNTIME_FIELDS}
@@ -268,6 +297,7 @@ class Account:
     id: int | None = None
     connected_at: str = ""
     last_verified_at: str | None = None
+    api_fetched_at: str | None = None   # YouTube: when the name, handle and picture came from the Data API
 
     @property
     def token_key(self) -> str:

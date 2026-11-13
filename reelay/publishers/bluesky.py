@@ -1,8 +1,15 @@
 """Bluesky (AT Protocol) video posts.
 
+Two ways in, same posting:
+- Sign in with Bluesky (OAuth, bluesky_oauth.py): every PDS call carries the
+  DPoP-bound access token; tokens refresh as needed and the rotated ones are
+  saved back to the Keychain through job.save_credentials.
+- App Password (Advanced Setup, and every account connected before OAuth):
+  createSession as below.
+
 Flow (docs.bsky.app "Uploading video" tutorial + app.bsky.video lexicons):
 1. com.atproto.server.createSession on the entryway with handle + App Password
-   → access JWT, DID and the account's PDS.
+   → access JWT, DID and the account's PDS (OAuth: already in the sign-in).
 2. com.atproto.server.getServiceAuth (aud = did:web:<PDS host>,
    lxm = com.atproto.repo.uploadBlob, 30-minute expiry) → service token.
 3. app.bsky.video.uploadVideo on video.bsky.app (?did=&name=, body = mp4)
@@ -23,7 +30,9 @@ from urllib.parse import urlparse
 
 import requests
 
+from .. import bluesky_oauth
 from ..handles import clean_app_password, clean_handle
+from ..oauth import SignInError
 from ..models import DispatchStatus, Platform
 from ..platform_text import bluesky_facets
 from .base import PermanentError, PublishJob, PublishResult, TransientError, error_from_response, network_error
@@ -46,6 +55,33 @@ def make_tid(now_us: int | None = None) -> str:
         out = _B32[value & 31] + out
         value >>= 5
     return out
+
+
+class _Connection:
+    """The signed-in account: who it is, where its PDS is, and how to call it."""
+
+    def __init__(self, did: str, handle: str, pds: str, secrets: tuple, call, oauth=None, auth=None):
+        self.did, self.handle, self.pds, self.secrets = did, handle, pds.rstrip("/"), tuple(secrets)
+        self._call, self.oauth = call, oauth
+        self.auth = dict(auth or {})          # App Password: the session's Bearer header (OAuth adds its own)
+
+    def pds_call(self, method: str, url: str, **kwargs):
+        if self.oauth is None:
+            return self._call(method, url, self.secrets, **kwargs)
+        try:
+            resp = self.oauth.request(method, url, **kwargs)
+        except SignInError as exc:
+            raise PermanentError(f"Bluesky: {exc}") from None
+        except requests.RequestException as exc:
+            raise network_error(exc, "Bluesky", self.oauth.secrets()) from None
+        self.secrets = tuple(self.secrets) + self.oauth.secrets()
+        return resp
+
+    @property
+    def job_auth(self) -> dict:
+        """Headers for the video service's job status: the App Password session's token, or none for an
+        OAuth sign-in (its token is bound to the PDS, and the status call doesn't need one)."""
+        return {} if self.oauth is not None else self.auth
 
 
 class BlueskyPublisher:
@@ -83,28 +119,46 @@ class BlueskyPublisher:
         return {"accessJwt": data["accessJwt"], "did": data["did"], "handle": data.get("handle", handle),
                 "pds": pds.rstrip("/"), "emailConfirmed": data.get("emailConfirmed")}
 
-    def verify(self, credentials: dict) -> dict:
-        """Live check used by Accounts: returns {"external_id", "display_name", "handle"}."""
+    def connect(self, credentials: dict, save=None) -> _Connection:
+        """Sign in with whatever is saved: an OAuth session (Sign in with Bluesky) or an App Password."""
+        if bluesky_oauth.is_oauth_secret(credentials):
+            try:
+                oauth = bluesky_oauth.OAuthConnection(credentials, http=self.session, save=save)
+            except SignInError as exc:
+                raise PermanentError(f"Bluesky: {exc}") from None
+            return _Connection(oauth.did, oauth.handle, oauth.pds, oauth.secrets(), self._call, oauth)
         s = self.login(credentials["handle"], credentials["app_password"], credentials.get("service") or ENTRYWAY)
-        return {"external_id": s["did"], "display_name": s["handle"], "handle": "@" + s["handle"].lstrip("@")}
+        return _Connection(s["did"], s["handle"], s["pds"], (credentials.get("app_password", ""), s["accessJwt"]),
+                           self._call, auth={"Authorization": f"Bearer {s['accessJwt']}"})
+
+    def verify(self, credentials: dict, save=None) -> dict:
+        """Live check used by Accounts: returns {"external_id", "display_name", "handle"}. Nothing is posted.
+        `save` receives rotated tokens when an OAuth sign-in had to refresh."""
+        conn = self.connect(credentials, save)
+        if conn.oauth is not None:
+            resp = conn.pds_call("GET", f"{conn.pds}/xrpc/com.atproto.server.getSession")
+            if resp.status_code != 200:
+                if resp.status_code in (400, 401):
+                    raise PermanentError(f"Bluesky: {bluesky_oauth.EXPIRED}")
+                raise error_from_response(resp, "Bluesky", conn.secrets)
+            handle = str(_json(resp).get("handle") or conn.handle)
+            return {"external_id": conn.did, "display_name": handle, "handle": "@" + handle.lstrip("@")}
+        return {"external_id": conn.did, "display_name": conn.handle, "handle": "@" + conn.handle.lstrip("@")}
 
     # ---------------------------------------------------------------- publish
     def publish(self, job: PublishJob) -> PublishResult:
-        creds = job.credentials
-        secrets = (creds.get("app_password", ""),)
         state = json.loads(job.dispatch.checkpoint) if job.dispatch.checkpoint else {}
-        session = self.login(creds["handle"], creds["app_password"], creds.get("service") or ENTRYWAY)
-        did, pds, jwt = session["did"], session["pds"], session["accessJwt"]
-        auth = {"Authorization": f"Bearer {jwt}"}
-        secrets = secrets + (jwt,)
+        conn = self.connect(job.credentials, job.save_credentials)
+        did, pds = conn.did, conn.pds
+        session = {"did": did, "handle": conn.handle}
 
         rkey = state.get("rkey")
-        if rkey and self._record_exists(pds, did, rkey, auth, secrets):
+        if rkey and self._record_exists(conn, rkey):
             return self._result(session, rkey)
 
         blob = state.get("blob")
         if not blob:
-            blob = self._upload_video(job, did, pds, auth, secrets)
+            blob = self._upload_video(job, conn)
             state["blob"] = blob
             job.checkpoint(json.dumps(state))
 
@@ -125,25 +179,26 @@ class BlueskyPublisher:
         facets = bluesky_facets(job.text)
         if facets:
             record["facets"] = facets
-        resp = self._call("POST", f"{pds}/xrpc/com.atproto.repo.createRecord", secrets, headers=auth,
-                          json={"repo": did, "collection": "app.bsky.feed.post", "rkey": rkey, "record": record})
+        resp = conn.pds_call("POST", f"{pds}/xrpc/com.atproto.repo.createRecord", headers=conn.auth,
+                             json={"repo": did, "collection": "app.bsky.feed.post", "rkey": rkey, "record": record})
         if resp.status_code != 200:
-            if self._record_exists(pds, did, rkey, auth, secrets):
+            if self._record_exists(conn, rkey):
                 return self._result(session, rkey)
-            raise error_from_response(resp, "Bluesky", secrets)
+            raise error_from_response(resp, "Bluesky", conn.secrets)
         return self._result(session, rkey, resp.json().get("uri"))
 
-    def _upload_video(self, job: PublishJob, did: str, pds: str, auth: dict, secrets) -> dict:
+    def _upload_video(self, job: PublishJob, conn: _Connection) -> dict:
         size = job.video_path.stat().st_size
         if size > MAX_VIDEO_BYTES:
             raise PermanentError("Bluesky: the video is larger than Bluesky's 300 MB limit.")
+        did, pds = conn.did, conn.pds
         host = urlparse(pds).hostname
-        resp = self._call("GET", f"{pds}/xrpc/com.atproto.server.getServiceAuth", secrets, headers=auth, params={
+        resp = conn.pds_call("GET", f"{pds}/xrpc/com.atproto.server.getServiceAuth", headers=conn.auth, params={
             "aud": f"did:web:{host}", "lxm": "com.atproto.repo.uploadBlob", "exp": int(time.time()) + 1800})
         if resp.status_code != 200:
-            raise error_from_response(resp, "Bluesky", secrets)
+            raise error_from_response(resp, "Bluesky", conn.secrets)
         service_token = resp.json()["token"]
-        secrets = tuple(secrets) + (service_token,)
+        secrets = tuple(conn.secrets) + (service_token,)
         headers = {"Authorization": f"Bearer {service_token}", "Content-Type": "video/mp4",
                    "Content-Length": str(size)}
         with job.video_path.open("rb") as fh:
@@ -160,7 +215,7 @@ class BlueskyPublisher:
         job_id = status.get("jobId")
         if not job_id:
             raise TransientError("Bluesky: the video service didn't return a processing job.")
-        return self._wait_for_job(job_id, auth, secrets)
+        return self._wait_for_job(job_id, conn.job_auth, secrets)
 
     def _wait_for_job(self, job_id: str, auth: dict, secrets) -> dict:
         deadline = time.monotonic() + JOB_TIMEOUT_SECONDS
@@ -179,9 +234,10 @@ class BlueskyPublisher:
                 raise TransientError("Bluesky is still processing the video; will retry.")
             self.sleep(JOB_POLL_SECONDS)
 
-    def _record_exists(self, pds, did, rkey, auth, secrets) -> bool:
-        resp = self._call("GET", f"{pds}/xrpc/com.atproto.repo.getRecord", secrets, headers=auth,
-                          params={"repo": did, "collection": "app.bsky.feed.post", "rkey": rkey})
+    @staticmethod
+    def _record_exists(conn: _Connection, rkey: str) -> bool:
+        resp = conn.pds_call("GET", f"{conn.pds}/xrpc/com.atproto.repo.getRecord", headers=conn.auth,
+                             params={"repo": conn.did, "collection": "app.bsky.feed.post", "rkey": rkey})
         return resp.status_code == 200
 
     @staticmethod

@@ -5,7 +5,9 @@ Windows Credential Manager), under service "Reelay":
 
     agent_api_token            bearer token for the agent API
     youtube:<channel id>       Google OAuth tokens (JSON)
-    bluesky:<did>              {"handle", "app_password", "service"}
+    bluesky:<did>              {"handle", "app_password", "service"} (App Password), or
+                               {"auth": "oauth", "did", "pds", "issuer", "access_token", "refresh_token",
+                                "dpop_key", …} (Sign in with Bluesky; see bluesky_oauth.py)
     threads:<user id>          {"access_token", "user_id"}
     facebook:<page id>         {"page_id", "page_access_token"}
 
@@ -23,7 +25,7 @@ import threading
 from typing import Callable
 
 from .models import Account
-from .store import Store
+from .store import Store, utcnow
 from .tokens import TokenStore
 from .youtube import OAuthClient, Tokens, YouTubeClient, YouTubeError, authorize, revoke
 
@@ -35,12 +37,22 @@ AGENT_TOKEN_KEY = "agent_api_token"
 
 # Secret fields each platform keeps in the keychain (all required).
 CREDENTIAL_FIELDS: dict[str, tuple[str, ...]] = {
-    "bluesky": ("handle", "app_password"),
+    "bluesky": ("handle", "app_password"),          # App Password (Advanced Setup); OAuth: OAUTH_FIELDS
     "threads": ("access_token",),
     "facebook": ("page_id", "page_access_token"),
     "tiktok": ("access_token",),        # signed in with Reelay's TikTok app (analytics; posting stays by hand)
     "instagram": ("access_token",),     # signed in with Reelay's Instagram app
 }
+# A secret saved with {"auth": "oauth"} needs these instead (Sign in with Bluesky).
+OAUTH_FIELDS: dict[str, tuple[str, ...]] = {
+    "bluesky": ("did", "pds", "issuer", "token_endpoint", "access_token", "dpop_key"),
+}
+
+
+def required_fields(platform: str, secret: dict) -> tuple[str, ...]:
+    if secret.get("auth") == "oauth" and platform in OAUTH_FIELDS:
+        return OAUTH_FIELDS[platform]
+    return CREDENTIAL_FIELDS.get(platform, ())
 
 
 class AccountService:
@@ -147,7 +159,7 @@ class AccountService:
         """GUI thread: store the account and its tokens."""
         account = Account(profile_id=profile_id, platform=YOUTUBE, external_id=channel["id"],
                           display_name=channel["title"] or channel["id"], handle=channel.get("handle", ""),
-                          avatar_url=channel.get("thumbnail", ""))
+                          avatar_url=channel.get("thumbnail", ""), api_fetched_at=utcnow())
         self.save_tokens(account.token_key, tokens)
         return self.store.save_account(account)
 
@@ -187,8 +199,16 @@ class AccountService:
             data = json.loads(raw)
         except ValueError:
             return None
-        fields = CREDENTIAL_FIELDS.get(account.platform, ())
-        return data if all(data.get(f) for f in fields) else None
+        if not isinstance(data, dict):
+            return None
+        return data if all(data.get(f) for f in required_fields(account.platform, data)) else None
+
+    def save_credentials(self, account: Account, secret: dict) -> None:
+        """Replace an account's secret (a Bluesky sign-in's tokens rotate every time they're refreshed)."""
+        self.tokens.set(account.token_key, json.dumps(secret))
+
+    def credential_saver(self, account: Account) -> Callable[[dict], None]:
+        return lambda secret: self.save_credentials(account, secret)
 
     def has_credentials(self, account: Account) -> bool:
         try:
@@ -202,7 +222,7 @@ class AccountService:
 
         `identity` comes from the publisher's live check: external_id,
         display_name, handle."""
-        missing = [f for f in CREDENTIAL_FIELDS[platform] if not secret.get(f)]
+        missing = [f for f in required_fields(platform, secret) if not secret.get(f)]
         if missing:
             raise ValueError(f"Missing {', '.join(missing)}.")
         account = Account(profile_id=profile_id, platform=platform, external_id=identity["external_id"],
@@ -215,7 +235,7 @@ class AccountService:
 
     def connect_signed_in(self, profile_id: int, platform: str, tokens, found: dict) -> Account:
         """Store an account attached with Reelay's "Sign in with …" (TikTok,
-        Instagram, Threads, Facebook). `found` is one entry from oauth.identity()."""
+        Instagram, Threads, Facebook, Bluesky). `found` is one entry from oauth.identity()."""
         secret = {"access_token": tokens.access_token, "refresh_token": tokens.refresh_token,
                   "expires_at": tokens.expires_at, "via": "reelay", **found.get("secret", {})}
         identity = {k: found[k] for k in ("external_id", "display_name", "handle") if k in found}

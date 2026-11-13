@@ -11,7 +11,6 @@ QImage. The GUI thread only turns it into a pixmap.
 from __future__ import annotations
 
 import logging
-import re
 import ssl
 import subprocess
 import sys
@@ -21,6 +20,7 @@ from PySide6.QtCore import QObject, QRunnable, QThreadPool, Qt, Signal
 from PySide6.QtGui import QImage, QPixmap
 
 from ..models import VideoItem
+from ..paths import cover_cache_file
 from ..safefetch import fetch_public
 from ..urlsafety import asset_url_problem
 from ..ytdl import find_ffmpeg
@@ -120,7 +120,7 @@ class ThumbnailCache(QObject):
         self.folder: Path | None = None  # where downloaded videos live
 
     def _path(self, key: str) -> Path:
-        return self.cache_dir / (re.sub(r"[^\w.-]", "_", key) + ".img")
+        return cover_cache_file(self.cache_dir, key)
 
     def cover(self, item: VideoItem) -> QPixmap | None:
         """The cover, or None while it loads (``loaded`` fires later). Never blocks: no disk reads here."""
@@ -162,3 +162,11 @@ class ThumbnailCache(QObject):
     def retry(self, key: str) -> None:
         """Allow another attempt (e.g. after the video has been downloaded)."""
         self._failed.discard(key)
+
+    def forget(self, keys) -> None:
+        """Drop these covers from memory (their cached files were removed): the next look loads them again."""
+        keys = set(keys)
+        for key in keys:
+            self._covers.pop(key, None)
+            self._failed.discard(key)
+        self._small = {k: v for k, v in self._small.items() if k[0] not in keys}

@@ -4,6 +4,7 @@ PySide6-Essentials>=6.8
 PySide6-Addons>=6.8         # QtMultimedia: the built-in video player (keep the same version as Essentials)
 imageio-ffmpeg>=0.5
 keyring>=25
+pycryptodomex>=3.20        # ES256 keys for Sign in with Bluesky (DPoP); yt-dlp[default] already ships it
 # Agent API server.
 fastapi>=0.115
 uvicorn>=0.30

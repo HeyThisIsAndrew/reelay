@@ -1235,6 +1235,14 @@ class DownloadPage(QWidget):
         self.account_fetch.failed.connect(lambda message: self._on_fetched([url], [], [(view.name, message)]))
         self.account_fetch.start()
 
+    def forget_fetched(self, keys) -> None:
+        """YouTube API data for these videos was refreshed or cleared in the database (youtube_retention.py):
+        stop holding the older copy from the last listing, so it's never merged back."""
+        keys = set(keys)
+        if any(i.key in keys for i in self.fetched):
+            self.fetched = [i for i in self.fetched if i.key not in keys]
+            self.reload()
+
     def _authorization_for(self, urls: list[str]) -> str | None:
         """Provenance: links to this profile's own accounts (saved as "mine", or a
         connected channel) are recorded as own content. Anything else is left

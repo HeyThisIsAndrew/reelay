@@ -413,7 +413,8 @@ class ProviderSignInDialog(QDialog):
 
     signedIn = Signal(object, list)   # TokenSet, [found accounts]
 
-    def __init__(self, provider_key: str, parent=None, open_browser=webbrowser.open, sign_in=None, identity=None):
+    def __init__(self, provider_key: str, parent=None, open_browser=webbrowser.open, sign_in=None, identity=None,
+                 login_hint: str = ""):
         super().__init__(parent)
         from ..oauth import PROVIDERS
         from ..oauth import identity as find_accounts
@@ -451,7 +452,8 @@ class ProviderSignInDialog(QDialog):
         lookup = identity or find_accounts
 
         def work():
-            tokens = run(provider_key, open_browser=self._open_page, cancel=self.cancel)
+            hint = {"login_hint": login_hint} if login_hint else {}    # Bluesky: the handle finds its server
+            tokens = run(provider_key, open_browser=self._open_page, cancel=self.cancel, **hint)
             return tokens, lookup(provider_key, tokens)
         self.worker = CallWorker(work, parent=self)
         self.worker.succeeded.connect(self._done)

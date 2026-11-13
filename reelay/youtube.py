@@ -312,12 +312,18 @@ class YouTubeClient:
             if not page_token or (limit and len(ids) >= limit):
                 break
         ids = ids[:limit] if limit else ids
+        videos = self.videos_by_id(ids)
+        return [videos[vid] for vid in ids if vid in videos]
+
+    def videos_by_id(self, ids: list[str]) -> dict[str, dict]:
+        """Full video resources (snippet, contentDetails, statistics, status) by id, 50 per call
+        (1 quota unit each). A video that was deleted, or that this channel can't see, is missing."""
         videos: dict[str, dict] = {}
         for i in range(0, len(ids), 50):
             data = self._get("videos", {"part": "snippet,contentDetails,statistics,status",
                                         "id": ",".join(ids[i:i + 50])})
             videos.update({v["id"]: v for v in data.get("items", [])})
-        return [videos[vid] for vid in ids if vid in videos]
+        return videos
 
     # ---------------------------------------------------------------- upload
     def upload(self, path: Path, resource: dict,

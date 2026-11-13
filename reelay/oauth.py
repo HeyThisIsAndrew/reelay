@@ -16,8 +16,10 @@ Each platform's rules (checked against their docs, October 2026):
   computer's loopback receiver with a one-time key; the app claims the tokens
   with the state it generated plus that key. The state starts with the
   receiver's port ("<port>.<random>") so the broker knows where to send it.
-- Bluesky: atproto OAuth (PAR + DPoP, public client) is planned; App Passwords
-  keep working until then.
+- Bluesky: AT Protocol OAuth (bluesky_oauth.py): a public native client with
+  PAR, PKCE, DPoP and a loopback redirect, no secret and no broker. It's on once
+  Reelay's client metadata file is live (oauth_config BLUESKY_CLIENT_ID); App
+  Passwords keep working under Advanced Setup.
 
 Nothing here talks to a platform until someone clicks a sign-in button.
 """
@@ -58,7 +60,7 @@ class Provider:
     scope_sep: str = " "
     pkce: str | None = "base64url"           # "base64url" | "hex" (TikTok) | None
     redirect: str = "loopback"               # "loopback" (back to the app) | "broker" (via the Reelay server)
-    exchange: str = "broker"                 # "device" (Google only) | "broker"
+    exchange: str = "broker"                 # "device" (Google only) | "broker" | "atproto" (Bluesky)
     client_id_param: str = "client_id"
     loopback_path: str = "/"
     extra_params: tuple[tuple[str, str], ...] = ()
@@ -84,8 +86,11 @@ PROVIDERS: dict[str, Provider] = {p.key: p for p in (
              "https://graph.facebook.com/v23.0/oauth/access_token",
              ("pages_show_list", "pages_manage_posts", "pages_read_engagement"),
              scope_sep=",", pkce=None, redirect="broker"),
-    Provider("bluesky", "Bluesky", ("bluesky",), "", "", (), status="planned",
-             note="Bluesky's own sign-in (atproto OAuth) is planned; connect with an App Password for now."),
+    # Bluesky finds each account's own sign-in server at run time (bluesky_oauth.py), so no fixed URLs here.
+    Provider("bluesky", "Bluesky", ("bluesky",), "", "", ("atproto", "transition:generic"), pkce="base64url",
+             exchange="atproto",
+             note="One-click Bluesky sign-in arrives with the next update. Until then, connect with an App "
+                  "Password under Advanced Setup."),
 )}
 
 PLATFORM_PROVIDER = {platform: p.key for p in PROVIDERS.values() for platform in p.platforms}
@@ -103,6 +108,8 @@ def availability(provider: Provider) -> tuple[bool, str]:
     if oauth_config.pending_setup(provider.key):
         return False, (f"Reelay's one-click {provider.label} sign-in isn't finished being set up yet. Until it is, "
                        "use Advanced Setup to connect with your own developer keys.")
+    if provider.exchange == "atproto":
+        return (True, "") if oauth_config.client_id(provider.key) else (False, provider.note)
     if not oauth_config.client_id(provider.key):
         return False, f"One-click {provider.label} sign-in arrives once Reelay's {provider.label} app is approved."
     if provider.exchange == "device" and not oauth_config.value(f"{provider.key.upper()}_CLIENT_SECRET"):
@@ -182,13 +189,24 @@ def _error(data: dict, fallback) -> str:
 # ====================================================================== the flow
 def sign_in(provider_key: str, open_browser: Callable[[str], object] = webbrowser.open,
             cancel: threading.Event | None = None, session=None, timeout: float = 300,
-            analytics: bool = True) -> TokenSet:
+            analytics: bool = True, login_hint: str = "") -> TokenSet:
     """Run the browser sign-in for one platform with Reelay's app and return
-    its tokens. Raises SignInError. Blocking: call from a worker thread."""
+    its tokens. Raises SignInError. Blocking: call from a worker thread.
+    `login_hint` is the handle typed for Bluesky (it finds the account's server)."""
     provider = PROVIDERS[provider_key]
     ok, why = availability(provider)
     if not ok:
         raise SignInError(why)
+    if provider.exchange == "atproto":
+        from . import bluesky_oauth
+        signed_in = bluesky_oauth.sign_in(login_hint, open_browser=open_browser, cancel=cancel, session=session,
+                                          timeout=timeout, client_id=oauth_config.client_id(provider.key))
+        secret = signed_in.to_secret()
+        bluesky_oauth.remember(secret)
+        return TokenSet(access_token=signed_in.access_token, refresh_token=signed_in.refresh_token,
+                        expires_at=signed_in.expires_at, scope=signed_in.scope,
+                        extra={k: json.dumps(v) if isinstance(v, dict) else v for k, v in secret.items()
+                               if k not in ("access_token", "refresh_token", "expires_at", "scope")})
     http = session or requests
     client_id = oauth_config.client_id(provider.key)
     broker = oauth_config.broker_url()
@@ -249,10 +267,14 @@ def revoke_access(platform: str, secret: dict, session=None) -> bool:
     """Best effort, on disconnect: tell the platform to drop Reelay's access. Never raises.
 
     TikTok goes through the broker (revoking needs the client secret); Facebook revokes the user's grant
-    directly. Instagram and Threads offer no revoke call for apps: people remove access in the app's
+    directly; Bluesky revokes at the account's own sign-in server, with its DPoP key. Instagram and Threads offer no revoke call for apps: people remove access in the app's
     settings, and an unused token expires on its own."""
     http = session or requests
     token = secret.get("access_token", "")
+    if platform == "bluesky":
+        from . import bluesky_oauth
+        return bluesky_oauth.revoke(secret, session, client_id=oauth_config.client_id("bluesky")
+                                    or bluesky_oauth.CLIENT_ID_URL) if bluesky_oauth.is_oauth_secret(secret) else False
     try:
         if platform == "tiktok" and oauth_config.broker_url():
             resp = http.post(f"{oauth_config.broker_url()}/v1/oauth/tiktok/revoke", json={"access_token": token},
@@ -295,6 +317,12 @@ def identity(provider_key: str, tokens: TokenSet, session=None) -> list[dict]:
     [{external_id, display_name, handle, secret}] (Facebook: one per Page)."""
     http = session or requests
     t = tokens.access_token
+    if provider_key == "bluesky":    # the sign-in already found and checked the account (bluesky_oauth.sign_in)
+        did, handle = tokens.extra.get("did", ""), tokens.extra.get("handle", "")
+        secret = {**tokens.extra, "dpop_key": json.loads(tokens.extra["dpop_key"])} if did else {}
+        shown = handle if handle and not handle.startswith("did:") else ""
+        return [{"external_id": did, "display_name": shown or did, "handle": f"@{shown}" if shown else "",
+                 "secret": secret}] if did else []
     if provider_key == "tiktok":
         resp = http.get("https://open.tiktokapis.com/v2/user/info/",
                         params={"fields": "open_id,display_name,username,avatar_url"},
