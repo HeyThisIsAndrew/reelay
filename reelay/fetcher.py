@@ -36,10 +36,11 @@ def _flatten(info: dict, default_platform: str) -> list[VideoItem]:
 
 
 INSTAGRAM_PROFILE_UNAVAILABLE = (
-    "Reelay can't list a whole Instagram profile right now: yt-dlp, the download engine Reelay uses, has marked "
-    "its Instagram profile reader as broken. Individual posts still work. Open each reel on Instagram, copy its "
-    "link (Share, then Copy link), and paste the links here, several at once separated by spaces. If Instagram "
-    "asks you to sign in, set “Use browser sign-in” to a browser that's signed in to Instagram.")
+    "Instagram only lets apps list a whole profile through its official API. To list every Reel on your own "
+    "profile, connect it under Accounts → Instagram → Advanced Setup (it needs a Professional account and a "
+    "token from your own Meta app; the guide walks you through it). For any other account, open each reel on "
+    "Instagram, copy its link (Share, then Copy link), and paste the links here, several at once separated by "
+    "spaces. If Instagram asks you to sign in, set “Use browser sign-in” to a browser signed in to Instagram.")
 _INSTAGRAM_POST = re.compile(r"instagram\.com/(?:[\w.]+/)?(?:p|reels?|tv|stories)/", re.IGNORECASE)
 
 

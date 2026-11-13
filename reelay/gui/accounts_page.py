@@ -923,7 +923,23 @@ HAND_OFF_TEXT = {
 }
 
 
-class SignInOnlyCard(IntegrationCard):
+class _InstagramSetupMixin:
+    def _open_setup(self) -> None:
+        from ..instagram_media import verify
+        if not self.page.profile:
+            return
+        dialog = TokenSetupDialog(Platform.INSTAGRAM, (("access_token", "Instagram access token", True),),
+                                  verify, self)
+        dialog.connected.connect(self._token_connected)
+        dialog.exec()
+
+    def _token_connected(self, identity: dict, secret: dict) -> None:
+        account = self.page.service.connect_platform(self.page.profile.id, Platform.INSTAGRAM, identity, secret)
+        self.refresh()
+        self.flash(f"Connected {account.display_name}. List your Instagram source in the Library to see every Reel.")
+
+
+class SignInOnlyCard(_InstagramSetupMixin, IntegrationCard):
     """TikTok / Instagram: posted by hand. Signing in (where Reelay has an app) attaches the account
     for analytics."""
 
@@ -941,6 +957,14 @@ class SignInOnlyCard(IntegrationCard):
         self.manage_btn = self.add_action(QPushButton("Manage…"))
         tip(self.manage_btn, "See or disconnect this profile's accounts")
         self.manage_btn.clicked.connect(self.open_manage)
+        # Instagram: a token from the creator's own Meta app lists their whole profile (instagram_media.py).
+        self.setup_btn = None
+        if platform == Platform.INSTAGRAM:
+            self.setup_btn = self.add_action(QPushButton("Advanced Setup…"))
+            set_prop(self.setup_btn, "flat")
+            tip(self.setup_btn, "Connect with a token from your own Meta app, so Reelay can list every Reel on "
+                                "your profile")
+            self.setup_btn.clicked.connect(self._open_setup)
         if self.signin.note.text():
             self.help_text = f"{text}\n\n{self.signin.note.text()}"
 
@@ -951,7 +975,11 @@ class SignInOnlyCard(IntegrationCard):
         action = (self.signin if not accounts else self.disconnect_btn if len(accounts) == 1 else self.manage_btn)
         for button in (self.signin, self.disconnect_btn, self.manage_btn):
             button.setVisible(button is action and (button is not self.signin or self.signin.available))
+        if self.setup_btn is not None:
+            self.setup_btn.setVisible(not accounts)
         hint = "Sign in to attach your account" if self.signin.available else self.signin.note.text()
+        if self.setup_btn is not None and not self.signin.available:
+            hint = "Connect with Advanced Setup to list your whole profile"
         line, manage = account_line(accounts, "", hint)
         self.set_line(line, manage and len(accounts) == 1)
         self.connected = int(bool(accounts))

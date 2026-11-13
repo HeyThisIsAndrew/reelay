@@ -271,6 +271,22 @@ class GoogleSignInDialog(QDialog):
 
 # ====================================================================== token-based platforms
 PLATFORM_GUIDES = {
+    "instagram": {
+        "title": "Connect Your Instagram",
+        "intro": "Instagram only lists a whole profile through its official API, for a <b>Professional</b> "
+                 "(Creator or Business) account, with a token from a <b>Meta developer app you own</b>. Reelay "
+                 "uses it to list every Reel and video on your profile. It doesn't post for you: Instagram is "
+                 "still posted by hand.",
+        "steps": ["Make sure the Instagram account is a Professional account (Instagram: Settings → Account type "
+                  "and tools).",
+                  "Create a Meta developer app with the <b>Instagram</b> use case "
+                  "(“API setup with Instagram login”).",
+                  "Under <b>Generate access tokens</b>, add your Instagram account and click <b>Generate token</b> "
+                  "(it needs <b>instagram_business_basic</b>; it lasts 60 days).",
+                  "Paste the token below."],
+        "link": ("Open Meta for Developers", "https://developers.facebook.com/apps/"),
+        "note": "Your own account needs no App Review. The token stays in your Mac's Keychain.",
+    },
     "bluesky": {
         "title": "Connect Bluesky",
         "intro": "Bluesky doesn't offer a “Sign in with Bluesky” page for apps. Instead you make an "

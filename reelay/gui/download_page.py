@@ -1116,6 +1116,11 @@ class DownloadPage(QWidget):
         self._fetch_urls(urls)
 
     def _fetch_urls(self, urls: list[str], source_id: int | None = None) -> None:
+        if len(urls) == 1:
+            found = self._instagram_api_account(urls[0])
+            if found is not None:
+                self._fetch_instagram(urls[0], *found, source_id=source_id)
+                return
         self._begin_fetch("Listing videos…")
         self.fetch_worker = FetchWorker(urls, self._opts(), self)
         self.fetch_worker.sourceStarted.connect(lambda u: self._set_status(f"Listing videos from {u} …"))
@@ -1165,6 +1170,34 @@ class DownloadPage(QWidget):
         self.profile.last_source = view.url
         self.store.update_profile(self.profile)
         self._fetch_urls([view.url], source_id=view.source_id)
+
+    def _instagram_api_account(self, url: str):
+        """(account, token) when `url` is the Instagram profile of an account connected with its own token:
+        then the official API lists every Reel (instagram_media.py). Only the token owner's own profile."""
+        from ..fetcher import _INSTAGRAM_POST
+        m = re.search(r"instagram\.com/([\w.]+)/?", url or "", re.IGNORECASE)
+        if not m or _INSTAGRAM_POST.search(url) or not self.profile:
+            return None
+        wanted = m.group(1).lower()
+        for account in self.store.list_accounts(self.profile.id, "instagram"):
+            if (account.handle or "").lstrip("@").lower() != wanted:
+                continue
+            try:
+                secret = self.accounts.credentials(account)
+            except Exception:  # noqa: BLE001 — a locked keychain reads as "not connected"
+                secret = None
+            if secret and secret.get("access_token"):
+                return account, secret["access_token"]
+        return None
+
+    def _fetch_instagram(self, url: str, account, token: str, source_id: int | None = None) -> None:
+        from ..instagram_media import list_media
+        self._begin_fetch(f"Listing {account.display_name}'s Reels from Instagram…")
+        self.account_fetch = CallWorker(lambda: list_media(token)[1], parent=self)
+        self.account_fetch.succeeded.connect(lambda items: self._on_fetched([url], items, [], source_id,
+                                                                            authorization=OWN_CONTENT))
+        self.account_fetch.failed.connect(lambda message: self._on_fetched([url], [], [(url, message)], source_id))
+        self.account_fetch.start()
 
     def _fetch_account(self, view: SourceView) -> None:
         try:
