@@ -20,6 +20,7 @@ import time
 
 import requests
 
+from ..handles import clean_credentials
 from ..models import DispatchStatus, Platform
 from .base import PermanentError, PublishJob, PublishResult, TransientError, error_from_response, network_error
 
@@ -46,7 +47,7 @@ class ThreadsPublisher:
             raise network_error(exc, "Threads", (token,)) from None
 
     def verify(self, credentials: dict) -> dict:
-        token = credentials["access_token"]
+        token = clean_credentials(Platform.THREADS, credentials)["access_token"]
         resp = self._call("GET", "me", token, params={"fields": "id,username"})
         if resp.status_code != 200:
             raise error_from_response(resp, "Threads", (token,))

@@ -52,6 +52,8 @@ class Provider:
     authorize_url: str
     token_url: str
     scopes: tuple[str, ...]
+    # Only what a shipped feature uses: each platform's review rejects a permission the app doesn't use, and
+    # the website's permissions table (tests/test_review_scopes.py) must list exactly these.
     analytics_scopes: tuple[str, ...] = ()
     scope_sep: str = " "
     pkce: str | None = "base64url"           # "base64url" | "hex" (TikTok) | None
@@ -68,22 +70,19 @@ PROVIDERS: dict[str, Provider] = {p.key: p for p in (
     Provider("google", "Google", ("youtube",), "https://accounts.google.com/o/oauth2/v2/auth",
              "https://oauth2.googleapis.com/token",
              ("https://www.googleapis.com/auth/youtube.upload", "https://www.googleapis.com/auth/youtube.readonly"),
-             ("https://www.googleapis.com/auth/yt-analytics.readonly",),
              exchange="device", extra_params=(("access_type", "offline"), ("prompt", "consent select_account"))),
     Provider("tiktok", "TikTok", ("tiktok",), "https://www.tiktok.com/v2/auth/authorize/",
-             "https://open.tiktokapis.com/v2/oauth/token/", ("user.info.basic", "video.list"),
-             ("user.info.stats",), scope_sep=",", pkce="hex", client_id_param="client_key",
+             "https://open.tiktokapis.com/v2/oauth/token/", ("user.info.basic",), scope_sep=",", pkce="hex", client_id_param="client_key",
              loopback_path="/callback/"),
     Provider("instagram", "Instagram", ("instagram",), "https://www.instagram.com/oauth/authorize",
              "https://api.instagram.com/oauth/access_token",
-             ("instagram_business_basic", "instagram_business_content_publish"),
-             ("instagram_business_manage_insights",), scope_sep=",", pkce=None, redirect="broker"),
+             ("instagram_business_basic",), scope_sep=",", pkce=None, redirect="broker"),
     Provider("threads", "Threads", ("threads",), "https://threads.com/oauth/authorize",
              "https://graph.threads.com/oauth/access_token", ("threads_basic", "threads_content_publish"),
-             ("threads_manage_insights",), scope_sep=",", pkce=None, redirect="broker"),
+             scope_sep=",", pkce=None, redirect="broker"),
     Provider("facebook", "Facebook", ("facebook",), "https://www.facebook.com/v23.0/dialog/oauth",
              "https://graph.facebook.com/v23.0/oauth/access_token",
-             ("pages_show_list", "pages_manage_posts", "pages_read_engagement"), ("read_insights",),
+             ("pages_show_list", "pages_manage_posts", "pages_read_engagement"),
              scope_sep=",", pkce=None, redirect="broker"),
     Provider("bluesky", "Bluesky", ("bluesky",), "", "", (), status="planned",
              note="Bluesky's own sign-in (atproto OAuth) is planned; connect with an App Password for now."),

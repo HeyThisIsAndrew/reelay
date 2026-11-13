@@ -104,7 +104,7 @@ It's a native desktop app for macOS (Windows builds included) in a Light, Dark, 
 **Profiles and accounts**
 - Each creator gets a profile with their own library folder, board and connected channels. Switch profiles from the sidebar avatar (or ⌘⌥1–9). **My Channel** (the first profile) opens by default; other profiles stay as they are.
 - You can connect several YouTube channels per profile through Google sign-in. Tokens are kept in the macOS Keychain or Windows Credential Manager, never in files.
-- **Central sign-in** (`oauth.py`, `oauth_config.py`, `server/auth_broker.py`): once Reelay's own apps are registered with each platform (client IDs via `REELAY_*_CLIENT_ID` env or `oauth_config.DEFAULTS`) and the small auth broker is deployed, **Sign in with Google / TikTok / Instagram / Facebook / Threads** buttons appear, with analytics scopes included. Until then the existing bring-your-own-project setup (YouTube setup guide, Meta tokens, Bluesky App Password) stays exactly as it was.
+- **Central sign-in** (`oauth.py`, `oauth_config.py`, `server/auth_broker.py`): once Reelay's own apps are registered with each platform (client IDs via `REELAY_*_CLIENT_ID` env or `oauth_config.DEFAULTS`) and the small auth broker is deployed, **Sign in with Google / TikTok / Instagram / Facebook / Threads** buttons appear. They ask only for the permissions a shipped feature uses, and `tests/test_review_scopes.py` keeps them identical to the website's permissions table. Getting each platform's approval is set out step by step in [docs/platform-review.md](docs/platform-review.md). Until then the existing bring-your-own-project setup (YouTube setup guide, Meta tokens, Bluesky App Password) stays exactly as it was.
 - **Shared database:** Settings → Data can move the database into Google Drive, Dropbox, iCloud Drive or OneDrive (SQLite backup API, checked copy) or open one a teammate shares. In synced folders it uses a single-file journal, and a heartbeat lock file allows one editor at a time; everyone else is **view only** (no dispatcher, no API, so only one computer posts) and reloads as the file syncs (`dblocation.py`, `gui/shared_db.py`).
 - **Channel Schedule** shows a channel's latest uploads, including private and scheduled ones.
 
@@ -365,7 +365,7 @@ Secrets are only ever in the system keychain (macOS Keychain or Windows Credenti
 - **YouTube:** the Google Cloud steps under *Connecting YouTube* above.
 - **Bluesky:**
   1. In Bluesky, go to **Settings → Privacy and security → App passwords** and create one.
-  2. In Reelay, click **Accounts → Connect Bluesky…** and enter your handle and the App Password. Don't use your main password.
+  2. In Reelay, click **Accounts → Connect Bluesky…** and enter your handle (the @ is optional) and the App Password. Don't use your main password.
   3. The account needs a verified email to post video. Bluesky also has daily video upload limits.
 - **Threads:**
   1. Create a Meta app at [developers.facebook.com](https://developers.facebook.com/apps) with the **Threads API** use case.
@@ -449,7 +449,7 @@ How the parts fit:
 - **Calendar view** of everything scheduled across channels.
 - **Task cards.** Notes, checklists and non-video tasks on the board, a personal ticket system.
 - **Automatic Threads token refresh** before the 60-day expiry.
-- **Performance stats** (YouTube Analytics, Instagram and Threads insights) on the cards, using the analytics scopes central sign-in already requests.
+- **Performance stats** (YouTube Analytics, Instagram and Threads insights) on the cards, which will need the analytics permissions added back, with their own review.
 - **Bluesky sign-in** with atproto OAuth (PAR + DPoP) instead of App Passwords.
 - **TikTok and Instagram publishing**, once developer apps are approved.
 - **Signed, notarized builds** with auto-update.

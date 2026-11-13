@@ -132,8 +132,8 @@ class AccountService:
     @staticmethod
     def sign_in(oauth: OAuthClient, open_browser: Callable[[str], object],
                 cancel: threading.Event | None = None) -> tuple[dict, Tokens]:
-        """Background thread: browser sign-in, then read the channel. Reelay's own
-        app also asks for read-only YouTube Analytics (for the analytics to come)."""
+        """Background thread: browser sign-in, then read the channel. Reelay's own app asks for the
+        reviewed YouTube permissions (oauth.PROVIDERS), plus any analytics ones once those are added."""
         from .oauth import PROVIDERS
         central = AccountService.central_oauth_client()
         scopes = list(PROVIDERS["google"].scopes + PROVIDERS["google"].analytics_scopes) \

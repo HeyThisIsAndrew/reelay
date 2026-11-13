@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from urllib.parse import urlparse
 
 from .accounts import YOUTUBE, AccountService
+from .handles import clean_handle, clean_text, handle_from_link
 from .models import Account, Source, VideoItem
 from .platforms import detect_platform, is_supported_url
 from .store import Store, utcnow
@@ -77,7 +78,7 @@ def resolve_source_input(platform: str, text: str) -> str:
     """A username (``@khaby.lame``, ``khaby.lame``) or a profile link → the profile link.
 
     Links are passed through (their own platform wins); a username becomes ``platform``'s profile link."""
-    text = (text or "").strip()
+    text = clean_text(text)
     if not text:
         raise SourceError("Type a username or paste a profile link.")
     if _LOOKS_LIKE_LINK.match(text):
@@ -85,7 +86,7 @@ def resolve_source_input(platform: str, text: str) -> str:
     label = {"tiktok": "TikTok", "instagram": "Instagram", "youtube": "YouTube"}.get(platform)
     if label is None:
         raise SourceError("Snapchat doesn't let apps list a profile's videos: paste the Spotlight links instead.")
-    handle = text.lstrip("@").strip()
+    handle = clean_handle(text, platform)
     if platform == "youtube" and YOUTUBE_CHANNEL_ID.match(handle):
         return f"https://www.youtube.com/channel/{handle}"
     pattern, template = HANDLES[platform]
@@ -253,3 +254,21 @@ def youtube_items(videos: list[dict]) -> list[VideoItem]:
 def downloadable_by_default(item: VideoItem) -> bool:
     """Private and scheduled YouTube videos need the owner's login cookies to download."""
     return item.availability not in ("private", "scheduled")
+
+
+def is_bare_handle(text: str) -> bool:
+    """'@name' (or 'name') rather than a link: something with no slash and no web address in it."""
+    text = clean_text(text)
+    if not text or "/" in text:
+        return False
+    if text[0] in "@＠":
+        return True
+    return not is_supported_url("https://" + text)
+
+
+def sources_for_handle(views: list[SourceView], text: str) -> list[SourceView]:
+    """The saved sources whose profile link has this username, in the order they're listed."""
+    wanted = clean_handle(text).lower()
+    if not wanted:
+        return []
+    return [v for v in views if v.url and handle_from_link(v.url, v.platform).lower() == wanted]

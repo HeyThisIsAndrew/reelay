@@ -239,6 +239,51 @@ def test_token_setup_checks_before_saving(ui, qtbot, monkeypatch, platform):
     assert account.display_name == "Lydia" and window.accounts.has_credentials(account)
 
 
+def test_token_setup_accepts_the_at_in_a_handle(ui, qtbot):
+    """Bluesky shows handles as @name.bsky.social, so that's how people type them (it used to fail)."""
+    window, store, _ = ui
+    from reelay.gui.setup_dialogs import TokenSetupDialog
+    card = window.accounts_page.platform_cards["bluesky"]
+    sent = []
+
+    def verify(secret):
+        sent.append(secret)
+        return {"external_id": "did:plc:x", "display_name": secret["handle"], "handle": "@" + secret["handle"]}
+
+    dialog = TokenSetupDialog("bluesky", card.spec.fields, verify, window)
+    qtbot.addWidget(dialog)
+    dialog.connected.connect(card._connected)
+    dialog.inputs["handle"].setText(" @Lydia.bsky.social ")
+    dialog.inputs["app_password"].setText("abcd efgh ijkl mnop")
+    dialog.connect_btn.click()
+    qtbot.waitUntil(lambda: bool(store.list_accounts(window.profile.id, "bluesky")), timeout=3000)
+    assert sent == [{"handle": "lydia.bsky.social", "app_password": "abcd-efgh-ijkl-mnop"}]
+    account = store.list_accounts(window.profile.id, "bluesky")[0]
+    assert window.accounts.credentials(account)["handle"] == "lydia.bsky.social"
+
+
+def test_facebook_setup_saves_the_numeric_page_id_from_a_page_link(ui, qtbot):
+    window, store, _ = ui
+    from reelay.gui.setup_dialogs import TokenSetupDialog
+    card = window.accounts_page.platform_cards["facebook"]
+    sent = []
+
+    def verify(secret):
+        sent.append(secret)
+        return {"external_id": "123456789", "display_name": "Hey This Is Andrew", "handle": ""}
+
+    dialog = TokenSetupDialog("facebook", card.spec.fields, verify, window)
+    qtbot.addWidget(dialog)
+    dialog.connected.connect(card._connected)
+    dialog.inputs["page_id"].setText("https://www.facebook.com/HeyThisIsAndrew/")
+    dialog.inputs["page_access_token"].setText("Bearer EAAB123")
+    dialog.connect_btn.click()
+    qtbot.waitUntil(lambda: bool(store.list_accounts(window.profile.id, "facebook")), timeout=3000)
+    assert sent[0] == {"page_id": "HeyThisIsAndrew", "page_access_token": "EAAB123"}
+    account = store.list_accounts(window.profile.id, "facebook")[0]
+    assert window.accounts.credentials(account)["page_id"] == "123456789"
+
+
 # ------------------------------------------------------------------ help
 def test_help_is_in_the_sidebar_and_works_offline(ui):
     window, store, _ = ui

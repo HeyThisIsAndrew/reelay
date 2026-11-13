@@ -23,6 +23,7 @@ from urllib.parse import urlparse
 
 import requests
 
+from ..handles import clean_app_password, clean_handle
 from ..models import DispatchStatus, Platform
 from ..platform_text import bluesky_facets
 from .base import PermanentError, PublishJob, PublishResult, TransientError, error_from_response, network_error
@@ -63,7 +64,9 @@ class BlueskyPublisher:
         return resp
 
     def login(self, handle: str, password: str, service: str = ENTRYWAY) -> dict:
-        """createSession → {"accessJwt", "did", "handle", "pds"}."""
+        """createSession → {"accessJwt", "did", "handle", "pds"}. Takes the handle however it was typed
+        ("@name.bsky.social", a profile link) and an App Password with spaces between its groups."""
+        handle, password = clean_handle(handle, "bluesky"), clean_app_password(password)
         secrets = (password,)
         resp = self._call("POST", f"{service.rstrip('/')}/xrpc/com.atproto.server.createSession", secrets,
                           json={"identifier": handle, "password": password})

@@ -24,6 +24,7 @@ from datetime import datetime, timedelta, timezone
 
 import requests
 
+from ..handles import clean_credentials
 from ..models import DispatchStatus, Platform
 from ..publishing import parse_utc
 from ..readiness import is_facebook_reel
@@ -50,6 +51,7 @@ class FacebookPublisher:
         self.now = now
 
     def verify(self, credentials: dict) -> dict:
+        credentials = clean_credentials(Platform.FACEBOOK, credentials)
         token, page_id = credentials["page_access_token"], credentials["page_id"]
         try:
             resp = self.session.request("GET", f"{GRAPH}/{page_id}", params={"fields": "id,name"},

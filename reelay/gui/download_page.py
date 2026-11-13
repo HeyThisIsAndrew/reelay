@@ -18,11 +18,12 @@ from .. import APP_NAME
 from ..downloader import QUALITY_BEST, QUALITY_LABELS, video_dimensions
 from ..library import Library
 from ..models import Profile, Status, VideoItem
+from ..handles import clean_handle
 from ..naming import DEFAULT_TEMPLATE, slugify
 from ..accounts import AccountService
 from ..platforms import is_supported_url
-from ..sources import (SourceService, SourceView, channel_url, downloadable_by_default, normalize_url,
-                       youtube_items)
+from ..sources import (SourceService, SourceView, channel_url, downloadable_by_default, is_bare_handle,
+                       normalize_url, sources_for_handle, youtube_items)
 from ..store import Store
 from ..tokens import MemoryTokenStore
 from ..youtube import YouTubeError
@@ -1106,7 +1107,16 @@ class DownloadPage(QWidget):
         if not urls:
             self.url.setFocus()
             return
-        urls = [u if u.startswith("http") else "https://" + u for u in urls]
+        resolved = []
+        for u in urls:
+            if is_bare_handle(u):                  # "@hey_thisisandrew" typed instead of a link
+                found = self._urls_for_handle(u)
+                if found is None:
+                    return
+                resolved.extend(found)
+            else:
+                resolved.append(u if u.startswith("http") else "https://" + u)
+        urls = resolved
         bad = [u for u in urls if not is_supported_url(u)]
         if bad:
             QMessageBox.warning(self, APP_NAME, "These links aren't TikTok, Instagram, YouTube or Snapchat:\n\n" + "\n".join(bad))
@@ -1114,6 +1124,18 @@ class DownloadPage(QWidget):
         self.profile.last_source = self.url.text().strip()
         self.store.update_profile(self.profile)
         self._fetch_urls(urls)
+
+    def _urls_for_handle(self, text: str) -> list[str] | None:
+        """A typed username → the profile links of the saved sources with that username (all of them when it's
+        saved on more than one platform), or None after saying how to pick the platform."""
+        matches = sources_for_handle(self._source_views, text)
+        if matches:
+            return [v.url for v in matches]
+        name = clean_handle(text)
+        QMessageBox.information(self, APP_NAME, f"@{name} is a username, so Reelay needs to know which platform "
+                                f"it's on. Paste the profile link (for example https://www.tiktok.com/@{name}), or "
+                                "add it under Sources, where you pick the platform and can type the @ name.")
+        return None
 
     def _fetch_urls(self, urls: list[str], source_id: int | None = None) -> None:
         if len(urls) == 1:

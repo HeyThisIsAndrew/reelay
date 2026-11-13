@@ -54,7 +54,7 @@ def test_tiktok_uses_hex_pkce_client_key_and_comma_scopes(central):
     url = authorize_url(PROVIDERS["tiktok"], "tt-key", "http://127.0.0.1:5555/callback/", "s", challenge)
     q = dict(urllib.parse.parse_qsl(urllib.parse.urlparse(url).query))
     assert url.startswith("https://www.tiktok.com/v2/auth/authorize/")
-    assert q["client_key"] == "tt-key" and q["scope"] == "user.info.basic,video.list,user.info.stats"
+    assert q["client_key"] == "tt-key" and q["scope"] == "user.info.basic"
     assert q["code_challenge_method"] == "S256" and q["code_challenge"] == challenge
 
 
@@ -65,7 +65,7 @@ def test_google_signs_in_on_the_device(central):
     open_browser, seen = browser_that_approves()
     tokens = oauth.sign_in("google", open_browser=open_browser, session=session)
     assert (tokens.access_token, tokens.refresh_token) == ("A", "R")
-    assert "yt-analytics.readonly" in seen["scope"] and seen["redirect_uri"].startswith("http://127.0.0.1:")
+    assert "youtube.upload" in seen["scope"] and "analytics" not in seen["scope"] and seen["redirect_uri"].startswith("http://127.0.0.1:")
     sent = session.calls[0]["data"]
     assert sent["client_secret"] == "desktop-secret" and sent["code_verifier"] and sent["code"] == "the-code"
     assert "A" not in repr(tokens)                                    # tokens never printed
@@ -108,7 +108,7 @@ def test_meta_bounces_back_to_this_computer_and_claims_with_a_key(central):
     q = dict(urllib.parse.parse_qsl(urllib.parse.urlparse(opened[0]).query))
     assert opened[0].startswith("https://www.instagram.com/oauth/authorize")
     assert q["redirect_uri"] == "https://auth.reelay.test/v1/oauth/instagram/callback"
-    assert "instagram_business_manage_insights" in q["scope"]
+    assert q["scope"] == "instagram_business_basic"
     port, secret = q["state"].split(".", 1)
     assert port.isdigit() and len(secret) >= 20                          # "<loopback port>.<random>"
     assert session.calls[0]["json"] == {"state": q["state"], "key": "one-time-key"}

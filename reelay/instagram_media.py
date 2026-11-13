@@ -19,6 +19,7 @@ from urllib.parse import urlparse
 
 import requests
 
+from .handles import clean_token
 from .models import VideoItem
 
 GRAPH = "https://graph.instagram.com"
@@ -63,7 +64,7 @@ def _get(session, url: str, token: str, params: dict | None = None) -> dict:
 
 def verify(credentials: dict, session=None) -> dict:
     """Check a pasted token: whose account it is (TokenSetupDialog's `verify`)."""
-    token = (credentials.get("access_token") or "").strip()
+    token = clean_token(credentials.get("access_token"))
     if not token:
         raise InstagramApiError("Paste the Instagram access token first.")
     data = _get(session or requests.Session(), f"{GRAPH}/{API_VERSION}/me", token,

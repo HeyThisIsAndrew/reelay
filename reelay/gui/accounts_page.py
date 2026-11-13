@@ -670,10 +670,10 @@ class PlatformSpec:
 
 
 PLATFORM_SPECS = (
-    PlatformSpec(Platform.BLUESKY, (("handle", "Handle (e.g. lydia.bsky.social)", False),
+    PlatformSpec(Platform.BLUESKY, (("handle", "Handle, e.g. @yourname.bsky.social", False),
                                     ("app_password", "App Password", True)),
                  "Connect with a Bluesky App Password: a separate password just for Reelay that you can revoke "
-                 "any time. Bluesky doesn't offer a sign-in page for apps.", BlueskyPublisher),
+                 "any time.", BlueskyPublisher),
     PlatformSpec(Platform.THREADS, (("access_token", "Threads access token", True),),
                  "Threads only lets apps post through a Meta developer app you own, so connecting means pasting "
                  "a token from that app. The guide walks you through it.", ThreadsPublisher),
@@ -829,6 +829,8 @@ class PlatformCard(IntegrationCard):
     def _connected(self, identity: dict, secret: dict) -> None:
         if self.spec.platform == Platform.THREADS:
             secret = {**secret, "user_id": identity["external_id"]}
+        if self.spec.platform == Platform.FACEBOOK and identity.get("external_id"):
+            secret = {**secret, "page_id": identity["external_id"]}    # a Page link or username → its numeric ID
         account = self.page.service.connect_platform(self.page.profile.id, self.spec.platform, identity, secret)
         self.refresh()
         self.flash(f"Connected {account.display_name}.")

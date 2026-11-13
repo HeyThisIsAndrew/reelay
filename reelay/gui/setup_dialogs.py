@@ -18,6 +18,7 @@ from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (QDialog, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QProgressBar, QPushButton,
                                QStackedWidget, QVBoxLayout, QWidget)
 
+from ..handles import clean_credentials
 from ..youtube import OAuthClient
 from .theme import set_prop
 from .tips import tip
@@ -289,12 +290,11 @@ PLATFORM_GUIDES = {
     },
     "bluesky": {
         "title": "Connect Bluesky",
-        "intro": "Bluesky doesn't offer a “Sign in with Bluesky” page for apps. Instead you make an "
-                 "<b>App Password</b>: a separate password just for Reelay that you can revoke any time. "
-                 "Never use your main password.",
+        "intro": "Reelay connects to Bluesky with an <b>App Password</b>: a separate password just for Reelay "
+                 "that you can revoke any time. Never use your main password.",
         "steps": ["Open Bluesky's App Passwords page and sign in if asked.",
                   "Click <b>Add App Password</b>, name it <b>Reelay</b>, and copy the password it shows.",
-                  "Enter your handle and paste the App Password below."],
+                  "Enter your handle (with or without the @) and paste the App Password below."],
         "link": ("Open Bluesky App Passwords", "https://bsky.app/settings/app-passwords"),
         "note": "Posting videos needs a verified email on the Bluesky account.",
     },
@@ -335,7 +335,7 @@ class TokenSetupDialog(QDialog):
         guide = PLATFORM_GUIDES[platform]
         self.setWindowTitle(guide["title"])
         self.setMinimumWidth(540)
-        self.fields, self.verify = fields, verify
+        self.platform, self.fields, self.verify = platform, fields, verify
         self.worker: CallWorker | None = None
         lay = QVBoxLayout(self)
         lay.setContentsMargins(24, 20, 24, 16)
@@ -374,7 +374,8 @@ class TokenSetupDialog(QDialog):
         lay.addLayout(nav)
 
     def secret(self) -> dict:
-        return {key: edit.text().strip() for key, edit in self.inputs.items()}
+        """What was typed, cleaned up: "@name", a profile link or "Bearer …" all work."""
+        return clean_credentials(self.platform, {key: edit.text() for key, edit in self.inputs.items()})
 
     def _connect(self) -> None:
         if self.worker and self.worker.isRunning():
