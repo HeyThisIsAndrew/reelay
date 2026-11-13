@@ -1,5 +1,29 @@
 # Website ↔ app: corrections for the website session
 
+## Status on 2026-11-13 (Reelay 1.0.0)
+
+Checked against the site on branch `reelay-1.0-site` (not pushed). The nine corrections below from
+2026-10-12 are on the site (Download Sources and List Videos, Library first in the sidebar, the Filter
+button, source badges, Posting to chips and Save Changes). New in the app since then, and now on the site:
+
+- **Add a finished video**: drop a file anywhere, or Library → **Add Video Files…** (beside List Videos). A
+  same-name .srt/.vtt/.txt becomes the transcript. A file's badge is a laptop, "Made on this computer".
+- **Repurpose with Muse Spark** and **Batch Repurpose…** in the side panel; drafts use the transcript and the
+  voice profile, with the user's own Meta API key (disclosed in Privacy section 9 and the services table).
+- **Voice profiles** (Settings → Brand voice): emoji level, hashtag style, call to action, YouTube footer;
+  Import… / Export….
+- **Instagram**: Accounts → Instagram → **Advanced Setup…** connects a token from the creator's own Meta app
+  and lists their whole profile through the official API. Without it, Instagram profile links are refused
+  with a plain message (yt-dlp's profile reader is broken).
+- **MCP**: Settings → AI agents (advanced) → **Pair AI Client…** (one-time code).
+- Pricing is $79 one-time with 12 months of updates (site: `src/data/site.ts` PRICING). Never "lifetime".
+- Still to do on the site when the 1.0 build exists: `src/data/release.ts` (version, file size, SHA-256,
+  notarized), the checkout link (`{{PURCHASE_URL}}`), the refund window (`{{REFUND_WINDOW}}`), and the
+  operator placeholders (legal entity, address, governing law, liability cap, web host, log retention).
+  Scenes don't show Add Video Files or the Repurpose button yet.
+
+## Corrections from 2026-10-12 (applied)
+
 Paste this into the session that builds the Reelay site (`HeyThisIsAndrew/hey-this-is-andrew`, `sites/reelay/`).
 The app repo is the source of truth for what Reelay does; these are the places where the site's app renderings
 (compared at 1440 px, dark and light, on 2026-10-12) show something the app doesn't do, plus the app's new look

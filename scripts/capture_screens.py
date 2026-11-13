@@ -515,6 +515,9 @@ def capture_help(app, theme: str, store, window, rows: list[int], out: Path) -> 
                                         "copy": at(copy)})
     youtube_open = panel.sections["youtube"].expanded
     panel.sections["youtube"].set_expanded(False)        # folded, so TikTok's header and its menu fit below
+    # This picture is about the Posting to chips and a platform's ⋯ menu: the Repurpose card between them
+    # (its own guide covers it) is set aside so both fit in one frame at the capture size.
+    panel.repurpose_card.setVisible(False)
     settle(0.3)
     scroll_to(panel.picker)
     tiktok = panel.sections["tiktok"]                    # its ⋯ menu open, at Publish…
@@ -523,6 +526,7 @@ def capture_help(app, theme: str, store, window, rows: list[int], out: Path) -> 
         "platforms": at(panel.picker), "youtube": at(panel.platform_boxes["youtube"]), "tiktok": at(tiktok.header),
         **menu_marks(tiktok.menu_btn.menu(), pos, {"publish": "Publish…"}), "post": at(panel.upload_btn)})
     panel.sections["youtube"].set_expanded(youtube_open)
+    panel.repurpose_card.setVisible(True)
     panel.details.toggle.setChecked(True)                 # open: the transcript, cover and topic fields show
     settle(0.5)
     scroll_to(panel.details, 16)

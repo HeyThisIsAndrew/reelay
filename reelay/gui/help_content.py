@@ -158,7 +158,9 @@ LIBRARY = Category("library", "Library & downloads", "Bring videos in, choose wh
            Step("Click **List Videos**. You see every video before anything downloads.", "list")),
           "The videos appear in the Library unticked, so nothing downloads by surprise.",
           (Detail("Which links work", (
-               "TikTok, Instagram and YouTube profile or video links.",
+               "TikTok and YouTube profile or video links, and Instagram reel or post links.",
+               "Your whole Instagram profile lists through Instagram's official API once you connect it under "
+               "Accounts → Instagram → Advanced Setup. Instagram doesn't let Reelay list other profiles.",
                "Snapchat Spotlight video links. Snapchat doesn't let apps list a profile's videos, so paste "
                "the videos' links.",
                "YouTube channels you connect under Accounts appear in Download Sources by themselves. Their "
@@ -172,6 +174,25 @@ LIBRARY = Category("library", "Library & downloads", "Bring videos in, choose wh
                "imported, and the permission you have to use it.",))),
           ("library-sources", "library-select", "trouble"),
           "import list fetch paste link url profile tiktok instagram youtube snapchat spotlight private",
+          "download", "Open the Library", OWN_MEDIA),
+    Guide("library-file", "Add a finished video", "Turn a video fresh from your editor into a ticket.",
+          None,
+          (Step("Export the video from your editor. For a transcript, also export its captions with the same "
+                "name next to it: My video.mp4 and My video.srt (.vtt or .txt work too)."),
+           Step("Drag the video file anywhere onto Reelay, or click **Add Video Files…** in the Library."),
+           Step("Its ticket opens on the Board, ready for **Repurpose with Muse Spark**.")),
+          "The file is copied into your library folder; your export is never moved or changed.",
+          (Detail("Transcripts", (
+               "The caption file next to the video becomes the ticket's transcript, which is what drafts are "
+               "written from.",
+               "With the free faster-whisper add-on installed, a video without a caption file is transcribed "
+               "on this Mac.",
+               "Otherwise paste the transcript into the ticket's Details.")),
+           Detail("The same file twice", (
+               "Reelay recognises a file it already has by what's in it, not its name, and opens the existing "
+               "ticket.",))),
+          ("board-repurpose", "library-add"),
+          "file drop drag import export finished mp4 mov edit resolve premiere final cut srt vtt captions new",
           "download", "Open the Library", OWN_MEDIA),
     Guide("library-sources", "Download Sources", "Keep the accounts you import from one click away.",
           Visual("sources", "The Download Sources window: one section per platform with saved accounts, "
@@ -343,6 +364,29 @@ BOARD = Category("board", "Board & preparing posts", "Turn videos into ready-to-
                "**Filter → Format** shows only Short-form or only Long-form videos."))),
           ("board-captions", "publish-schedule"),
           "ready readiness check checklist ring blocked blocking needs work badge coverage",
+          "board", "Open the Board"),
+    Guide("board-repurpose", "Draft with Repurpose", "Draft every platform's copy from what the video says.",
+          None,
+          (Step("Select a ticket on the Board and click **Repurpose with Muse Spark** in the side panel."),
+           Step("Tick **Allow Muse Spark**, choose the platforms, and click **Generate Proposal**. A draft "
+                "takes about a minute."),
+           Step("Read and edit the proposal, then click **Apply to Ticket**. Nothing is saved before that."),
+           Step("For several tickets at once, use **Batch Repurpose…**: each ticket shows its own status.")),
+          "The copy fills the ticket's caption boxes, each within its platform's limits.",
+          (Detail("What it's written from", (
+               "The transcript comes first: when a ticket has none, Repurpose gets the original post's captions "
+               "before drafting.",
+               "Your voice (Settings → Brand voice) sets the tone, words to avoid, emoji, hashtag style, call "
+               "to action, and the footer added to every YouTube description.")),
+           Detail("What's sent, and to whom", (
+               "The video's title, description, notes and transcript and your voice go to Meta's Model API, "
+               "with your own Meta API key, only when you click Generate.",
+               "A draft that breaks a limit or your voice is rewritten once, and otherwise not used.")),
+           Detail("Voices as files", (
+               "Settings → Brand voice → **Import…** and **Export…** move a voice between computers or "
+               "profiles.",))),
+          ("board-details", "library-file"),
+          "repurpose muse spark ai draft write copy captions voice brand tone emoji hashtags footer batch meta",
           "board", "Open the Board"),
     Guide("board-details", "Details and video tools", "Add the transcript and cover, or edit the video.",
           Visual("ticket-details", "A ticket's Details and provenance section open, showing the transcript, "

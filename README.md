@@ -1,32 +1,34 @@
 # Reelay
 
-Move a creator's short-form video archive between platforms. Cross-posting is a packaging problem, not a scheduling problem: Reelay's job is to know whether a piece of content is actually ready to leave the building.
+Get everything ready to publish everywhere. Cross-posting is a packaging problem, not a scheduling problem: Reelay turns one finished video into a complete, platform-ready publishing package, and knows whether it's actually ready to leave the building.
 
-Reelay imports every video from a TikTok, Instagram or YouTube profile you own or manage (watermark-free, full audio), and turns each one into a **content ticket**. A ticket is a card on a Kanban board holding:
-- ready-to-paste copy for every platform;
+Drop in a video file fresh from your editor, or bring in every video from a TikTok, Instagram or YouTube profile you own or manage (watermark-free, full audio). Each one becomes a **content ticket**: a card on a Kanban board holding:
+- ready-to-paste copy for every platform, drafted from the video's transcript in your own voice (**Repurpose**);
 - a transcript, cover, topic and keywords;
 - where the video came from;
 - a readiness checklist;
 - a change history;
 - one record of everywhere it has been posted.
 
-You paste the copy into each platform yourself. YouTube can also be uploaded and scheduled automatically, and Bluesky, Threads and Facebook can be turned on later (see [Automatic posting](#automatic-posting)).
+Reelay uploads and schedules YouTube itself, and posts to Bluesky, Threads and Facebook once you connect them and turn automatic posting on (see [Automatic posting](#automatic-posting)). TikTok and Instagram are posted by hand with **Prepare to Publish**, which copies the caption, opens the uploader and selects the file.
 
 It's a native desktop app for macOS (Windows builds included) in a Light, Dark, Black or Custom theme (each profile's own brand colours, with its logo in the sidebar). The Library and Board are media-first grids of thumbnails (hover a card to scrub through the video), and selecting a video plays it in the right-hand panel above its captions and readiness. Hover over anything for a plain-language tip (turn them off in **Settings → Show helpful tips**), and **Help** at the bottom of the sidebar has the full guide, offline.
 
 ## What it does
 
-**Download: bring videos in** (import media you own or have permission to manage)
-- **Saved sources** are one-click buttons for profile links you use often. Click **List Videos** on one to see its videos; there's nothing to paste again.
+**Bring videos in** (import media you own or have permission to manage)
+- **A finished video from this computer:** drop the file anywhere on the window, or **Add Video Files…** in the Library (`local_import.py`). It's copied into the profile's library folder (the export is never moved or changed), recorded as Own content, and its ticket opens on the Board. A caption file next to it with the same name (`My video.srt`, `.vtt` or `.txt`, as DaVinci Resolve, Premiere and Final Cut export) becomes the transcript; with the optional faster-whisper add-on, a file without one is transcribed on this Mac. The same file added twice is one ticket.
+- **Download Sources** (in the Library, and on the Accounts page) holds the profile links you use often, one section per platform; **List Videos** on one shows its videos, with nothing to paste again.
   - **Connected YouTube channels** (from Accounts) appear automatically and list their videos through the YouTube Data API, with no link needed. Private and scheduled videos are shown but left unticked: downloading them needs **Use browser sign-in** set to a browser signed into that channel.
-  - They live in **Download Sources** (in the Library, and on the Accounts page), one section per platform. To add one, type the username (`@khaby.lame` or `khaby.lame`) or paste the profile link. **Mine** marks the profile's own accounts; the **⋯** menu renames or removes a source. Adding an account that's already saved is caught.
+  - **Your whole Instagram profile** lists through Meta's official Instagram API once it's connected under **Accounts → Instagram → Advanced Setup…** (a Professional account and a token from your own Meta app; `instagram_media.py`). yt-dlp's Instagram profile reader is marked broken by its developers, so without that, paste reel or post links instead; Reelay says so rather than showing yt-dlp's error.
+  - To add a source, type the username (`@khaby.lame` or `khaby.lame`) or paste the profile link. **Mine** marks the profile's own accounts; the **⋯** menu renames or removes a source. Adding an account that's already saved is caught.
 - Or paste a profile link (or several video links) and click **List Videos** to see every video first: cover, date, caption, length and views.
 - Downloading pulls videos **in**. Posting pushes videos **out** to the accounts you connect under **Accounts**, from the Board.
 - **Tagged products (TikTok Shop):** each TikTok video's tagged products are read from its public page in the background.
   - **All products ▾** filters to every video for one product, even with different captions, and search matches product names and brands.
   - Products also appear in the side panel, on the ticket, and in the API (`source.products`).
   - YouTube's Data API has no product tags, and Instagram's need the owner's Meta app, so those aren't read yet.
-- **Search and hashtag categories:** the search matches captions and hashtags, and **All hashtags ▾** filters the list to one hashtag (with counts). You can also click a hashtag in the side panel. The Board has the same search and hashtag filter.
+- **Search and hashtag categories:** the search matches captions and hashtags, and **Filter → All hashtags** narrows the list to one hashtag (with counts). You can also click a hashtag in the side panel. The Board has the same search and hashtag filter.
 - Choose what to download in the **selection strip** above the list, which always says what's selected. Newly listed videos start **unselected**, and choices you've made are kept when the list refreshes. Then:
   - **Select All** (every video shown, so a search narrows it) or **Unselect All**;
   - tick boxes;
@@ -86,13 +88,15 @@ It's a native desktop app for macOS (Windows builds included) in a Light, Dark, 
   - The whole import is one transaction, logged as "Sheet import".
 - **Fill from Original Post** fills a ticket's empty copy from the original caption, within every platform's limits; text that doesn't fit is left empty, never shortened. **Get from Original Post** turns the post's captions into the transcript.
 - **Bulk edit:** ⌘/Shift-click cards to set permission, type, topic, keywords, creator or hashtags on all of them in one transaction, or to fill, fetch transcripts or archive them together. Right-click a card for the same actions.
-- **Show: Ready / Not ready / Blocking <platform>** filters the Board.
+- **Filter** on the Board shows Ready, Not ready or Blocking <platform> tickets.
 - **Archive** hides videos without deleting anything; **Archived…** brings them back.
 - **Change History** can restore any earlier value. The restore is logged as a new change.
 - **Post automatically to** sends the video to YouTube (resumable, with progress) with a `publishAt` time, so YouTube publishes it even when Reelay is closed. Only platforms with automatic posting turned on are offered.
 - **Check YouTube for Updates** moves cards to Published once they go live.
 - **Archive search** (schema v8): an SQLite FTS5 index over every video's title, original caption, **transcript**, every platform's copy, tags, topic, keywords and notes, kept current by triggers. The Board's search uses it (prefix matching, "exact phrases"), and a card found by spoken words shows the quote. `GET /v1/search`.
-- **Writing help, locally:** an **Assist ▾** menu on every caption: spelling and grammar (built-in, or LanguageTool when installed), rewrites through a local model (Ollama or a llama.cpp `.gguf`), and **brand voice** profiles (tone, words to avoid, default hashtags, guidance) sent as the model's system prompt. **Get SEO Suggestions** uses YouTube's search suggestions and scores the title and tags. No paid AI, no tokens.
+- **Writing help, locally:** an **Assist ▾** menu on every caption: spelling and grammar (built-in, or LanguageTool when installed), rewrites through a local model (Ollama or a llama.cpp `.gguf`), and **brand voice** profiles sent as the model's system prompt. **Get SEO Suggestions** uses YouTube's search suggestions and scores the title and tags. These run on this computer.
+- **Repurpose** (side panel → **Repurpose with Muse Spark**, or **Batch Repurpose…** for several tickets with a status per ticket): drafts every platform's copy with Meta's Muse Spark model, using **your own Meta API key** (Keychain; `python -m reelay.repurpose_engine --setup`). It sends that video's title, description, notes, transcript and voice profile to Meta's Model API, only after you tick "Allow Muse Spark" and click Generate. When a ticket has no transcript, it fetches the original post's captions first; the transcript is the draft's source of truth. The result is a proposal: you review and edit it, and nothing is saved until **Apply to Ticket**. Drafts over a platform's limit, with an em dash, a banned phrase or a placeholder are rewritten once and otherwise refused, never cut short. A full draft takes about a minute.
+- **Voice profiles** (Settings → Brand voice): tone, words to avoid, emoji level (none, sparing, natural), default hashtags (used only when they fit the video), hashtag style, call to action, and a **YouTube footer** added exactly as written to every drafted description (socials, gear and affiliate links). **Import…** / **Export…** move a voice as a file; `python -m reelay.voices import voices/hey-this-is-andrew.json --profile "Hey This Is Andrew" --use` does it from a terminal.
 - **Video tools** (ffmpeg, on this computer): remove the sound, replace it with a track you have rights to, burn in captions from a .srt/.vtt/.ass (or from faster-whisper when installed). Edits write `<name>.edited.mp4`; the original is never changed, and the edited copy is what gets posted until **Use Original**.
 - **Automations:** when/if/then rules (Automations page; `rules.py`). Triggers: added to the board, moved to a column. Conditions: caption, title, hashtag, product/brand, length, source. Actions: fill an empty field from a template (with Insert Variable chips), add hashtags, set platforms (logo toggles), set a ticket field, move, schedule for the next weekday at a time (weekday + time picker). Recipes open in the rule editor filled in (**Use Recipe…**) and are only added when saved. Once per video per rule, never on existing videos unless asked, templates never overwrite, scheduling respects the Ready gate, and everything is logged.
 - **Durable sends:** every send is recorded before it runs. Closing mid-upload pauses it (continues next launch). A send cut off by a crash or power loss, or one whose time passed while Reelay was closed or asleep, becomes **interrupted** and waits for a person (**Try Again / It Was Posted / Cancel**), never retried blindly. Bluesky and Threads resume by checkpoint.
@@ -141,11 +145,11 @@ Limits to know about:
 | Platform  | Download | Publish | Notes |
 |-----------|----------|---------|-------|
 | YouTube   | ✅ | ✅ Upload + schedule on YouTube (always on) | See the limits above. |
-| Facebook Pages | — | Copy-paste; automatic posting **off by default** (native scheduling when on) | Meta app + App Review (see below). |
-| Bluesky   | — | Copy-paste; automatic posting **off by default** (Reelay posts at the scheduled time when on) | App Password. |
-| Threads   | — | Copy-paste; automatic posting **off by default** (Reelay posts at the scheduled time when on) | Meta app + App Review, and a public URL (Cloudflare Tunnel). |
+| Facebook Pages | No | Copy-paste; automatic posting **off by default** (native scheduling when on) | Meta app + App Review (see below). |
+| Bluesky   | No | Copy-paste; automatic posting **off by default** (Reelay posts at the scheduled time when on) | App Password. |
+| Threads   | No | Copy-paste; automatic posting **off by default** (Reelay posts at the scheduled time when on) | Meta app + App Review, and a public URL (Cloudflare Tunnel). |
 | TikTok    | ✅ | Copy-paste only | TikTok only allows automatic posting from developer apps it has reviewed and approved; without approval, an app can only send private ("Only me") posts or drafts. |
-| Instagram | ✅ (Use browser sign-in) | Copy-paste only | Needs a Professional account linked to a Facebook Page, plus Meta App Review. |
+| Instagram | ✅ Your own profile through the official API (Accounts → Instagram → Advanced Setup); reel and post links for any account | Copy-paste only | Automatic posting needs a Meta app with instagram_business_content_publish that passes App Review. |
 
 ## Automatic posting
 
@@ -180,6 +184,8 @@ While a platform is off:
 ## Agent API
 
 A local HTTP API for AI agents and automations: read the board, apply approved metadata edits, and schedule posts. It runs inside Reelay, and agent changes show up on the desktop board straight away. The machine-readable description is at `/openapi.json` (OpenAPI 3.1), which agent frameworks (Gemini, Antigravity, Claude) can turn into tools directly. The same contract is checked into [`api/openapi.yaml`](api/openapi.yaml).
+
+**MCP** (`mcp_server.py`, at `/mcp` on the same server): MCP clients such as Claude Code, Claude Desktop or Cursor connect with **Settings → AI agents (advanced) → Pair AI Client…**, which shows a one-time code (`RLY-XXXX-XXXX`). The paired client gets its own key, stored only as a hash, that works only for `/mcp`; its edits are logged as `mcp:<client name>`, and anything consequential (scheduling, posting, archiving) waits for your approval exactly like the REST API's. Five wrong codes in five minutes lock pairing for a minute.
 
 ### Starting it
 
@@ -374,7 +380,8 @@ Secrets are only ever in the system keychain (macOS Keychain or Windows Credenti
 ## Tests
 
 ```bash
-python -m pytest                              # 231 tests: engine, database + migrations, pipeline, readiness,
+python -m pytest -n auto                      # about 830 tests (pytest-xdist; drop -n auto to run serially):
+                                              #   engine, database + migrations, pipeline, readiness,
                                               #   agent API + contract, dispatcher, platform publishers,
                                               #   YouTube client, headless GUI (incl. setup guides)
 python scripts/smoke_test_api.py              # 49 end-to-end API checks in a throwaway data folder
@@ -401,13 +408,14 @@ To regenerate all application, Help Center, and marketing website screenshots af
 ## Building the apps
 
 ```bash
-./packaging/build_mac.sh          # dist/Reelay.app and dist/Reelay-<version>-mac-arm64.dmg
+./scripts/build_local.sh          # one command: build, back up the database, install to /Applications, self-test
+./packaging/build_mac.sh          # just dist/Reelay.app and dist/Reelay-<version>-mac-arm64.dmg
 ```
 ```powershell
 .\packaging\build_windows.ps1     # dist\Reelay\Reelay.exe and a .zip (run on Windows)
 ```
 
-PyInstaller can't cross-compile, so each platform builds on its own OS. Pushing a `v*` tag, or running the CI workflow manually, builds both on GitHub Actions and uploads the `.dmg` and `.zip`. Builds are ad-hoc signed: on first launch, right-click the app and choose **Open**. Shipping to other people without that warning needs an Apple Developer ID and notarization.
+`build_local.sh` works from a clean clone (it makes `.venv`), and the installed app needs none of this folder. PyInstaller can't cross-compile, so each platform builds on its own OS. GitHub Actions workflows exist but are switched off; builds run locally. Mac builds are signed with the keychain's Apple Development identity (ad-hoc when there's none), with the hardened runtime, but not notarized, so other Macs warn on first launch. [docs/release-signing.md](docs/release-signing.md) has the Developer ID and notarization checklist.
 
 ## Project layout
 
