@@ -12,9 +12,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 @pytest.fixture(autouse=True)
 def isolated_home(tmp_path, monkeypatch):
-    """Keep every test's database, cache and logs inside a temp folder."""
+    """Keep every test's database, cache, logs and Qt settings inside a temp folder.
+
+    QSettings() (window geometry, Library columns) is otherwise the user's real preferences file, shared by
+    every test and every parallel worker: tests overwrote each other's column layout under pytest -n, and wrote
+    into the owner's own Reelay preferences."""
     home = tmp_path / "reelay_home"
     monkeypatch.setenv("REELAY_HOME", str(home))
+    from PySide6.QtCore import QSettings
+    QSettings.setDefaultFormat(QSettings.IniFormat)
+    QSettings.setPath(QSettings.IniFormat, QSettings.UserScope, str(tmp_path / "qsettings"))
     return home
 
 

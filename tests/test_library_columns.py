@@ -138,3 +138,10 @@ def test_column_choices_order_and_widths_are_remembered(page, qtbot, tmp_path):
     assert Col.VIEWS in order and order.index(Col.STATUS) < order.index(Col.DATE)
     assert t.columnWidth(Col.FILENAME) == 333
     again.close()
+
+
+def test_tests_never_touch_the_real_preferences(tmp_path):
+    from PySide6.QtCore import QSettings
+    settings = QSettings()
+    assert settings.format() == QSettings.IniFormat
+    assert str(tmp_path) in settings.fileName()
