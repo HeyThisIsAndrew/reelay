@@ -77,7 +77,10 @@ def base_options(cookies_browser: str | None = None, cookies_file: str | None = 
 
 
 def friendly_error(exc: BaseException, url: str = "") -> str:
-    """Turn yt-dlp's verbose error text into one plain sentence."""
+    """Turn yt-dlp's verbose error text into one plain sentence. Reelay's own plain errors (``plain = True``)
+    are shown as written."""
+    if getattr(exc, "plain", False):
+        return str(exc)
     msg = re.sub(r"\s+", " ", str(exc).replace("ERROR: ", "")).strip()
     low = msg.lower()
     if "requested format is not available" in low:
@@ -96,6 +99,13 @@ def friendly_error(exc: BaseException, url: str = "") -> str:
         return "Rate-limited by the platform. Wait a few minutes and try again."
     if "could not copy" in low and "cookie" in low:
         return "Couldn't read browser cookies. Quit that browser completely and try again."
+    if "please report this issue" in low or "unable to extract" in low or "marked as broken" in low:
+        # yt-dlp's own "report this to us" text isn't for creators: say what happened and what to try.
+        site = "Instagram" if "instagram" in (url + low) else "TikTok" if "tiktok" in (url + low) else \
+            "YouTube" if "youtu" in (url + low) else "The platform"
+        return (f"{site} changed something and Reelay's download engine (yt-dlp) couldn't read this page. Try a "
+                "single video link instead, or set “Use browser sign-in” to a browser signed in to that site. If "
+                "it keeps happening, a Reelay update with a newer yt-dlp fixes it.")
     return msg[:300]
 
 

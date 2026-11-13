@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import yt_dlp
 
 from .models import VideoItem
@@ -33,6 +35,36 @@ def _flatten(info: dict, default_platform: str) -> list[VideoItem]:
     return items
 
 
+INSTAGRAM_PROFILE_UNAVAILABLE = (
+    "Reelay can't list a whole Instagram profile right now: yt-dlp, the download engine Reelay uses, has marked "
+    "its Instagram profile reader as broken. Individual posts still work. Open each reel on Instagram, copy its "
+    "link (Share, then Copy link), and paste the links here, several at once separated by spaces. If Instagram "
+    "asks you to sign in, set “Use browser sign-in” to a browser that's signed in to Instagram.")
+_INSTAGRAM_POST = re.compile(r"instagram\.com/(?:[\w.]+/)?(?:p|reels?|tv|stories)/", re.IGNORECASE)
+
+
+class ListingUnavailable(Exception):
+    """A plain-language reason a link can't be listed, found before any network request."""
+    plain = True
+
+
+def instagram_profile_listing_works() -> bool:
+    """Whether yt-dlp's own Instagram profile extractor is marked working in this copy of yt-dlp."""
+    try:
+        from yt_dlp.extractor.instagram import InstagramUserIE
+    except Exception:  # noqa: BLE001
+        return False
+    return bool(getattr(InstagramUserIE, "_WORKING", True))
+
+
+def listing_problem(source_url: str) -> str | None:
+    """Why this link can't be listed with this copy of yt-dlp (None when it can be tried)."""
+    if "instagram.com/" in source_url.lower() and not _INSTAGRAM_POST.search(source_url) \
+            and not instagram_profile_listing_works():
+        return INSTAGRAM_PROFILE_UNAVAILABLE
+    return None
+
+
 def list_videos(source_url: str, ydl_opts: dict, limit: int | None = None) -> tuple[str, list[VideoItem]]:
     """Resolve a profile / playlist / single-video URL.
 
@@ -40,6 +72,9 @@ def list_videos(source_url: str, ydl_opts: dict, limit: int | None = None) -> tu
     extraction, so listing a 500-video profile is a handful of requests.
     """
     source_url = check_fetch_url(source_url)          # before any network activity
+    problem = listing_problem(source_url)
+    if problem:
+        raise ListingUnavailable(problem)
     opts = {**ydl_opts, "extract_flat": "in_playlist"}
     if limit:
         opts["playlistend"] = limit
